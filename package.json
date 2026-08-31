@@ -18,6 +18,8 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.2.0",
+    "express-rate-limit": "^7.4.0",
+    "@types/express-rate-limit": "^6.0.0",
     "node-cron": "^4.6.0",
     "openai": "^7.4.0",
     "puppeteer": "^25.8.0",

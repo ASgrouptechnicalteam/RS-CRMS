@@ -191,7 +191,26 @@ export class LeadService {
     }
 
     const leadCode = await this.generateNextLeadCode();
-    const bestAssignee = await findBestAssigneeForLead(user.companyId);
+    
+    // Channel Partners keep their own leads (bypass auto-distribution)
+    const isChannelPartner = user.roles.includes(Roles.CHANNEL_PARTNER_MANAGER);
+    let bestAssignee = null;
+    let assignedToId = null;
+    let assignmentType = null;
+    let status = 'NEW';
+    
+    if (isChannelPartner) {
+      assignedToId = user.employeeId;
+      assignmentType = 'MANUAL_OVERRIDE';
+      status = 'ASSIGNED';
+    } else {
+      bestAssignee = await findBestAssigneeForLead(user.companyId);
+      if (bestAssignee) {
+        assignedToId = bestAssignee.employeeId;
+        assignmentType = 'PERFORMANCE_WEIGHTED';
+        status = 'ASSIGNED';
+      }
+    }
 
     // 2. DETERMINISTIC LEAD SCORING
     const leadScore = this.calculateLeadScore(dto);
@@ -221,10 +240,10 @@ export class LeadService {
           phone: dto.phone,
           email: dto.email || null,
           source: dto.source || 'MANUAL_ENTRY',
-          status: bestAssignee ? 'ASSIGNED' : 'NEW',
-          assigned_to_id: bestAssignee ? bestAssignee.employeeId : null,
-          assigned_at: bestAssignee ? new Date() : null,
-          assignment_type: bestAssignee ? 'PERFORMANCE_WEIGHTED' : null,
+          status: status,
+          assigned_to_id: assignedToId,
+          assigned_at: assignedToId ? new Date() : null,
+          assignment_type: assignmentType,
           property_type_preference: dto.property_type_preference || null,
           budget_min: dto.budget_min || null,
           budget_max: dto.budget_max || null,

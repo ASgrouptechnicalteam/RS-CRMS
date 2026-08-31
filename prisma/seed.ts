@@ -68,6 +68,7 @@ async function main() {
     { name: Roles.AGENT, is_system: false, is_invisible: false },
     { name: Roles.DIGITAL_MARKETING_EXECUTIVE, is_system: false, is_invisible: false },
     { name: Roles.SALES_MANAGER, is_system: false, is_invisible: false },
+    { name: Roles.CHANNEL_PARTNER_MANAGER, is_system: false, is_invisible: false },
   ];
 
   const roleMap: Record<string, any> = {};
@@ -173,11 +174,11 @@ async function main() {
     console.log('✅ Core RRH seed completed successfully.');
 
   // Step 5: Conditionally run Sonthillu E2E local fixtures (development only).
-  const { runSonthilluE2EFixtures } = await import('./fixtures/sonthillu-e2e.fixtures');
-  await runSonthilluE2EFixtures(prisma);
-
-  // Step 6: Conditionally run Development Fixtures (development only).
   if (process.env.NODE_ENV !== 'production') {
+    const { runSonthilluE2EFixtures } = await import('./fixtures/sonthillu-e2e.fixtures');
+    await runSonthilluE2EFixtures(prisma);
+
+    // Step 6: Conditionally run Development Fixtures (development only).
     const { runDevelopmentFixtures } = await import('./fixtures/development-data.fixtures');
     await runDevelopmentFixtures(prisma);
   }

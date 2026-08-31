@@ -1,0 +1,157 @@
+import { Router, Response } from 'express';
+import { authenticateToken, AuthenticatedRequest, requirePermission } from '../middleware/auth';
+import { requireAuthz } from '../middleware/authz';
+import { validateRequestBody } from '../middleware/validate';
+import {
+  ExpenseRefundCreateSchema,
+  ExpenseRefundAccountantReviewSchema,
+  ExpenseRefundMDReviewSchema,
+  ExpenseRefundMarkRefundedSchema,
+} from '../shared';
+import { Permissions } from '../shared';
+import { ExpenseRefundService } from '../services/expenseRefund.service';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+
+const router = Router();
+
+const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'expense-proofs');
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `proof-${uniqueSuffix}${path.extname(file.originalname)}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png', '.pdf', '.webp'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) cb(null, true);
+    else cb(new Error('Only images (JPG, PNG, WebP) and PDFs are allowed.'));
+  },
+});
+
+router.get(
+  '/my',
+  authenticateToken,
+  requirePermission([Permissions.EXPENSES_READ_OWN]),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const refunds = await ExpenseRefundService.listMyRefunds(req.user!);
+      return res.status(200).json({ refunds });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/queue',
+  authenticateToken,
+  requirePermission([Permissions.EXPENSES_REVIEW, Permissions.EXPENSES_MD_APPROVE]),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const refunds = await ExpenseRefundService.listQueue(req.user!);
+      return res.status(200).json({ refunds });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/',
+  authenticateToken,
+  requirePermission([Permissions.EXPENSES_CREATE]),
+  upload.single('proof_image'),
+  validateRequestBody(ExpenseRefundCreateSchema),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const { purpose, amount } = req.body;
+      const refund = await ExpenseRefundService.createRefund(req.user!, { purpose, amount }, req.file);
+      return res.status(201).json({ message: 'Refund request submitted.', refund });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  '/:id/accountant-review',
+  authenticateToken,
+  requireAuthz(Permissions.EXPENSES_REVIEW),
+  validateRequestBody(ExpenseRefundAccountantReviewSchema),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const { decision, note } = req.body;
+      const updated = await ExpenseRefundService.accountantReview(req.user!, id, decision, note);
+      return res.status(200).json({ message: 'Review recorded.', refund: updated });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  '/:id/md-review',
+  authenticateToken,
+  requireAuthz(Permissions.EXPENSES_MD_APPROVE),
+  validateRequestBody(ExpenseRefundMDReviewSchema),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const { decision, note } = req.body;
+      const updated = await ExpenseRefundService.mdReview(req.user!, id, decision, note);
+      return res.status(200).json({ message: 'MD review recorded.', refund: updated });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  '/:id/mark-refunded',
+  authenticateToken,
+  requireAuthz(Permissions.EXPENSES_MARK_REFUNDED),
+  validateRequestBody(ExpenseRefundMarkRefundedSchema),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const updated = await ExpenseRefundService.markRefunded(req.user!, id);
+      return res.status(200).json({ message: 'Marked as refunded.', refund: updated });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/:id/proof',
+  authenticateToken,
+  requireAuthz(Permissions.EXPENSES_READ_OWN),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const proofUrl = await ExpenseRefundService.getProof(req.user!, id);
+      const filePath = path.join(process.cwd(), proofUrl);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'Proof image file not found on server.' });
+      }
+      return res.sendFile(filePath);
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+export default router;

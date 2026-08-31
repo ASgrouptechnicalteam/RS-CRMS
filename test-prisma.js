@@ -1,0 +1,1 @@
+const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); async function main() { try { const notifs = await prisma.notification.findMany({ take: 1 }); console.log('Notifs OK:', notifs); } catch (e) { console.error('Notifs ERROR:', e.message); } } main().finally(() => prisma.$disconnect());

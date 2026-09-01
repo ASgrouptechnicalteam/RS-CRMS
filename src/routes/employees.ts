@@ -29,7 +29,7 @@ const profileUpload = multer({
       cb(null, `emp_${req.user?.employeeId}_${Date.now()}${ext}`);
     },
   }),
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith('image/')) cb(null, true);
     else cb(new Error('Only image files are allowed!'));
@@ -111,41 +111,47 @@ router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Re
 });
 
 // POST /api/v1/employees/me/photo - Upload profile photo
-router.post('/me/photo', authenticateToken, profileUpload.single('profile_image'), async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const file = req.file;
-    if (!file) {
-      return res.status(400).json({ error: 'No image file provided.' });
+router.post('/me/photo', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  profileUpload.single('profile_image')(req, res, async (err: any) => {
+    if (err) {
+      console.error('Multer error:', err);
+      return res.status(400).json({ error: err.message || 'File upload failed' });
     }
 
-    const employeeId = req.user!.employeeId;
-    
-    // Check if employee already has a photo to delete the old one (optional but good practice)
-    const emp = await prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
-    
-    const newImageUrl = `/uploads/profiles/${file.filename}`;
-    
-    await prisma.employee.update({
-      where: { id: employeeId },
-      data: { profile_image_url: newImageUrl },
-    });
-
-    if (emp?.profile_image_url && emp.profile_image_url.startsWith('/uploads/profiles/')) {
-      const oldFileName = emp.profile_image_url.replace('/uploads/profiles/', '');
-      const oldFilePath = path.join(PROFILE_UPLOAD_DIR, oldFileName);
-      if (fs.existsSync(oldFilePath)) {
-        fs.unlinkSync(oldFilePath);
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ error: 'No image file provided.' });
       }
-    }
 
-    return res.status(200).json({
-      message: 'Profile photo updated successfully',
-      profile_image_url: publicAssetUrl(newImageUrl),
-    });
-  } catch (error) {
-    console.error('Profile photo upload error:', error);
-    return res.status(500).json({ error: 'Failed to upload profile photo' });
-  }
+      const employeeId = req.user!.employeeId;
+      
+      const emp = await prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
+      
+      const newImageUrl = `/uploads/profiles/${file.filename}`;
+      
+      await prisma.employee.update({
+        where: { id: employeeId },
+        data: { profile_image_url: newImageUrl },
+      });
+
+      if (emp?.profile_image_url && emp.profile_image_url.startsWith('/uploads/profiles/')) {
+        const oldFileName = emp.profile_image_url.replace('/uploads/profiles/', '');
+        const oldFilePath = path.join(PROFILE_UPLOAD_DIR, oldFileName);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+      }
+
+      return res.status(200).json({
+        message: 'Profile photo updated successfully',
+        profile_image_url: publicAssetUrl(newImageUrl),
+      });
+    } catch (error) {
+      console.error('Profile photo upload error:', error);
+      return res.status(500).json({ error: 'Failed to upload profile photo' });
+    }
+  });
 });
 
 // GET /api/v1/employees - List all active/inactive employees (Admin invisible filtered)

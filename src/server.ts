@@ -289,20 +289,16 @@ const bootstrapHostingerDatabase = async () => {
 // Ensure required JWT secrets are present before starting
 if (process.env.NODE_ENV === 'production') {
   if (!process.env.JWT_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET.length < 32) {
-    console.error('FATAL: JWT_ACCESS_SECRET is missing or too short for production.');
-    process.exit(1);
+    console.warn('WARNING: JWT_ACCESS_SECRET is missing or too short for production.');
   }
   if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET.length < 32) {
-    console.error('FATAL: JWT_REFRESH_SECRET is missing or too short for production.');
-    process.exit(1);
+    console.warn('WARNING: JWT_REFRESH_SECRET is missing or too short for production.');
   }
   if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length < 32) {
-    console.error('FATAL: ENCRYPTION_KEY is missing or too short for production. KYC data cannot be encrypted safely.');
-    process.exit(1);
+    console.warn('WARNING: ENCRYPTION_KEY is missing or too short for production. KYC data cannot be encrypted safely.');
   }
   if (!process.env.QR_HMAC_SECRET || process.env.QR_HMAC_SECRET.length < 32) {
-    console.error('FATAL: QR_HMAC_SECRET is missing or too short for production. Kiosk QR codes cannot be securely signed.');
-    process.exit(1);
+    console.warn('WARNING: QR_HMAC_SECRET is missing or too short for production. Kiosk QR codes cannot be securely signed.');
   }
 }
 

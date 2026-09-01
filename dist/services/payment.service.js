@@ -8,7 +8,6 @@ const notification_service_1 = require("./notification.service");
 const shared_1 = require("../shared");
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;

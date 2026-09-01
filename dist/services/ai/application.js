@@ -106,14 +106,6 @@ function newRequestId() {
     return `ai-${Date.now()}-${requestSeq}`;
 }
 class SearchIntentService {
-    deps;
-    gateway;
-    contextBuilder;
-    redactor;
-    costHook;
-    auditHook;
-    systemInstructions;
-    chatSystemInstructions;
     constructor(deps) {
         this.deps = deps;
         this.gateway =

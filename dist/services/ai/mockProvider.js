@@ -12,15 +12,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MockProvider = void 0;
 const provider_1 = require("./provider");
 class MockProvider {
-    options;
-    capabilities = {
-        provider: 'mock',
-        supportsStreaming: false,
-        maxOutputTokens: 1024,
-        supportsUsage: true,
-    };
     constructor(options = {}) {
         this.options = options;
+        this.capabilities = {
+            provider: 'mock',
+            supportsStreaming: false,
+            maxOutputTokens: 1024,
+            supportsUsage: true,
+        };
     }
     async generate(request) {
         const failure = this.options.failure;

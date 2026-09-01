@@ -57,9 +57,6 @@ function normalizeError(err, provider) {
     };
 }
 class AIGateway {
-    deps;
-    costHook;
-    auditHook;
     constructor(deps) {
         this.deps = deps;
         this.costHook = deps.costHook ?? new cost_1.NullCostHook();

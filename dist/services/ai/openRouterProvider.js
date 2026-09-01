@@ -115,15 +115,14 @@ exports.classifyOpenRouterError = classifyOpenRouterError;
  * AIGateway.
  */
 class OpenRouterProvider {
-    options;
-    capabilities = {
-        provider: exports.OPENROUTER_PROVIDER,
-        supportsStreaming: false,
-        maxOutputTokens: 8192,
-        supportsUsage: true,
-    };
     constructor(options) {
         this.options = options;
+        this.capabilities = {
+            provider: exports.OPENROUTER_PROVIDER,
+            supportsStreaming: false,
+            maxOutputTokens: 8192,
+            supportsUsage: true,
+        };
     }
     async generate(request) {
         const url = this.options.baseUrl ?? exports.OPENROUTER_CHAT_URL;
@@ -131,7 +130,7 @@ class OpenRouterProvider {
         // AbortController-based timeout — prevents dangling fetch promises if OpenRouter
         // hangs indefinitely. Also enforced by AIGateway.withTimeout (30s default).
         const abortController = new AbortController();
-        const timeoutMs = 30_000; // matches AIConfig.default timeoutMs
+        const timeoutMs = 30000; // matches AIConfig.default timeoutMs
         const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
         try {
             const response = await fetch(url, {

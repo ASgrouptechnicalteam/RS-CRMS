@@ -52,7 +52,15 @@ const p = prisma_1.prisma;
 app.set('trust proxy', 1);
 // Security Middlewares
 app.use((0, helmet_1.default)({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use((0, cors_1.default)({ origin: process.env.APP_URL || 'http://localhost:5173', credentials: true }));
+const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:4173',
+    'https://rscrm.radharealhomeproperties.com'
+];
+if (process.env.APP_URL && !allowedOrigins.includes(process.env.APP_URL)) {
+    allowedOrigins.push(process.env.APP_URL);
+}
+app.use((0, cors_1.default)({ origin: allowedOrigins, credentials: true }));
 app.use((0, cookie_parser_1.default)());
 // Body Parser
 app.use(express_1.default.json());

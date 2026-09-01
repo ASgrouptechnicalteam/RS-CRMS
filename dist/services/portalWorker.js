@@ -18,8 +18,6 @@ const POLL_INTERVAL_MS = parseInt(process.env.PORTAL_POLL_INTERVAL_MS || '30000'
  *   CUSTOMER_KYC_STATUS_CHANGED → /api/v1/portal/kyc-status (no mapping).
  */
 class PortalWorker {
-    static running = false;
-    static timer = null;
     static start() {
         if (process.env.PORTAL_WORKER_ENABLED !== 'true') {
             return;
@@ -646,3 +644,5 @@ class PortalWorker {
     }
 }
 exports.PortalWorker = PortalWorker;
+PortalWorker.running = false;
+PortalWorker.timer = null;

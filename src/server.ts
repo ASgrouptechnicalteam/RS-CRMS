@@ -54,7 +54,15 @@ app.set('trust proxy', 1);
 
 // Security Middlewares
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: process.env.APP_URL || 'http://localhost:5173', credentials: true }));
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'https://rscrm.radharealhomeproperties.com'
+];
+if (process.env.APP_URL && !allowedOrigins.includes(process.env.APP_URL)) {
+  allowedOrigins.push(process.env.APP_URL);
+}
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(cookieParser());
 
 // Body Parser

@@ -4,7 +4,6 @@ exports.NotificationService = exports.CUSTOMER_NOTIFICATION_LIMIT = exports.AppE
 const prisma_1 = require("../lib/prisma");
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;

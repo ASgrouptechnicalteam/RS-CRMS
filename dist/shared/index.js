@@ -22,7 +22,8 @@ exports.Roles = {
     FINANCE: 'accountant',
     AGENT: 'Agent',
     DIGITAL_MARKETING_EXECUTIVE: 'digital marketing executive',
-    SALES_MANAGER: 'Sales manager'
+    SALES_MANAGER: 'Sales manager',
+    CHANNEL_PARTNER_MANAGER: 'Channel partner manager'
 };
 // Permanent 2-Letter Department Codes for Employee IDs: RRH-{DEPT_2DIGIT}-{NUMBER_3DIGIT}
 // Employee IDs remain static and permanent for life even when promoted!
@@ -39,6 +40,7 @@ exports.DepartmentCodes = {
     [exports.Roles.FINANCE]: 'FN',
     [exports.Roles.MARKETING_DIRECTOR]: 'MK',
     [exports.Roles.SALES_MANAGER]: 'SL',
+    [exports.Roles.CHANNEL_PARTNER_MANAGER]: 'CP',
 };
 // Canonical Permissions Model (Phase 1 - Stage 2 Blueprint Section 7)
 exports.Permissions = {
@@ -376,6 +378,32 @@ exports.RolePermissionsMatrix = {
         exports.Permissions.REPORTS_TARGETS_CONFIGURE,
         exports.Permissions.PERFORMANCE_READ_TEAM,
         exports.Permissions.BOOKINGS_READ,
+    ],
+    [exports.Roles.CHANNEL_PARTNER_MANAGER]: [
+        exports.Permissions.LEADS_CREATE,
+        exports.Permissions.LEADS_READ,
+        exports.Permissions.LEADS_UPDATE,
+        exports.Permissions.LEADS_WHATSAPP_PROPOSAL,
+        exports.Permissions.PROJECTS_READ,
+        exports.Permissions.PROPERTIES_READ,
+        exports.Permissions.ATTENDANCE_READ_OWN,
+        exports.Permissions.ATTENDANCE_SCAN,
+        exports.Permissions.ATTENDANCE_LATE_PROPOSAL,
+        exports.Permissions.ATTENDANCE_LEAVE_PROPOSAL,
+        exports.Permissions.REPORTS_CREATE,
+        exports.Permissions.REPORTS_READ_OWN,
+        exports.Permissions.PERFORMANCE_READ_OWN,
+        exports.Permissions.TASKS_READ,
+        exports.Permissions.TASKS_UPDATE,
+        exports.Permissions.TASKS_CREATE,
+        exports.Permissions.BOOKINGS_READ,
+        exports.Permissions.PAYMENTS_READ,
+        exports.Permissions.DOCUMENTS_READ,
+        exports.Permissions.SITE_VISITS_CREATE,
+        exports.Permissions.SITE_VISITS_READ,
+        exports.Permissions.CUSTOMERS_READ,
+        exports.Permissions.CUSTOMERS_UPDATE,
+        exports.Permissions.CUSTOMERS_CONVERT,
     ]
 };
 // Employee Code Regex: e.g. RRH-EX-001 (MD), RRH-EX-002 (Admin), RRH-HR-001 (HR), RRH-SL-001 (Sales/Telecaller), DEV-SM-001

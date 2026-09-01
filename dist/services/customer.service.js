@@ -7,7 +7,6 @@ const customer_policy_1 = require("../policies/customer.policy");
 const workflowEngine_1 = require("../workflows/workflowEngine");
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;

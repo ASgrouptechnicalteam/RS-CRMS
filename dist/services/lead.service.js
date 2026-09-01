@@ -14,7 +14,6 @@ const dataScope_1 = require("../authz/dataScope");
 const lead_policy_1 = require("../policies/lead.policy");
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;
@@ -177,7 +176,25 @@ class LeadService {
             throw new AppError(409, `Duplicate lead detected. Lead ${existingLead.lead_code} already exists with this phone or email.`);
         }
         const leadCode = await this.generateNextLeadCode();
-        const bestAssignee = await (0, distributionService_1.findBestAssigneeForLead)(user.companyId);
+        // Channel Partners keep their own leads (bypass auto-distribution)
+        const isChannelPartner = user.roles.includes(shared_1.Roles.CHANNEL_PARTNER_MANAGER);
+        let bestAssignee = null;
+        let assignedToId = null;
+        let assignmentType = null;
+        let status = 'NEW';
+        if (isChannelPartner) {
+            assignedToId = user.employeeId;
+            assignmentType = 'MANUAL_OVERRIDE';
+            status = 'ASSIGNED';
+        }
+        else {
+            bestAssignee = await (0, distributionService_1.findBestAssigneeForLead)(user.companyId);
+            if (bestAssignee) {
+                assignedToId = bestAssignee.employeeId;
+                assignmentType = 'PERFORMANCE_WEIGHTED';
+                status = 'ASSIGNED';
+            }
+        }
         // 2. DETERMINISTIC LEAD SCORING
         const leadScore = this.calculateLeadScore(dto);
         // 3. SLA BREACH CONFIGURATION (e.g. 2 hours from creation to first contact)
@@ -203,10 +220,10 @@ class LeadService {
                     phone: dto.phone,
                     email: dto.email || null,
                     source: dto.source || 'MANUAL_ENTRY',
-                    status: bestAssignee ? 'ASSIGNED' : 'NEW',
-                    assigned_to_id: bestAssignee ? bestAssignee.employeeId : null,
-                    assigned_at: bestAssignee ? new Date() : null,
-                    assignment_type: bestAssignee ? 'PERFORMANCE_WEIGHTED' : null,
+                    status: status,
+                    assigned_to_id: assignedToId,
+                    assigned_at: assignedToId ? new Date() : null,
+                    assignment_type: assignmentType,
                     property_type_preference: dto.property_type_preference || null,
                     budget_min: dto.budget_min || null,
                     budget_max: dto.budget_max || null,

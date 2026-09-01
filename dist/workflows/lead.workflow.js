@@ -30,35 +30,6 @@ const shared_1 = require("../shared");
  *    • expected_value + target property for BOOKING_INITIATED (§1 row 9)
  */
 class LeadWorkflow {
-    /** Statuses from which DROPPED is reachable — spec §1 lines 27-29. */
-    static DROPPABLE_FROM = new Set([
-        shared_1.LeadStatus.ASSIGNED,
-        shared_1.LeadStatus.CONTACTED,
-        shared_1.LeadStatus.QUALIFICATION_PENDING,
-        shared_1.LeadStatus.QUALIFIED,
-        shared_1.LeadStatus.DEMO_SCHEDULED,
-        shared_1.LeadStatus.DEMO_COMPLETED,
-        shared_1.LeadStatus.SITE_VISIT_SCHEDULED,
-        shared_1.LeadStatus.SITE_VISIT_COMPLETED,
-        shared_1.LeadStatus.NEGOTIATION,
-        shared_1.LeadStatus.BOOKING_INITIATED,
-    ]);
-    /** Set of statuses that require a CALL_LOGGED activity before moving to CONTACTED.
-     * Spec §1 row 2: "LeadActivity with activity_type: CALL_LOGGED must exist". */
-    static REQUIRES_CALL_LOGGED = new Set([
-        shared_1.LeadStatus.ASSIGNED,
-    ]);
-    /** Statuses that can auto-advance to QUALIFICATION_PENDING when all qualification
-     * fields (budget_min, budget_max, property_type_preference, preferred_location)
-     * are still null. Spec §1 row 3. */
-    static AUTO_TO_QUALIFICATION_PENDING_FROM = new Set([
-        shared_1.LeadStatus.CONTACTED,
-    ]);
-    /** Statuses that can directly go to QUALIFIED when all qualification fields are
-     * already present, skipping QUALIFICATION_PENDING. Spec §1 row 4. */
-    static CAN_SKIP_TO_QUALIFIED_FROM = new Set([
-        shared_1.LeadStatus.CONTACTED,
-    ]);
     /** Which qualification fields must be non-null to count as "qualified". */
     static isFullyQualified(lead) {
         return !!(lead.budget_min != null &&
@@ -73,54 +44,6 @@ class LeadWorkflow {
             lead.property_type_preference == null &&
             lead.preferred_location == null);
     }
-    /** Strict Transition Matrix for Leads (spec §1 transition table).
-     * Key: Current Status → allowed next statuses.
-     */
-    static transitionMatrix = {
-        [shared_1.LeadStatus.NEW]: [shared_1.LeadStatus.ASSIGNED],
-        [shared_1.LeadStatus.ASSIGNED]: [shared_1.LeadStatus.CONTACTED, shared_1.LeadStatus.DROPPED],
-        [shared_1.LeadStatus.CONTACTED]: [
-            shared_1.LeadStatus.QUALIFICATION_PENDING,
-            shared_1.LeadStatus.QUALIFIED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.QUALIFICATION_PENDING]: [
-            shared_1.LeadStatus.QUALIFIED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.QUALIFIED]: [
-            shared_1.LeadStatus.DEMO_SCHEDULED,
-            shared_1.LeadStatus.SITE_VISIT_SCHEDULED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.DEMO_SCHEDULED]: [
-            shared_1.LeadStatus.DEMO_COMPLETED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.DEMO_COMPLETED]: [
-            shared_1.LeadStatus.SITE_VISIT_SCHEDULED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.SITE_VISIT_SCHEDULED]: [
-            shared_1.LeadStatus.SITE_VISIT_COMPLETED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.SITE_VISIT_COMPLETED]: [
-            shared_1.LeadStatus.NEGOTIATION,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.NEGOTIATION]: [
-            shared_1.LeadStatus.BOOKING_INITIATED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.BOOKING_INITIATED]: [
-            shared_1.LeadStatus.BOOKED,
-            shared_1.LeadStatus.DROPPED,
-        ],
-        [shared_1.LeadStatus.BOOKED]: [], // Terminal won state
-        [shared_1.LeadStatus.DROPPED]: [shared_1.LeadStatus.RECOVERED_TO_POOL],
-        [shared_1.LeadStatus.RECOVERED_TO_POOL]: [shared_1.LeadStatus.ASSIGNED],
-    };
     canTransition(req) {
         const { currentState, action: newStatus, entity } = req;
         if (currentState === newStatus) {
@@ -290,3 +213,80 @@ class LeadWorkflow {
     }
 }
 exports.LeadWorkflow = LeadWorkflow;
+/** Statuses from which DROPPED is reachable — spec §1 lines 27-29. */
+LeadWorkflow.DROPPABLE_FROM = new Set([
+    shared_1.LeadStatus.ASSIGNED,
+    shared_1.LeadStatus.CONTACTED,
+    shared_1.LeadStatus.QUALIFICATION_PENDING,
+    shared_1.LeadStatus.QUALIFIED,
+    shared_1.LeadStatus.DEMO_SCHEDULED,
+    shared_1.LeadStatus.DEMO_COMPLETED,
+    shared_1.LeadStatus.SITE_VISIT_SCHEDULED,
+    shared_1.LeadStatus.SITE_VISIT_COMPLETED,
+    shared_1.LeadStatus.NEGOTIATION,
+    shared_1.LeadStatus.BOOKING_INITIATED,
+]);
+/** Set of statuses that require a CALL_LOGGED activity before moving to CONTACTED.
+ * Spec §1 row 2: "LeadActivity with activity_type: CALL_LOGGED must exist". */
+LeadWorkflow.REQUIRES_CALL_LOGGED = new Set([
+    shared_1.LeadStatus.ASSIGNED,
+]);
+/** Statuses that can auto-advance to QUALIFICATION_PENDING when all qualification
+ * fields (budget_min, budget_max, property_type_preference, preferred_location)
+ * are still null. Spec §1 row 3. */
+LeadWorkflow.AUTO_TO_QUALIFICATION_PENDING_FROM = new Set([
+    shared_1.LeadStatus.CONTACTED,
+]);
+/** Statuses that can directly go to QUALIFIED when all qualification fields are
+ * already present, skipping QUALIFICATION_PENDING. Spec §1 row 4. */
+LeadWorkflow.CAN_SKIP_TO_QUALIFIED_FROM = new Set([
+    shared_1.LeadStatus.CONTACTED,
+]);
+/** Strict Transition Matrix for Leads (spec §1 transition table).
+ * Key: Current Status → allowed next statuses.
+ */
+LeadWorkflow.transitionMatrix = {
+    [shared_1.LeadStatus.NEW]: [shared_1.LeadStatus.ASSIGNED],
+    [shared_1.LeadStatus.ASSIGNED]: [shared_1.LeadStatus.CONTACTED, shared_1.LeadStatus.DROPPED],
+    [shared_1.LeadStatus.CONTACTED]: [
+        shared_1.LeadStatus.QUALIFICATION_PENDING,
+        shared_1.LeadStatus.QUALIFIED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.QUALIFICATION_PENDING]: [
+        shared_1.LeadStatus.QUALIFIED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.QUALIFIED]: [
+        shared_1.LeadStatus.DEMO_SCHEDULED,
+        shared_1.LeadStatus.SITE_VISIT_SCHEDULED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.DEMO_SCHEDULED]: [
+        shared_1.LeadStatus.DEMO_COMPLETED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.DEMO_COMPLETED]: [
+        shared_1.LeadStatus.SITE_VISIT_SCHEDULED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.SITE_VISIT_SCHEDULED]: [
+        shared_1.LeadStatus.SITE_VISIT_COMPLETED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.SITE_VISIT_COMPLETED]: [
+        shared_1.LeadStatus.NEGOTIATION,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.NEGOTIATION]: [
+        shared_1.LeadStatus.BOOKING_INITIATED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.BOOKING_INITIATED]: [
+        shared_1.LeadStatus.BOOKED,
+        shared_1.LeadStatus.DROPPED,
+    ],
+    [shared_1.LeadStatus.BOOKED]: [], // Terminal won state
+    [shared_1.LeadStatus.DROPPED]: [shared_1.LeadStatus.RECOVERED_TO_POOL],
+    [shared_1.LeadStatus.RECOVERED_TO_POOL]: [shared_1.LeadStatus.ASSIGNED],
+};

@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PMRoutingService = exports.AppError = void 0;
 const prisma_1 = require("../lib/prisma");
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;

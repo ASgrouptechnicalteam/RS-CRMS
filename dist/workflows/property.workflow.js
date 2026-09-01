@@ -3,12 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PropertyWorkflow = void 0;
 const shared_1 = require("../shared");
 class PropertyWorkflow {
-    static validTransitions = {
-        [shared_1.PropertyStatus.PENDING_VERIFICATION]: ['VERIFY'],
-        // DMH can either send to a DM Executive for polish, or verify as-is and skip straight to MD approval
-        [shared_1.PropertyStatus.PENDING_DM_POLISH]: ['DM_POLISH', 'DM_VERIFY_AS_IS'],
-        [shared_1.PropertyStatus.PENDING_MD_APPROVAL]: ['MD_APPROVE'],
-    };
     canTransition(req) {
         const { currentState, action } = req;
         const allowedActions = PropertyWorkflow.validTransitions[currentState] || [];
@@ -42,3 +36,9 @@ class PropertyWorkflow {
     }
 }
 exports.PropertyWorkflow = PropertyWorkflow;
+PropertyWorkflow.validTransitions = {
+    [shared_1.PropertyStatus.PENDING_VERIFICATION]: ['VERIFY'],
+    // DMH can either send to a DM Executive for polish, or verify as-is and skip straight to MD approval
+    [shared_1.PropertyStatus.PENDING_DM_POLISH]: ['DM_POLISH', 'DM_VERIFY_AS_IS'],
+    [shared_1.PropertyStatus.PENDING_MD_APPROVAL]: ['MD_APPROVE'],
+};

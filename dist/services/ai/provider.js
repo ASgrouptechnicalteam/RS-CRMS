@@ -10,7 +10,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AIProviderError = void 0;
 /** Provider-facing failure signal. Providers throw this (or the gateway normalizes). */
 class AIProviderError extends Error {
-    info;
     constructor(info) {
         super(info.message);
         this.name = 'AIProviderError';

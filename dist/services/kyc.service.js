@@ -6,7 +6,6 @@ const kyc_policy_1 = require("../policies/kyc.policy");
 const crypto_1 = require("../utils/crypto");
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;

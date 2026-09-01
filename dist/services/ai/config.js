@@ -30,28 +30,11 @@ exports.AIConfigError = AIConfigError;
  * Construct via AIConfig.fromEnv() or AIConfig.from(deps, input).
  */
 class AIConfig {
-    enabled;
-    provider;
-    model;
-    timeoutMs;
-    maxTokens;
-    maxRetries;
-    /**
-     * Zod schema enforcing the numeric configuration invariants (finite positive timeout,
-     * finite positive token cap, bounded 0..5 retry count). AIConfigError, not ZodError, is
-     * thrown to keep a stable provider-independent error contract.
-     */
-    static ConfigSchema = zod_1.z
-        .object({
-        timeoutMs: zod_1.z.number().finite().positive(),
-        maxTokens: zod_1.z.number().finite().positive(),
-        maxRetries: zod_1.z.number().int().min(0).max(5),
-    });
     constructor(input) {
         this.enabled = input.enabled ?? false;
         this.provider = input.provider ?? 'mock';
         this.model = input.model ?? '';
-        this.timeoutMs = input.timeoutMs ?? 30_000;
+        this.timeoutMs = input.timeoutMs ?? 30000;
         this.maxTokens = input.maxTokens ?? 1024;
         this.maxRetries = input.maxRetries ?? 1;
     }
@@ -93,3 +76,14 @@ class AIConfig {
     }
 }
 exports.AIConfig = AIConfig;
+/**
+ * Zod schema enforcing the numeric configuration invariants (finite positive timeout,
+ * finite positive token cap, bounded 0..5 retry count). AIConfigError, not ZodError, is
+ * thrown to keep a stable provider-independent error contract.
+ */
+AIConfig.ConfigSchema = zod_1.z
+    .object({
+    timeoutMs: zod_1.z.number().finite().positive(),
+    maxTokens: zod_1.z.number().finite().positive(),
+    maxRetries: zod_1.z.number().int().min(0).max(5),
+});

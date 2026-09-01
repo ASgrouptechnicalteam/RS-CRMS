@@ -6,11 +6,6 @@ const lead_workflow_1 = require("./lead.workflow");
 const property_workflow_1 = require("./property.workflow");
 const siteVisit_workflow_1 = require("./siteVisit.workflow");
 class WorkflowEngine {
-    static registry = {
-        [types_1.WorkflowDomain.LEAD]: new lead_workflow_1.LeadWorkflow(),
-        [types_1.WorkflowDomain.PROPERTY]: new property_workflow_1.PropertyWorkflow(),
-        [types_1.WorkflowDomain.SITE_VISIT]: new siteVisit_workflow_1.SiteVisitWorkflow(),
-    };
     /**
      * Central entrypoint for all workflow transitions.
      * Delegates to the appropriate domain workflow for validation.
@@ -54,3 +49,8 @@ class WorkflowEngine {
     }
 }
 exports.WorkflowEngine = WorkflowEngine;
+WorkflowEngine.registry = {
+    [types_1.WorkflowDomain.LEAD]: new lead_workflow_1.LeadWorkflow(),
+    [types_1.WorkflowDomain.PROPERTY]: new property_workflow_1.PropertyWorkflow(),
+    [types_1.WorkflowDomain.SITE_VISIT]: new siteVisit_workflow_1.SiteVisitWorkflow(),
+};

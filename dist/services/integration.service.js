@@ -8,7 +8,6 @@ const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000; // IST = UTC+5:30
 const DAY_MS = 24 * 60 * 60 * 1000;
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;
@@ -331,16 +330,6 @@ class IntegrationService {
         }
         return id;
     }
-    // ─────────────────────────────────────────────────────────
-    // PORTAL / INTEGRATION METRICS — Phase 11 Packet 3G
-    // ─────────────────────────────────────────────────────────
-    static HANDOFF_STATUSES = ['CREATED', 'PENDING', 'PROCESSING', 'COMPLETED', 'WAITING_ACTIVATION', 'ACTIVE', 'FAILED'];
-    static EVENT_STATUSES = ['CREATED', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'];
-    static EVENT_TYPES = ['BOOKING_PORTAL_HANDOFF', 'CUSTOMER_KYC_STATUS_CHANGED', 'PAYMENT_STATUS_CHANGED'];
-    static SYNC_STATUSES = ['LOCAL', 'PENDING_SYNC', 'SYNCED'];
-    static SOURCES = ['CRM', 'PORTAL'];
-    static KYC_STATUSES = ['PENDING', 'PARTIAL', 'VERIFIED', 'REJECTED'];
-    static NOTIFICATION_TYPES = ['PORTAL_ACTIVATED', 'KYC_STATUS_UPDATED', 'PAYMENT_STATUS_UPDATED'];
     /**
      * Converts an IST calendar date (YYYY-MM-DD) to the UTC instant of IST
      * midnight. IST is UTC+5:30, so IST midnight of `date` is UTC 18:30 of the
@@ -524,3 +513,13 @@ class IntegrationService {
     }
 }
 exports.IntegrationService = IntegrationService;
+// ─────────────────────────────────────────────────────────
+// PORTAL / INTEGRATION METRICS — Phase 11 Packet 3G
+// ─────────────────────────────────────────────────────────
+IntegrationService.HANDOFF_STATUSES = ['CREATED', 'PENDING', 'PROCESSING', 'COMPLETED', 'WAITING_ACTIVATION', 'ACTIVE', 'FAILED'];
+IntegrationService.EVENT_STATUSES = ['CREATED', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'];
+IntegrationService.EVENT_TYPES = ['BOOKING_PORTAL_HANDOFF', 'CUSTOMER_KYC_STATUS_CHANGED', 'PAYMENT_STATUS_CHANGED'];
+IntegrationService.SYNC_STATUSES = ['LOCAL', 'PENDING_SYNC', 'SYNCED'];
+IntegrationService.SOURCES = ['CRM', 'PORTAL'];
+IntegrationService.KYC_STATUSES = ['PENDING', 'PARTIAL', 'VERIFIED', 'REJECTED'];
+IntegrationService.NOTIFICATION_TYPES = ['PORTAL_ACTIVATED', 'KYC_STATUS_UPDATED', 'PAYMENT_STATUS_UPDATED'];

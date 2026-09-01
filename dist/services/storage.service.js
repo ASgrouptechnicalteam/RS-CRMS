@@ -155,7 +155,6 @@ exports.getPropertyImageStorage = getPropertyImageStorage;
  * Path traversal outside the base directory is rejected.
  */
 class LocalStorageService {
-    baseDir;
     constructor(baseDir) {
         this.baseDir = path_1.default.resolve(baseDir);
     }

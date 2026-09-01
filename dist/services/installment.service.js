@@ -5,7 +5,6 @@ const prisma_1 = require("../lib/prisma");
 const booking_policy_1 = require("../policies/booking.policy");
 const p = prisma_1.prisma;
 class AppError extends Error {
-    statusCode;
     constructor(statusCode, message) {
         super(message);
         this.statusCode = statusCode;

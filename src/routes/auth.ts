@@ -119,6 +119,7 @@ router.post('/login', loginRateLimiter, validateRequestBody(LoginSchema), async 
     return res.status(200).json({
       message: 'Login successful',
       accessToken,
+      refreshToken, // Return in body for IndexedDB storage fallback
       firstLoginDone: employee.first_login_done,
       attendanceRequired: employee.attendance_required,
       user: {
@@ -265,6 +266,7 @@ router.post(
       return res.status(200).json({
         message: 'Password updated successfully',
         accessToken,
+        refreshToken, // Return in body for IndexedDB storage fallback
         firstLoginDone: true,
         user: {
           id: updatedEmployee.id,
@@ -355,10 +357,9 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
   }
 });
 
-// POST /api/v1/auth/refresh
 router.post('/refresh', refreshRateLimiter, async (req, res: Response) => {
   try {
-    const { refreshToken } = req.cookies;
+    const refreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
     if (!refreshToken) {
       return res.status(401).json({ error: 'Refresh token required', code: 'UNAUTHORIZED' });
     }
@@ -499,16 +500,15 @@ router.post('/refresh', refreshRateLimiter, async (req, res: Response) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    return res.status(200).json({ accessToken: newAccessToken });
+    return res.status(200).json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch (error) {
     console.error('Refresh error:', error);
     return res.status(500).json({ error: 'Refresh failed' });
   }
 });
 
-// POST /api/v1/auth/logout
 router.post('/logout', async (req, res: Response) => {
-  const { refreshToken } = req.cookies;
+  const refreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
   if (refreshToken) {
     const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
     await p.authSession.updateMany({

@@ -72,20 +72,11 @@ router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Re
     if (pan_number !== undefined) updateData.pan_number = pan_number;
     if (aadhaar_number !== undefined) updateData.aadhaar_number = aadhaar_number;
 
-    // Bank Details (only allow if not already set)
-    const hasBankDetails = Boolean(currentEmp.bank_account_number);
-    const tryingToUpdateBank = bank_name !== undefined || bank_account_number !== undefined || bank_ifsc !== undefined || bank_branch !== undefined;
-    
-    if (tryingToUpdateBank && hasBankDetails) {
-      return res.status(403).json({ error: 'Bank details cannot be changed once set. Please contact HR or MD.' });
-    }
-
-    if (!hasBankDetails) {
-      if (bank_name !== undefined) updateData.bank_name = bank_name;
-      if (bank_account_number !== undefined) updateData.bank_account_number = bank_account_number;
-      if (bank_ifsc !== undefined) updateData.bank_ifsc = bank_ifsc;
-      if (bank_branch !== undefined) updateData.bank_branch = bank_branch;
-    }
+    // Bank Details (always allow updating now)
+    if (bank_name !== undefined) updateData.bank_name = bank_name;
+    if (bank_account_number !== undefined) updateData.bank_account_number = bank_account_number;
+    if (bank_ifsc !== undefined) updateData.bank_ifsc = bank_ifsc;
+    if (bank_branch !== undefined) updateData.bank_branch = bank_branch;
 
     const updatedEmp = await prisma.employee.update({
       where: { id: employeeId },
@@ -94,8 +85,22 @@ router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Re
         id: true,
         full_name: true,
         phone: true,
+        secondary_phone: true,
         whatsapp_number: true,
         email: true,
+        blood_group: true,
+        social_links: true,
+        current_address: true,
+        permanent_address: true,
+        emergency_contact_name: true,
+        emergency_contact_relation: true,
+        emergency_contact_phone: true,
+        pan_number: true,
+        aadhaar_number: true,
+        bank_name: true,
+        bank_account_number: true,
+        bank_ifsc: true,
+        bank_branch: true,
         profile_image_url: true,
       }
     });

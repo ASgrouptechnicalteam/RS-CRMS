@@ -31,7 +31,7 @@ const profileUpload = (0, multer_1.default)({
             cb(null, `emp_${req.user?.employeeId}_${Date.now()}${ext}`);
         },
     }),
-    limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
     fileFilter: (_req, file, cb) => {
         if (file.mimetype.startsWith('image/'))
             cb(null, true);
@@ -79,22 +79,15 @@ router.patch('/me', auth_1.authenticateToken, async (req, res) => {
             updateData.pan_number = pan_number;
         if (aadhaar_number !== undefined)
             updateData.aadhaar_number = aadhaar_number;
-        // Bank Details (only allow if not already set)
-        const hasBankDetails = Boolean(currentEmp.bank_account_number);
-        const tryingToUpdateBank = bank_name !== undefined || bank_account_number !== undefined || bank_ifsc !== undefined || bank_branch !== undefined;
-        if (tryingToUpdateBank && hasBankDetails) {
-            return res.status(403).json({ error: 'Bank details cannot be changed once set. Please contact HR or MD.' });
-        }
-        if (!hasBankDetails) {
-            if (bank_name !== undefined)
-                updateData.bank_name = bank_name;
-            if (bank_account_number !== undefined)
-                updateData.bank_account_number = bank_account_number;
-            if (bank_ifsc !== undefined)
-                updateData.bank_ifsc = bank_ifsc;
-            if (bank_branch !== undefined)
-                updateData.bank_branch = bank_branch;
-        }
+        // Bank Details (always allow updating now)
+        if (bank_name !== undefined)
+            updateData.bank_name = bank_name;
+        if (bank_account_number !== undefined)
+            updateData.bank_account_number = bank_account_number;
+        if (bank_ifsc !== undefined)
+            updateData.bank_ifsc = bank_ifsc;
+        if (bank_branch !== undefined)
+            updateData.bank_branch = bank_branch;
         const updatedEmp = await prisma_1.prisma.employee.update({
             where: { id: employeeId },
             data: updateData,
@@ -102,8 +95,22 @@ router.patch('/me', auth_1.authenticateToken, async (req, res) => {
                 id: true,
                 full_name: true,
                 phone: true,
+                secondary_phone: true,
                 whatsapp_number: true,
                 email: true,
+                blood_group: true,
+                social_links: true,
+                current_address: true,
+                permanent_address: true,
+                emergency_contact_name: true,
+                emergency_contact_relation: true,
+                emergency_contact_phone: true,
+                pan_number: true,
+                aadhaar_number: true,
+                bank_name: true,
+                bank_account_number: true,
+                bank_ifsc: true,
+                bank_branch: true,
                 profile_image_url: true,
             }
         });
@@ -118,36 +125,41 @@ router.patch('/me', auth_1.authenticateToken, async (req, res) => {
     }
 });
 // POST /api/v1/employees/me/photo - Upload profile photo
-router.post('/me/photo', auth_1.authenticateToken, profileUpload.single('profile_image'), async (req, res) => {
-    try {
-        const file = req.file;
-        if (!file) {
-            return res.status(400).json({ error: 'No image file provided.' });
+router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
+    profileUpload.single('profile_image')(req, res, async (err) => {
+        if (err) {
+            console.error('Multer error:', err);
+            return res.status(400).json({ error: err.message || 'File upload failed' });
         }
-        const employeeId = req.user.employeeId;
-        // Check if employee already has a photo to delete the old one (optional but good practice)
-        const emp = await prisma_1.prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
-        const newImageUrl = `/uploads/profiles/${file.filename}`;
-        await prisma_1.prisma.employee.update({
-            where: { id: employeeId },
-            data: { profile_image_url: newImageUrl },
-        });
-        if (emp?.profile_image_url && emp.profile_image_url.startsWith('/uploads/profiles/')) {
-            const oldFileName = emp.profile_image_url.replace('/uploads/profiles/', '');
-            const oldFilePath = path_1.default.join(PROFILE_UPLOAD_DIR, oldFileName);
-            if (fs_1.default.existsSync(oldFilePath)) {
-                fs_1.default.unlinkSync(oldFilePath);
+        try {
+            const file = req.file;
+            if (!file) {
+                return res.status(400).json({ error: 'No image file provided.' });
             }
+            const employeeId = req.user.employeeId;
+            const emp = await prisma_1.prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
+            const newImageUrl = `/uploads/profiles/${file.filename}`;
+            await prisma_1.prisma.employee.update({
+                where: { id: employeeId },
+                data: { profile_image_url: newImageUrl },
+            });
+            if (emp?.profile_image_url && emp.profile_image_url.startsWith('/uploads/profiles/')) {
+                const oldFileName = emp.profile_image_url.replace('/uploads/profiles/', '');
+                const oldFilePath = path_1.default.join(PROFILE_UPLOAD_DIR, oldFileName);
+                if (fs_1.default.existsSync(oldFilePath)) {
+                    fs_1.default.unlinkSync(oldFilePath);
+                }
+            }
+            return res.status(200).json({
+                message: 'Profile photo updated successfully',
+                profile_image_url: (0, media_1.publicAssetUrl)(newImageUrl),
+            });
         }
-        return res.status(200).json({
-            message: 'Profile photo updated successfully',
-            profile_image_url: (0, media_1.publicAssetUrl)(newImageUrl),
-        });
-    }
-    catch (error) {
-        console.error('Profile photo upload error:', error);
-        return res.status(500).json({ error: 'Failed to upload profile photo' });
-    }
+        catch (error) {
+            console.error('Profile photo upload error:', error);
+            return res.status(500).json({ error: 'Failed to upload profile photo' });
+        }
+    });
 });
 // GET /api/v1/employees - List all active/inactive employees (Admin invisible filtered)
 router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_READ), async (req, res) => {

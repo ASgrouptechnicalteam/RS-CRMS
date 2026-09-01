@@ -156,6 +156,37 @@ router.get('/today-status', authenticateToken, async (req: AuthenticatedRequest,
     return res.status(500).json({ error: 'Failed to check report status' });
   }
 });
+
+// GET /api/v1/reports/my-history - Fetch report history for the logged in employee
+router.get('/my-history', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const employeeId = req.user!.employeeId;
+    const { days } = req.query;
+    
+    // Default to last 7 days
+    const limitDays = days ? parseInt(days as string, 10) : 7;
+    const pastDate = new Date();
+    pastDate.setDate(pastDate.getDate() - limitDays);
+
+    const reports = await p.dailyReport.findMany({
+      where: {
+        employee_id: employeeId,
+        submitted_at: {
+          gte: pastDate
+        }
+      },
+      orderBy: {
+        submitted_at: 'desc'
+      }
+    });
+
+    return res.status(200).json({ reports });
+  } catch (error) {
+    console.error('Fetch my-history error:', error);
+    return res.status(500).json({ error: 'Failed to fetch report history' });
+  }
+});
+
 // GET /api/v1/reports/all - Fetch all daily reports for HR/MD
 router.get('/all', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]), async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -204,6 +235,40 @@ router.get('/all', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.
   } catch (error) {
     console.error('Fetch all reports error:', error);
     return res.status(500).json({ error: 'Failed to fetch reports' });
+  }
+});
+
+// GET /api/v1/reports/:id - Fetch single report by ID
+router.get('/:id', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const reportId = parseInt(req.params.id, 10);
+    const employeeId = req.user!.employeeId;
+    const roles = req.user!.roles;
+
+    if (isNaN(reportId)) return res.status(400).json({ error: 'Invalid report ID' });
+
+    const report = await p.dailyReport.findUnique({
+      where: { id: reportId },
+      include: {
+        employee: {
+          select: {
+            full_name: true,
+            employee_code: true,
+          }
+        }
+      }
+    });
+
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+
+    // Allow access if it's the user's own report or if they are HR/Admin
+    const canAccess = report.employee_id === employeeId || roles.includes(Roles.MD) || roles.includes(Roles.ADMIN) || roles.includes(Roles.HR_MANAGER);
+    if (!canAccess) return res.status(403).json({ error: 'Unauthorized to view this report' });
+
+    return res.status(200).json({ report });
+  } catch (error) {
+    console.error('Fetch single report error:', error);
+    return res.status(500).json({ error: 'Failed to fetch report' });
   }
 });
 

@@ -42,6 +42,39 @@ router.get('/my-qr', auth_1.authenticateToken, async (req, res) => {
         return res.status(500).json({ error: 'Failed to generate QR token' });
     }
 });
+// GET /api/v1/attendance/employee-qr/:id - Generate/fetch HMAC QR payload for a specific employee (Admin/HR)
+router.get('/employee-qr/:id', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.MD, shared_1.Roles.HR_MANAGER, shared_1.Roles.ADMIN]), async (req, res) => {
+    try {
+        const targetId = parseInt(req.params.id);
+        if (isNaN(targetId))
+            return res.status(400).json({ error: 'Invalid employee ID' });
+        const employee = await p.employee.findUnique({ where: { id: targetId } });
+        if (!employee)
+            return res.status(404).json({ error: 'Employee not found' });
+        const version = 1;
+        const signedToken = (0, qr_1.generateQrHmac)(employee.id, employee.employee_code, version);
+        let qrRecord = await p.employeeQrCode.findFirst({
+            where: { employee_id: employee.id },
+            orderBy: { generated_at: 'desc' },
+        });
+        if (!qrRecord) {
+            qrRecord = await p.employeeQrCode.create({
+                data: { employee_id: employee.id, qr_token: signedToken },
+            });
+        }
+        return res.status(200).json({
+            employeeId: employee.id,
+            employeeCode: employee.employee_code,
+            version,
+            signedToken,
+            qrData: JSON.stringify({ employeeId: employee.id, employeeCode: employee.employee_code, version, signedToken }),
+        });
+    }
+    catch (error) {
+        console.error('Admin QR fetch error:', error);
+        return res.status(500).json({ error: 'Failed to generate QR token' });
+    }
+});
 // GET /api/v1/attendance/my-status - Check today's check-in status
 router.get('/my-status', auth_1.authenticateToken, async (req, res) => {
     try {

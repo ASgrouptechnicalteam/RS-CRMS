@@ -87,7 +87,7 @@ router.put('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.
 });
 // POST /api/v1/properties/:id/confirm-location - PM confirms on-site location details are accurate
 // This is a prerequisite for the verify action — setting this flag is a distinct, explicit PM decision.
-router.post('/:id/confirm-location', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_VERIFY), async (req, res, next) => {
+router.post('/:id/confirm-location', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_VERIFY), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))
@@ -206,7 +206,7 @@ router.post('/:id/md-approve', auth_1.authenticateToken, (0, authz_1.requireAuth
     }
 });
 // POST /api/v1/properties/:id/publications - Toggle publication for a brand
-router.post('/:id/publications', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), async (req, res, next) => {
+router.post('/:id/publications', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), (0, validate_1.validateRequestBody)(shared_1.PropertyTogglePublicationBodySchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))
@@ -259,7 +259,7 @@ router.get('/:id/publications', auth_1.authenticateToken, (0, authz_1.requireAut
     }
 });
 // POST /api/v1/properties/:id/images - Upload property image
-router.post('/:id/images', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), storage_service_1.propertyImageUpload.single('image'), async (req, res, next) => {
+router.post('/:id/images', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), storage_service_1.propertyImageUpload.single('image'), (0, validate_1.validateRequestBody)(shared_1.PropertyImageMetadataSchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))
@@ -316,7 +316,7 @@ router.post('/:id/images', auth_1.authenticateToken, (0, authz_1.requireAuthz)(s
     }
 });
 // PUT /api/v1/properties/:id/images/:imageId - Update image metadata
-router.put('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), async (req, res, next) => {
+router.put('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), (0, validate_1.validateRequestBody)(shared_1.PropertyImageMetadataSchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))
@@ -384,7 +384,7 @@ router.put('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.require
     }
 });
 // DELETE /api/v1/properties/:id/images/:imageId - Delete property image
-router.delete('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), async (req, res, next) => {
+router.delete('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_UPDATE), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))
@@ -450,7 +450,7 @@ router.delete('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.requ
     }
 });
 // POST /api/v1/properties/:id/images/:imageId/approve - Approve image
-router.post('/:id/images/:imageId/approve', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_DM_POLISH), async (req, res, next) => {
+router.post('/:id/images/:imageId/approve', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_DM_POLISH), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))
@@ -496,7 +496,7 @@ router.post('/:id/images/:imageId/approve', auth_1.authenticateToken, (0, authz_
     }
 });
 // POST /api/v1/properties/:id/images/:imageId/reject - Reject image
-router.post('/:id/images/:imageId/reject', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_DM_POLISH), async (req, res, next) => {
+router.post('/:id/images/:imageId/reject', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.PROPERTIES_DM_POLISH), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res, next) => {
     try {
         const propertyId = parseInt(req.params.id, 10);
         if (isNaN(propertyId))

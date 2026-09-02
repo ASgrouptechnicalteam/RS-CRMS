@@ -45,6 +45,7 @@ const aiSearch_1 = __importDefault(require("./routes/aiSearch"));
 const messageTemplates_1 = __importDefault(require("./routes/messageTemplates"));
 const pm_routing_1 = __importDefault(require("./routes/pm-routing"));
 const whatsapp_1 = __importDefault(require("./routes/whatsapp"));
+const roles_1 = __importDefault(require("./routes/roles"));
 const portalWorker_1 = require("./services/portalWorker");
 const compression_1 = __importDefault(require("compression"));
 const app = (0, express_1.default)();
@@ -67,10 +68,13 @@ app.use((0, cookie_parser_1.default)());
 app.use((0, compression_1.default)({ threshold: 0 }));
 // Body Parser
 app.use(express_1.default.json());
-app.get('/api/v1/test-gzip', (req, res) => {
-    res.send('A'.repeat(5000));
-});
+// Enforce max pagination cap of 100 globally
+const pagination_1 = require("./middleware/pagination");
+app.use(pagination_1.enforceMaxPagination);
+const swagger_1 = require("./utils/swagger");
+(0, swagger_1.setupSwagger)(app);
 const rateLimiter_1 = require("./middleware/rateLimiter");
+app.use(rateLimiter_1.apiRateLimiter);
 // Serve property and profile images publicly.
 const uploadDir = process.env.UPLOAD_DIR || path_1.default.join(process.cwd(), 'uploads');
 const propertiesDir = path_1.default.join(uploadDir, 'properties');
@@ -121,6 +125,7 @@ app.use('/api/v1/ai', aiSearch_1.default);
 app.use('/api/v1/message-templates', messageTemplates_1.default);
 app.use('/api/v1/pm-routing', pm_routing_1.default);
 app.use('/api/v1/whatsapp', whatsapp_1.default);
+app.use('/api/v1/roles', roles_1.default);
 // =========================================
 // NEW NAMESPACE ROUTING (Phase 1 Migration)
 // =========================================
@@ -157,6 +162,7 @@ internalRouter.use('/ai', aiSearch_1.default);
 internalRouter.use('/message-templates', messageTemplates_1.default);
 internalRouter.use('/pm-routing', pm_routing_1.default);
 internalRouter.use('/whatsapp', whatsapp_1.default);
+internalRouter.use('/roles', roles_1.default);
 app.use('/api/v1/internal', internalRouter);
 // Note: publicRoutes is already mounted at /api/v1/public above
 // =========================================
@@ -323,9 +329,12 @@ if (process.env.NODE_ENV === 'production') {
         logger_1.logger.warn('WARNING: QR_HMAC_SECRET is missing or too short for production. Kiosk QR codes cannot be securely signed.');
     }
 }
+const scheduler_1 = require("./jobs/scheduler");
 if (process.env.NODE_ENV !== 'test') {
-    const server = app.listen(port, () => {
+    app.listen(port, () => {
         logger_1.logger.info(`[server]: API running at http://localhost:${port}`);
+        // Initialize background jobs
+        (0, scheduler_1.initJobs)();
         bootstrapHostingerDatabase();
         // Portal worker is DISABLED by default (PORTAL_WORKER_ENABLED=false).
         // Enable explicitly when the Customer Portal is available.

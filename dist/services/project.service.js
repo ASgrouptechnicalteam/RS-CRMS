@@ -7,6 +7,7 @@ const dataScope_1 = require("../authz/dataScope");
 const shared_1 = require("../shared");
 const authorization_1 = require("../authz/authorization");
 const slugify_1 = require("../utils/slugify");
+const cache_1 = require("../utils/cache");
 const p = prisma_1.prisma;
 class ProjectService {
     static async generateNextProjectCode() {
@@ -20,14 +21,17 @@ class ProjectService {
         if (filters.status) {
             whereCondition.status = filters.status;
         }
-        return await p.project.findMany({
-            where: whereCondition,
-            take,
-            skip,
-            include: {
-                assigned_pm: { select: { id: true, employee_code: true, full_name: true, phone: true } },
-            },
-            orderBy: { created_at: 'desc' },
+        const cacheKey = `projects_${user.employeeId}_${JSON.stringify(filters)}_${take}_${skip}`;
+        return await (0, cache_1.fetchWithCache)(cacheKey, async () => {
+            return await p.project.findMany({
+                where: whereCondition,
+                take,
+                skip,
+                include: {
+                    assigned_pm: { select: { id: true, employee_code: true, full_name: true, phone: true } },
+                },
+                orderBy: { created_at: 'desc' },
+            });
         });
     }
     static async getProject(user, projectId) {

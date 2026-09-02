@@ -93,7 +93,7 @@ router.post('/:id/escalate', auth_1.authenticateToken, (0, auth_1.requirePermiss
     }
 });
 // POST /api/v1/site-visits/:id/reconfirm-customer - Day-before reconfirmation call
-router.post('/:id/reconfirm-customer', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_VERIFY]), async (req, res, next) => {
+router.post('/:id/reconfirm-customer', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_VERIFY]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
     try {
         const visitId = parseInt(req.params.id, 10);
         if (isNaN(visitId))
@@ -147,7 +147,7 @@ router.post('/:id/pm-reconfirm', auth_1.authenticateToken, (0, auth_1.requirePer
     }
 });
 // POST /api/v1/site-visits/:id/confirm - PENDING_CUSTOMER_RECONFIRMATION / RESCHEDULE_REQUESTED → CONFIRMED
-router.post('/:id/confirm', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_VERIFY]), async (req, res, next) => {
+router.post('/:id/confirm', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_VERIFY]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
     try {
         const visitId = parseInt(req.params.id, 10);
         if (isNaN(visitId))
@@ -164,7 +164,7 @@ router.post('/:id/confirm', auth_1.authenticateToken, (0, auth_1.requirePermissi
     }
 });
 // POST /api/v1/site-visits/:id/start - CONFIRMED → ACTIVE (day-of)
-router.post('/:id/start', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_COMPLETE]), async (req, res, next) => {
+router.post('/:id/start', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_COMPLETE]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
     try {
         const visitId = parseInt(req.params.id, 10);
         if (isNaN(visitId))
@@ -199,7 +199,7 @@ router.post('/:id/complete', auth_1.authenticateToken, (0, auth_1.requirePermiss
     }
 });
 // POST /api/v1/site-visits/:id/cancel - any active state → CANCELLED
-router.post('/:id/cancel', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_COMPLETE]), async (req, res, next) => {
+router.post('/:id/cancel', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_COMPLETE]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
     try {
         const visitId = parseInt(req.params.id, 10);
         if (isNaN(visitId))

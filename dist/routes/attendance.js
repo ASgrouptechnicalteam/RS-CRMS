@@ -123,7 +123,7 @@ const parseAndVerifyQR = (req, qrPayload) => {
 // The token's embedded branchId is written to AttendanceLog.branch_id so the
 // attendance record carries the physical scan location, not the employee's
 // assigned branch.
-router.post('/scan', auth_1.authenticateKioskToken, async (req, res) => {
+router.post('/scan', auth_1.authenticateKioskToken, (0, validate_1.validateRequestBody)(shared_1.AttendanceQRPayloadSchema), async (req, res) => {
     const targetCompanyId = req.kiosk.companyId;
     const branchId = req.kiosk.branchId; // physical scan location
     try {
@@ -230,11 +230,8 @@ router.post('/scan', auth_1.authenticateKioskToken, async (req, res) => {
         return res.status(500).json({ error: 'Attendance scan verification failed' });
     }
 });
-// POST /api/v1/attendance/checkout - Verify QR and Stamp Checkout
-// Kiosk-only: must be authenticated with a type:'KIOSK' token.
-// branch_id from the kiosk token is written to AttendanceLog so the checkout
-// record carries the physical scan location.
-router.post('/checkout', auth_1.authenticateKioskToken, async (req, res) => {
+// POST /api/v1/attendance/checkout - Stamp Checkout (IST rules)
+router.post('/checkout', auth_1.authenticateKioskToken, (0, validate_1.validateRequestBody)(shared_1.AttendanceQRPayloadSchema), async (req, res) => {
     const targetCompanyId = req.kiosk.companyId;
     const branchId = req.kiosk.branchId;
     try {
@@ -374,7 +371,7 @@ router.post('/late-proposal', auth_1.authenticateToken, (0, validate_1.validateR
     }
 });
 // POST /api/v1/attendance/leave-proposal - Submit leave proposal
-router.post('/leave-proposal', auth_1.authenticateToken, async (req, res) => {
+router.post('/leave-proposal', auth_1.authenticateToken, (0, validate_1.validateRequestBody)(shared_1.LeaveProposalSchema), async (req, res) => {
     try {
         const { start_date, end_date, reason } = req.body;
         if (!start_date || !reason) {
@@ -486,7 +483,7 @@ router.get('/proposals/queue', auth_1.authenticateToken, (0, auth_1.requireRole)
     }
 });
 // POST /api/v1/attendance/proposals/:id/approve - Approve proposal
-router.post('/proposals/:id/approve', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.HR_MANAGER, shared_1.Roles.MD, shared_1.Roles.ADMIN]), async (req, res) => {
+router.post('/proposals/:id/approve', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.HR_MANAGER, shared_1.Roles.MD, shared_1.Roles.ADMIN]), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         const proposal = await p.attendanceProposal.findUnique({ where: { id } });
@@ -514,7 +511,7 @@ router.post('/proposals/:id/approve', auth_1.authenticateToken, (0, auth_1.requi
     }
 });
 // POST /api/v1/attendance/proposals/:id/reject - Reject proposal
-router.post('/proposals/:id/reject', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.HR_MANAGER, shared_1.Roles.MD, shared_1.Roles.ADMIN]), async (req, res) => {
+router.post('/proposals/:id/reject', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.HR_MANAGER, shared_1.Roles.MD, shared_1.Roles.ADMIN]), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10);
         const proposal = await p.attendanceProposal.findUnique({ where: { id } });
@@ -667,7 +664,8 @@ router.get('/holidays', auth_1.authenticateToken, async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch holidays' });
     }
 });
-router.post('/holidays', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.MD, shared_1.Roles.ADMIN, shared_1.Roles.HR_MANAGER]), async (req, res) => {
+// POST /api/v1/attendance/holidays
+router.post('/holidays', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.MD, shared_1.Roles.ADMIN, shared_1.Roles.HR_MANAGER]), (0, validate_1.validateRequestBody)(shared_1.AttendanceHolidaySchema), async (req, res) => {
     try {
         const { name, date } = req.body;
         if (!name || !date)
@@ -687,7 +685,8 @@ router.post('/holidays', auth_1.authenticateToken, (0, auth_1.requireRole)([shar
         return res.status(500).json({ error: 'Failed to create holiday' });
     }
 });
-router.delete('/holidays/:id', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.MD, shared_1.Roles.ADMIN, shared_1.Roles.HR_MANAGER]), async (req, res) => {
+// DELETE /api/v1/attendance/holidays/:id
+router.delete('/holidays/:id', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.MD, shared_1.Roles.ADMIN, shared_1.Roles.HR_MANAGER]), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res) => {
     try {
         const id = Number(req.params.id);
         const companyId = req.user.companyId;

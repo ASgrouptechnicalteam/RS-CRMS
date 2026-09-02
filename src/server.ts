@@ -42,6 +42,7 @@ import aiSearchRoutes from './routes/aiSearch';
 import messageTemplateRoutes from './routes/messageTemplates';
 import pmRoutingRoutes from './routes/pm-routing';
 import whatsappRoutes from './routes/whatsapp';
+import rolesRoutes from './routes/roles';
 
 import { PortalWorker } from './services/portalWorker';
 import compression from 'compression';
@@ -133,6 +134,7 @@ app.use('/api/v1/ai', aiSearchRoutes);
 app.use('/api/v1/message-templates', messageTemplateRoutes);
 app.use('/api/v1/pm-routing', pmRoutingRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
+app.use('/api/v1/roles', rolesRoutes);
 
 // =========================================
 // NEW NAMESPACE ROUTING (Phase 1 Migration)
@@ -170,6 +172,7 @@ internalRouter.use('/ai', aiSearchRoutes);
 internalRouter.use('/message-templates', messageTemplateRoutes);
 internalRouter.use('/pm-routing', pmRoutingRoutes);
 internalRouter.use('/whatsapp', whatsappRoutes);
+internalRouter.use('/roles', rolesRoutes);
 
 app.use('/api/v1/internal', internalRouter);
 // Note: publicRoutes is already mounted at /api/v1/public above

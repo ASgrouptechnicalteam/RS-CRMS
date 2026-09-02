@@ -333,7 +333,9 @@ router.get('/me', auth_1.authenticateToken, async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch user profile' });
     }
 });
-router.post('/refresh', rateLimiter_1.refreshRateLimiter, async (req, res) => {
+const zod_1 = require("zod");
+const EmptyBodySchema = zod_1.z.object({}).strict();
+router.post('/refresh', rateLimiter_1.refreshRateLimiter, (0, validate_1.validateRequestBody)(EmptyBodySchema), async (req, res) => {
     try {
         const refreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
         if (!refreshToken) {
@@ -466,7 +468,7 @@ router.post('/refresh', rateLimiter_1.refreshRateLimiter, async (req, res) => {
         return res.status(500).json({ error: 'Refresh failed' });
     }
 });
-router.post('/logout', async (req, res) => {
+router.post('/logout', (0, validate_1.validateRequestBody)(EmptyBodySchema), async (req, res) => {
     const refreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
     if (refreshToken) {
         const refreshTokenHash = crypto_1.default.createHash('sha256').update(refreshToken).digest('hex');

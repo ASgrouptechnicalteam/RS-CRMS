@@ -123,4 +123,20 @@ router.post('/emergency/lockdown', auth_1.authenticateToken, (0, auth_1.requireR
         return res.status(500).json({ error: 'Failed to execute system lockdown command' });
     }
 });
+const cache_1 = require("../utils/cache");
+// POST /cache/clear
+// Admin endpoint to manually flush the in-memory cache
+router.post('/cache/clear', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.ADMIN]), (req, res) => {
+    try {
+        const stats = (0, cache_1.clearCache)();
+        return res.status(200).json({
+            message: 'Cache cleared successfully',
+            keysFlushed: stats.keys
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('[Admin] Cache clear failed:', error);
+        return res.status(500).json({ error: 'Failed to clear cache' });
+    }
+});
 exports.default = router;

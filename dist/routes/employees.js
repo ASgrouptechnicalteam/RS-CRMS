@@ -15,11 +15,12 @@ const notifyEmployee_1 = require("../utils/notifyEmployee");
 const crypto_1 = require("../utils/crypto");
 const dataScope_1 = require("../authz/dataScope");
 const media_1 = require("../utils/media");
+const validate_1 = require("../middleware/validate");
 const router = (0, express_1.Router)();
 const storage_service_1 = require("../services/storage.service");
 const profileUpload = storage_service_1.memoryUpload;
 // PATCH /api/v1/employees/me - Self-update for safe profile fields
-router.patch('/me', auth_1.authenticateToken, async (req, res) => {
+router.patch('/me', auth_1.authenticateToken, (0, validate_1.validateRequestBody)(shared_1.EmployeeSelfUpdateSchema), async (req, res) => {
     try {
         const employeeId = req.user.employeeId;
         const { full_name, phone, secondary_phone, whatsapp_number, current_address, permanent_address, emergency_contact_name, emergency_contact_relation, emergency_contact_phone, blood_group, social_links, pan_number, aadhaar_number, bank_name, bank_account_number, bank_ifsc, bank_branch } = req.body;
@@ -253,7 +254,7 @@ router.get('/managers', auth_1.authenticateToken, async (req, res) => {
     }
 });
 // POST /api/v1/employees - Add new employee with all 20 industrial fields
-router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_CREATE), async (req, res) => {
+router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_CREATE), (0, validate_1.validateRequestBody)(shared_1.EmployeeCreateSchema), async (req, res) => {
     try {
         const { full_name, phone, secondary_phone, whatsapp_number, email, blood_group, social_links, current_address, permanent_address, emergency_contact_name, emergency_contact_relation, emergency_contact_phone, pan_number, aadhaar_number, bank_name, bank_account_number, bank_ifsc, bank_branch, job_title, department, employment_type, reporting_manager_id, date_of_joining, salary_ctc, background_education, role_name, branch_id, additional_branch_ids, initial_password, } = req.body;
         if (!role_name || !branch_id || !full_name || !phone) {
@@ -381,7 +382,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
     }
 });
 // PATCH /api/v1/employees/:id - Update employee status, branch, roles or any profile detail
-router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_UPDATE), async (req, res) => {
+router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_UPDATE), (0, validate_1.validateRequestBody)(shared_1.EmployeeUpdateSchema), async (req, res) => {
     try {
         const employeeId = parseInt(req.params.id, 10);
         const targetEmployee = await prisma_1.prisma.employee.findUnique({ where: { id: employeeId } });
@@ -576,7 +577,7 @@ router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_
     }
 });
 // POST /api/v1/employees/:id/reset-password - Admin 1-click Password Reset
-router.post('/:id/reset-password', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_RESET_PASSWORD), async (req, res) => {
+router.post('/:id/reset-password', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_RESET_PASSWORD), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res) => {
     try {
         const employeeId = parseInt(req.params.id, 10);
         const targetEmployee = await prisma_1.prisma.employee.findUnique({ where: { id: employeeId } });
@@ -616,7 +617,7 @@ router.post('/:id/reset-password', auth_1.authenticateToken, (0, authz_1.require
     }
 });
 // PUT /api/v1/employees/:id/roles - Update an employee's roles
-router.put('/:id/roles', auth_1.authenticateToken, async (req, res) => {
+router.put('/:id/roles', auth_1.authenticateToken, (0, validate_1.validateRequestBody)(shared_1.EmployeeRolesUpdateSchema), async (req, res) => {
     try {
         const employeeId = parseInt(req.params.id, 10);
         const { role_names } = req.body;

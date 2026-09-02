@@ -7,6 +7,7 @@ const zod_1 = require("zod");
 const auth_1 = require("../middleware/auth");
 const authz_1 = require("../middleware/authz");
 const shared_1 = require("../shared");
+const validate_1 = require("../middleware/validate");
 const complaint_service_1 = require("../services/complaint.service");
 const router = (0, express_1.Router)();
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH'];
@@ -59,10 +60,9 @@ router.get('/:id', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_REA
     }
 });
 // POST /api/v1/complaints
-router.post('/', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_CREATE), async (req, res, next) => {
+router.post('/', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_CREATE), (0, validate_1.validateRequestBody)(CreateComplaintSchema), async (req, res, next) => {
     try {
-        const dto = CreateComplaintSchema.parse(req.body);
-        const complaint = await complaint_service_1.ComplaintService.create(req.user, dto);
+        const complaint = await complaint_service_1.ComplaintService.create(req.user, req.body);
         res.status(201).json(complaint);
     }
     catch (error) {
@@ -70,10 +70,9 @@ router.post('/', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_CREAT
     }
 });
 // PATCH /api/v1/complaints/:id
-router.patch('/:id', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_UPDATE), async (req, res, next) => {
+router.patch('/:id', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_UPDATE), (0, validate_1.validateRequestBody)(UpdateComplaintSchema), async (req, res, next) => {
     try {
-        const dto = UpdateComplaintSchema.parse(req.body);
-        const complaint = await complaint_service_1.ComplaintService.update(req.user, parseInt(req.params.id, 10), dto);
+        const complaint = await complaint_service_1.ComplaintService.update(req.user, parseInt(req.params.id, 10), req.body);
         res.json(complaint);
     }
     catch (error) {
@@ -81,10 +80,9 @@ router.patch('/:id', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_U
     }
 });
 // PATCH /api/v1/complaints/:id/status
-router.patch('/:id/status', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_UPDATE), async (req, res, next) => {
+router.patch('/:id/status', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_UPDATE), (0, validate_1.validateRequestBody)(StatusSchema), async (req, res, next) => {
     try {
-        const { status } = StatusSchema.parse(req.body);
-        const complaint = await complaint_service_1.ComplaintService.changeStatus(req.user, parseInt(req.params.id, 10), status);
+        const complaint = await complaint_service_1.ComplaintService.changeStatus(req.user, parseInt(req.params.id, 10), req.body.status);
         res.json(complaint);
     }
     catch (error) {
@@ -92,10 +90,9 @@ router.patch('/:id/status', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPL
     }
 });
 // PATCH /api/v1/complaints/:id/assign
-router.patch('/:id/assign', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_ASSIGN), async (req, res, next) => {
+router.patch('/:id/assign', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_ASSIGN), (0, validate_1.validateRequestBody)(AssignComplaintSchema), async (req, res, next) => {
     try {
-        const { employee_id } = AssignComplaintSchema.parse(req.body);
-        const complaint = await complaint_service_1.ComplaintService.assign(req.user, parseInt(req.params.id, 10), employee_id);
+        const complaint = await complaint_service_1.ComplaintService.assign(req.user, parseInt(req.params.id, 10), req.body.employee_id);
         res.json(complaint);
     }
     catch (error) {
@@ -103,10 +100,9 @@ router.patch('/:id/assign', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPL
     }
 });
 // PATCH /api/v1/complaints/:id/resolve
-router.patch('/:id/resolve', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_RESOLVE), async (req, res, next) => {
+router.patch('/:id/resolve', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_RESOLVE), (0, validate_1.validateRequestBody)(ResolveSchema), async (req, res, next) => {
     try {
-        const { resolution_description } = ResolveSchema.parse(req.body);
-        const complaint = await complaint_service_1.ComplaintService.resolve(req.user, parseInt(req.params.id, 10), resolution_description);
+        const complaint = await complaint_service_1.ComplaintService.resolve(req.user, parseInt(req.params.id, 10), req.body.resolution_description);
         res.json(complaint);
     }
     catch (error) {
@@ -114,10 +110,9 @@ router.patch('/:id/resolve', (0, authz_1.requireAuthz)(shared_1.Permissions.COMP
     }
 });
 // PATCH /api/v1/complaints/:id/close
-router.patch('/:id/close', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_CLOSE), async (req, res, next) => {
+router.patch('/:id/close', (0, authz_1.requireAuthz)(shared_1.Permissions.COMPLAINTS_CLOSE), (0, validate_1.validateRequestBody)(CloseSchema), async (req, res, next) => {
     try {
-        const parsed = CloseSchema.parse(req.body);
-        const complaint = await complaint_service_1.ComplaintService.close(req.user, parseInt(req.params.id, 10), parsed.closure_reason);
+        const complaint = await complaint_service_1.ComplaintService.close(req.user, parseInt(req.params.id, 10), req.body.closure_reason);
         res.json(complaint);
     }
     catch (error) {

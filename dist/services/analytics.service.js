@@ -187,14 +187,28 @@ class AnalyticsService {
         const maxScore = totalEmployees ? Math.max(...scores) : 0;
         return { averageScore, totalEmployees, minScore, maxScore };
     }
+    static async countPendingProposals(companyId) {
+        const employees = await p.employee.findMany({
+            where: { company_id: companyId },
+            select: { id: true },
+        });
+        const res = await p.attendanceProposal.count({
+            where: {
+                status: 'PENDING',
+                employee_id: { in: employees.map((e) => e.id) },
+            }
+        });
+        return res;
+    }
     // ---- public: md.ts executive-metrics (delegated, contract-preserving) ----
     static async getExecutiveMetrics(companyId) {
-        const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance] = await Promise.all([
+        const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance, pendingProposals] = await Promise.all([
             this.countLeads(companyId),
             this.countWonLeads(companyId),
             this.countSiteVisitsScheduled(companyId),
             this.propertyDistribution(companyId),
             this.attendanceExceptionsToday(companyId),
+            this.countPendingProposals(companyId),
         ]);
         return {
             totalLeadsCount,
@@ -206,6 +220,7 @@ class AnalyticsService {
             pendingVerificationPropertiesCount: property.pendingPM,
             totalEmployeesCount: attendance.active,
             attendanceExceptionsCount: attendance.exceptions,
+            pendingLeaveRequestsCount: pendingProposals,
         };
     }
     // ---- public: unified analytics KPI contract ----

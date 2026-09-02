@@ -26,11 +26,10 @@ class ExpenseRefundService {
             },
         });
     }
-    static async createRefund(user, data, file) {
+    static async createRefund(user, data, proofImageUrl) {
         if (!expenseRefund_policy_1.ExpenseRefundPolicy.canCreate(user)) {
             throw { status: 403, message: 'Forbidden: Missing expenses.create permission' };
         }
-        const proofImageUrl = file ? `/uploads/expense-proofs/${file.filename}` : null;
         return await p.$transaction(async (tx) => {
             const refund = await tx.expenseRefund.create({
                 data: {

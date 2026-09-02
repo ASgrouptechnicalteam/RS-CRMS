@@ -26,15 +26,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LocalStorageService = exports.getPropertyImageStorage = exports.SftpPropertyImageStorage = exports.LocalPropertyImageStorage = exports.processImageBuffer = exports.propertyImageUpload = void 0;
+exports.getStorageService = exports.FtpStorageService = exports.LocalStorageService = exports.getPropertyImageStorage = exports.FtpPropertyImageStorage = exports.LocalPropertyImageStorage = exports.processImageBuffer = exports.memoryUpload = exports.propertyImageUpload = void 0;
 const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const sharp_1 = __importDefault(require("sharp"));
 const crypto_1 = __importDefault(require("crypto"));
+const ftp = __importStar(require("basic-ftp"));
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path_1.default.join(process.cwd(), 'uploads');
 const MAX_SIZE = 10 * 1024 * 1024; // 10MB
 exports.propertyImageUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: MAX_SIZE },
+});
+exports.memoryUpload = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
     limits: { fileSize: MAX_SIZE },
 });
@@ -84,76 +89,65 @@ class LocalPropertyImageStorage {
     }
 }
 exports.LocalPropertyImageStorage = LocalPropertyImageStorage;
-class SftpPropertyImageStorage {
+async function getFtpClient() {
+    const client = new ftp.Client();
+    client.ftp.verbose = false;
+    await client.access({
+        host: process.env.FTP_HOST,
+        user: process.env.FTP_USERNAME,
+        password: process.env.FTP_PASSWORD,
+        port: parseInt(process.env.FTP_PORT || '21', 10),
+        secure: false,
+    });
+    return client;
+}
+class FtpPropertyImageStorage {
     async upload(buffer, propertyId) {
-        const Client = (await Promise.resolve().then(() => __importStar(require('ssh2-sftp-client')))).default;
-        const sftp = new Client();
+        const client = await getFtpClient();
         try {
-            await sftp.connect({
-                host: process.env.SFTP_HOST,
-                port: parseInt(process.env.SFTP_PORT || '22', 10),
-                username: process.env.SFTP_USERNAME,
-                password: process.env.SFTP_PASSWORD,
-            });
             const { processedBuffer, filename } = await processImageBuffer(buffer);
-            const remoteDir = path_1.default.posix.join(process.env.SFTP_REMOTE_BASE_PATH || '', String(propertyId), 'images');
-            const dirExists = await sftp.exists(remoteDir);
-            if (!dirExists) {
-                await sftp.mkdir(remoteDir, true);
-            }
+            const remoteDir = path_1.default.posix.join(process.env.FTP_REMOTE_BASE_PATH || '', 'properties', String(propertyId), 'images');
+            await client.ensureDir(remoteDir);
+            // Write buffer to stream for basic-ftp
+            const { Readable } = await Promise.resolve().then(() => __importStar(require('stream')));
+            const stream = Readable.from(processedBuffer);
             const remotePath = path_1.default.posix.join(remoteDir, filename);
-            await sftp.put(processedBuffer, remotePath);
-            const baseUrl = process.env.SFTP_PUBLIC_BASE_URL || '';
-            return `${baseUrl}/${propertyId}/images/${filename}`;
+            await client.uploadFrom(stream, remotePath);
+            const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
+            return `${baseUrl}/properties/${propertyId}/images/${filename}`;
         }
         finally {
-            await sftp.end();
+            client.close();
         }
     }
     async delete(imageUrl) {
-        const baseUrl = process.env.SFTP_PUBLIC_BASE_URL || '';
+        const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
         if (!imageUrl.startsWith(baseUrl)) {
-            console.warn(`Cannot delete SFTP image, URL does not match base URL: ${imageUrl}`);
+            console.warn(`Cannot delete FTP image, URL does not match base URL: ${imageUrl}`);
             return;
         }
         const relativePath = imageUrl.slice(baseUrl.length);
-        const remotePath = path_1.default.posix.join(process.env.SFTP_REMOTE_BASE_PATH || '', relativePath);
-        const Client = (await Promise.resolve().then(() => __importStar(require('ssh2-sftp-client')))).default;
-        const sftp = new Client();
+        const remotePath = path_1.default.posix.join(process.env.FTP_REMOTE_BASE_PATH || '', relativePath);
+        const client = await getFtpClient();
         try {
-            await sftp.connect({
-                host: process.env.SFTP_HOST,
-                port: parseInt(process.env.SFTP_PORT || '22', 10),
-                username: process.env.SFTP_USERNAME,
-                password: process.env.SFTP_PASSWORD,
-            });
-            const exists = await sftp.exists(remotePath);
-            if (exists) {
-                await sftp.delete(remotePath);
-            }
+            await client.remove(remotePath);
         }
         catch (err) {
-            console.error(`Failed to delete remote SFTP file: ${remotePath}`, err);
+            console.error(`Failed to delete remote FTP file: ${remotePath}`, err);
         }
         finally {
-            await sftp.end();
+            client.close();
         }
     }
 }
-exports.SftpPropertyImageStorage = SftpPropertyImageStorage;
+exports.FtpPropertyImageStorage = FtpPropertyImageStorage;
 function getPropertyImageStorage() {
-    if (process.env.STORAGE_DRIVER === 'sftp') {
-        return new SftpPropertyImageStorage();
+    if (process.env.STORAGE_DRIVER === 'ftp') {
+        return new FtpPropertyImageStorage();
     }
     return new LocalPropertyImageStorage();
 }
 exports.getPropertyImageStorage = getPropertyImageStorage;
-/**
- * Minimal local-disk implementation of StorageService.
- * Files are written under the configured base directory and addressed by
- * relative paths (e.g. "documents/...") so stored paths stay public-safe.
- * Path traversal outside the base directory is rejected.
- */
 class LocalStorageService {
     constructor(baseDir) {
         this.baseDir = path_1.default.resolve(baseDir);
@@ -172,16 +166,88 @@ class LocalStorageService {
         const dir = path_1.default.join(this.baseDir, 'documents');
         fs_1.default.mkdirSync(dir, { recursive: true });
         await fs_1.default.promises.writeFile(path_1.default.join(dir, filename), buffer);
-        return relativePath;
+        return `/uploads/${relativePath}`; // Make it accessible via public URL locally
     }
     async download(storagePath) {
-        return fs_1.default.promises.readFile(this.resolveSafe(storagePath));
+        const relativePath = storagePath.replace(/^\/uploads\//, '');
+        return fs_1.default.promises.readFile(this.resolveSafe(relativePath));
     }
     async delete(storagePath) {
-        const filepath = this.resolveSafe(storagePath);
+        const relativePath = storagePath.replace(/^\/uploads\//, '');
+        const filepath = this.resolveSafe(relativePath);
         if (fs_1.default.existsSync(filepath)) {
             await fs_1.default.promises.unlink(filepath);
         }
     }
 }
 exports.LocalStorageService = LocalStorageService;
+class FtpStorageService {
+    constructor(remoteSubdir = 'documents') {
+        this.remoteSubdir = remoteSubdir;
+    }
+    async upload(buffer, originalName, _mimeType) {
+        const ext = path_1.default.extname(originalName).toLowerCase() || '.bin';
+        const filename = `doc-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+        const client = await getFtpClient();
+        try {
+            const remoteDir = path_1.default.posix.join(process.env.FTP_REMOTE_BASE_PATH || '', this.remoteSubdir);
+            await client.ensureDir(remoteDir);
+            const { Readable } = await Promise.resolve().then(() => __importStar(require('stream')));
+            const stream = Readable.from(buffer);
+            const remotePath = path_1.default.posix.join(remoteDir, filename);
+            await client.uploadFrom(stream, remotePath);
+            const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
+            return `${baseUrl}/${this.remoteSubdir}/${filename}`;
+        }
+        finally {
+            client.close();
+        }
+    }
+    async download(storagePath) {
+        const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
+        if (!storagePath.startsWith(baseUrl)) {
+            throw new Error(`Cannot download FTP file, URL does not match base URL: ${storagePath}`);
+        }
+        const relativePath = storagePath.slice(baseUrl.length);
+        const remotePath = path_1.default.posix.join(process.env.FTP_REMOTE_BASE_PATH || '', relativePath);
+        const client = await getFtpClient();
+        try {
+            const { PassThrough } = await Promise.resolve().then(() => __importStar(require('stream')));
+            const stream = new PassThrough();
+            const chunks = [];
+            stream.on('data', (chunk) => chunks.push(chunk));
+            await client.downloadTo(stream, remotePath);
+            return Buffer.concat(chunks);
+        }
+        finally {
+            client.close();
+        }
+    }
+    async delete(storagePath) {
+        const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
+        if (!storagePath.startsWith(baseUrl)) {
+            console.warn(`Cannot delete FTP file, URL does not match base URL: ${storagePath}`);
+            return;
+        }
+        const relativePath = storagePath.slice(baseUrl.length);
+        const remotePath = path_1.default.posix.join(process.env.FTP_REMOTE_BASE_PATH || '', relativePath);
+        const client = await getFtpClient();
+        try {
+            await client.remove(remotePath);
+        }
+        catch (err) {
+            console.error(`Failed to delete remote FTP file: ${remotePath}`, err);
+        }
+        finally {
+            client.close();
+        }
+    }
+}
+exports.FtpStorageService = FtpStorageService;
+function getStorageService(subdir = 'documents') {
+    if (process.env.STORAGE_DRIVER === 'ftp') {
+        return new FtpStorageService(subdir);
+    }
+    return new LocalStorageService(UPLOAD_DIR);
+}
+exports.getStorageService = getStorageService;

@@ -15,26 +15,9 @@ import { publicAssetUrl } from '../utils/media';
 
 const router = Router();
 
-// Setup Multer for Profile Image Uploads
-const PROFILE_UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'profiles');
-if (!fs.existsSync(PROFILE_UPLOAD_DIR)) {
-  fs.mkdirSync(PROFILE_UPLOAD_DIR, { recursive: true });
-}
+import { memoryUpload, getStorageService } from '../services/storage.service';
 
-const profileUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, PROFILE_UPLOAD_DIR),
-    filename: (req: AuthenticatedRequest, file, cb) => {
-      const ext = path.extname(file.originalname);
-      cb(null, `emp_${req.user?.employeeId}_${Date.now()}${ext}`);
-    },
-  }),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Only image files are allowed!'));
-  }
-});
+const profileUpload = memoryUpload;
 // PATCH /api/v1/employees/me - Self-update for safe profile fields
 router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -133,19 +116,16 @@ router.post('/me/photo', authenticateToken, async (req: AuthenticatedRequest, re
       
       const emp = await prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
       
-      const newImageUrl = `/uploads/profiles/${file.filename}`;
+      const storageService = getStorageService('profiles');
+      const newImageUrl = await storageService.upload(file.buffer, file.originalname, file.mimetype);
       
       await prisma.employee.update({
         where: { id: employeeId },
         data: { profile_image_url: newImageUrl },
       });
 
-      if (emp?.profile_image_url && emp.profile_image_url.startsWith('/uploads/profiles/')) {
-        const oldFileName = emp.profile_image_url.replace('/uploads/profiles/', '');
-        const oldFilePath = path.join(PROFILE_UPLOAD_DIR, oldFileName);
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
+      if (emp?.profile_image_url) {
+        await storageService.delete(emp.profile_image_url).catch(e => console.warn('Could not delete old profile photo:', e));
       }
 
       return res.status(200).json({

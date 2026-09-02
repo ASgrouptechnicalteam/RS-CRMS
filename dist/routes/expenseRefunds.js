@@ -14,19 +14,9 @@ const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const router = (0, express_1.Router)();
-const UPLOAD_DIR = path_1.default.join(process.cwd(), 'uploads', 'expense-proofs');
-if (!fs_1.default.existsSync(UPLOAD_DIR)) {
-    fs_1.default.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-const storage = multer_1.default.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-    filename: (_req, file, cb) => {
-        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-        cb(null, `proof-${uniqueSuffix}${path_1.default.extname(file.originalname)}`);
-    },
-});
+const storage_service_1 = require("../services/storage.service");
 const upload = (0, multer_1.default)({
-    storage,
+    storage: multer_1.default.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
         const allowed = ['.jpg', '.jpeg', '.png', '.pdf', '.webp'];
@@ -58,7 +48,12 @@ router.get('/queue', auth_1.authenticateToken, (0, auth_1.requirePermission)([sh
 router.post('/', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_2.Permissions.EXPENSES_CREATE]), upload.single('proof_image'), (0, validate_1.validateRequestBody)(shared_1.ExpenseRefundCreateSchema), async (req, res, next) => {
     try {
         const { purpose, amount } = req.body;
-        const refund = await expenseRefund_service_1.ExpenseRefundService.createRefund(req.user, { purpose, amount }, req.file);
+        let proofImageUrl = null;
+        if (req.file) {
+            const storageService = (0, storage_service_1.getStorageService)('expense-proofs');
+            proofImageUrl = await storageService.upload(req.file.buffer, req.file.originalname, req.file.mimetype);
+        }
+        const refund = await expenseRefund_service_1.ExpenseRefundService.createRefund(req.user, { purpose, amount }, proofImageUrl);
         return res.status(201).json({ message: 'Refund request submitted.', refund });
     }
     catch (error) {

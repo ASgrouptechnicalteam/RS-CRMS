@@ -13,32 +13,10 @@ const authorization_1 = require("../authz/authorization");
 const notifyEmployee_1 = require("../utils/notifyEmployee");
 const crypto_1 = require("../utils/crypto");
 const dataScope_1 = require("../authz/dataScope");
-const multer_1 = __importDefault(require("multer"));
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
 const media_1 = require("../utils/media");
 const router = (0, express_1.Router)();
-// Setup Multer for Profile Image Uploads
-const PROFILE_UPLOAD_DIR = path_1.default.join(process.cwd(), 'uploads', 'profiles');
-if (!fs_1.default.existsSync(PROFILE_UPLOAD_DIR)) {
-    fs_1.default.mkdirSync(PROFILE_UPLOAD_DIR, { recursive: true });
-}
-const profileUpload = (0, multer_1.default)({
-    storage: multer_1.default.diskStorage({
-        destination: (_req, _file, cb) => cb(null, PROFILE_UPLOAD_DIR),
-        filename: (req, file, cb) => {
-            const ext = path_1.default.extname(file.originalname);
-            cb(null, `emp_${req.user?.employeeId}_${Date.now()}${ext}`);
-        },
-    }),
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-    fileFilter: (_req, file, cb) => {
-        if (file.mimetype.startsWith('image/'))
-            cb(null, true);
-        else
-            cb(new Error('Only image files are allowed!'));
-    }
-});
+const storage_service_1 = require("../services/storage.service");
+const profileUpload = storage_service_1.memoryUpload;
 // PATCH /api/v1/employees/me - Self-update for safe profile fields
 router.patch('/me', auth_1.authenticateToken, async (req, res) => {
     try {
@@ -138,17 +116,14 @@ router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
             }
             const employeeId = req.user.employeeId;
             const emp = await prisma_1.prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
-            const newImageUrl = `/uploads/profiles/${file.filename}`;
+            const storageService = (0, storage_service_1.getStorageService)('profiles');
+            const newImageUrl = await storageService.upload(file.buffer, file.originalname, file.mimetype);
             await prisma_1.prisma.employee.update({
                 where: { id: employeeId },
                 data: { profile_image_url: newImageUrl },
             });
-            if (emp?.profile_image_url && emp.profile_image_url.startsWith('/uploads/profiles/')) {
-                const oldFileName = emp.profile_image_url.replace('/uploads/profiles/', '');
-                const oldFilePath = path_1.default.join(PROFILE_UPLOAD_DIR, oldFileName);
-                if (fs_1.default.existsSync(oldFilePath)) {
-                    fs_1.default.unlinkSync(oldFilePath);
-                }
+            if (emp?.profile_image_url) {
+                await storageService.delete(emp.profile_image_url).catch(e => console.warn('Could not delete old profile photo:', e));
             }
             return res.status(200).json({
                 message: 'Profile photo updated successfully',

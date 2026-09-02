@@ -16,21 +16,10 @@ import fs from 'fs';
 
 const router = Router();
 
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'expense-proofs');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `proof-${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
+import { memoryUpload, getStorageService } from '../services/storage.service';
 
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.jpg', '.jpeg', '.png', '.pdf', '.webp'];
@@ -77,7 +66,12 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next) => {
     try {
       const { purpose, amount } = req.body;
-      const refund = await ExpenseRefundService.createRefund(req.user!, { purpose, amount }, req.file);
+      let proofImageUrl: string | null = null;
+      if (req.file) {
+        const storageService = getStorageService('expense-proofs');
+        proofImageUrl = await storageService.upload(req.file.buffer, req.file.originalname, req.file.mimetype);
+      }
+      const refund = await ExpenseRefundService.createRefund(req.user!, { purpose, amount }, proofImageUrl);
       return res.status(201).json({ message: 'Refund request submitted.', refund });
     } catch (error: any) {
       next(error);

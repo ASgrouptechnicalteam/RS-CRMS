@@ -5,6 +5,7 @@ import { generateQrHmac, verifyQrHmac } from '../utils/qr';
 import { calculateAttendanceStatus, getISTComponents } from '../utils/time';
 import { Roles, LateProposalSchema } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
+import { notifyEmployee } from '../utils/notifyEmployee';
 
 const router = Router();
 
@@ -529,28 +530,126 @@ router.post(
 router.get(
   '/proposals/queue',
   authenticateToken,
-  requireRole([Roles.HR_MANAGER, Roles.MD]),
+  requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const companyEmployees = await p.employee.findMany({
         where: { company_id: req.user!.companyId },
-        select: { id: true },
+        select: { id: true, full_name: true, employee_code: true },
       });
 
-      const proposals = await p.auditEvent.findMany({
+      const proposals = await p.attendanceProposal.findMany({
         where: {
-          action: { in: ['SUBMIT_LATE_PROPOSAL', 'SUBMIT_LEAVE_PROPOSAL', 'SUBMIT_EARLY_LOGOUT'] },
-          actor_id: { in: companyEmployees.map((e: any) => e.id) },
+          employee_id: { in: companyEmployees.map((e: any) => e.id) },
+          status: 'PENDING',
         },
+        orderBy: { created_at: 'desc' },
+      });
+
+      const mappedProposals = proposals.map((proposal: any) => {
+        const emp = companyEmployees.find((e: any) => e.id === proposal.employee_id);
+        return {
+          ...proposal,
+          employee: emp,
+        };
+      });
+
+      return res.status(200).json({ proposals: mappedProposals });
+    } catch (error) {
+      console.error('Proposal queue error:', error);
+      return res.status(500).json({ error: 'Failed to load HR proposal queue' });
+    }
+  },
+);
+
+// POST /api/v1/attendance/proposals/:id/approve - Approve proposal
+router.post(
+  '/proposals/:id/approve',
+  authenticateToken,
+  requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const proposal = await p.attendanceProposal.findUnique({ where: { id } });
+      if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+      const updated = await p.attendanceProposal.update({
+        where: { id },
+        data: {
+          status: 'APPROVED',
+          reviewed_by: req.user!.employeeId,
+          reviewed_at: new Date(),
+        },
+      });
+
+      notifyEmployee(proposal.employee_id, {
+        title: 'Proposal Approved',
+        message: `Your ${proposal.type === 'LEAVE' ? 'leave' : 'late'} request for ${new Date(proposal.target_date).toLocaleDateString()} has been approved.`,
+        type: 'SYSTEM',
+        link: '/attendance',
+      });
+
+      return res.status(200).json({ message: 'Proposal approved', proposal: updated });
+    } catch (error) {
+      console.error('Proposal approve error:', error);
+      return res.status(500).json({ error: 'Failed to approve proposal' });
+    }
+  },
+);
+
+// POST /api/v1/attendance/proposals/:id/reject - Reject proposal
+router.post(
+  '/proposals/:id/reject',
+  authenticateToken,
+  requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const proposal = await p.attendanceProposal.findUnique({ where: { id } });
+      if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
+
+      const updated = await p.attendanceProposal.update({
+        where: { id },
+        data: {
+          status: 'REJECTED',
+          reviewed_by: req.user!.employeeId,
+          reviewed_at: new Date(),
+        },
+      });
+
+      notifyEmployee(proposal.employee_id, {
+        title: 'Proposal Rejected',
+        message: `Your ${proposal.type === 'LEAVE' ? 'leave' : 'late'} request for ${new Date(proposal.target_date).toLocaleDateString()} has been rejected.`,
+        type: 'SYSTEM',
+        link: '/attendance',
+      });
+
+      return res.status(200).json({ message: 'Proposal rejected', proposal: updated });
+    } catch (error) {
+      console.error('Proposal reject error:', error);
+      return res.status(500).json({ error: 'Failed to reject proposal' });
+    }
+  },
+);
+
+// GET /api/v1/attendance/proposals/my - Employee's own proposals
+router.get(
+  '/proposals/my',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const proposals = await p.attendanceProposal.findMany({
+        where: { employee_id: req.user!.employeeId },
         orderBy: { created_at: 'desc' },
         take: 20,
       });
 
       return res.status(200).json({ proposals });
     } catch (error) {
-      return res.status(500).json({ error: 'Failed to load HR proposal queue' });
+      console.error('My proposals error:', error);
+      return res.status(500).json({ error: 'Failed to load my proposals' });
     }
-  },
+  }
 );
 
 // GET /api/v1/attendance/live - HR Live Attendance Feed (Today only)

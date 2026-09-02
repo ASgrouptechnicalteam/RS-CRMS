@@ -102,6 +102,7 @@ export interface ExecutiveMetricsResponse {
   pendingVerificationPropertiesCount: number;
   totalEmployeesCount: number;
   attendanceExceptionsCount: number;
+  pendingLeaveRequestsCount: number;
 }
 
 export class AnalyticsService {
@@ -272,15 +273,31 @@ export class AnalyticsService {
     return { averageScore, totalEmployees, minScore, maxScore };
   }
 
+  private static async countPendingProposals(companyId: number): Promise<number> {
+    const employees = await p.employee.findMany({
+      where: { company_id: companyId },
+      select: { id: true },
+    });
+    
+    const res = await p.attendanceProposal.count({
+      where: {
+        status: 'PENDING',
+        employee_id: { in: employees.map((e: any) => e.id) },
+      }
+    });
+    return res;
+  }
+
   // ---- public: md.ts executive-metrics (delegated, contract-preserving) ----
   static async getExecutiveMetrics(companyId: number): Promise<ExecutiveMetricsResponse> {
-    const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance] =
+    const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance, pendingProposals] =
       await Promise.all([
         this.countLeads(companyId),
         this.countWonLeads(companyId),
         this.countSiteVisitsScheduled(companyId),
         this.propertyDistribution(companyId),
         this.attendanceExceptionsToday(companyId),
+        this.countPendingProposals(companyId),
       ]);
 
     return {
@@ -293,6 +310,7 @@ export class AnalyticsService {
       pendingVerificationPropertiesCount: property.pendingPM,
       totalEmployeesCount: attendance.active,
       attendanceExceptionsCount: attendance.exceptions,
+      pendingLeaveRequestsCount: pendingProposals,
     };
   }
 

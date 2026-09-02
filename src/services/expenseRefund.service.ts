@@ -29,12 +29,10 @@ export class ExpenseRefundService {
     });
   }
 
-  static async createRefund(user: TokenPayload, data: { purpose: string; amount: number }, file?: Express.Multer.File) {
+  static async createRefund(user: TokenPayload, data: { purpose: string; amount: number }, proofImageUrl: string | null) {
     if (!ExpenseRefundPolicy.canCreate(user)) {
       throw { status: 403, message: 'Forbidden: Missing expenses.create permission' };
     }
-
-    const proofImageUrl = file ? `/uploads/expense-proofs/${file.filename}` : null;
 
     return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       const refund = await tx.expenseRefund.create({

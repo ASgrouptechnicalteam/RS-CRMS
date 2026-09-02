@@ -142,9 +142,14 @@ router.post('/me/photo', authenticateToken, async (req: AuthenticatedRequest, re
 // GET /api/v1/employees - List all active/inactive employees (Admin invisible filtered)
 router.get('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_READ), async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+
     const whereClause = await buildEmployeeScope(req.user!);
 
     const employees = await prisma.employee.findMany({
+      take: limit,
+      skip: offset,
       where: whereClause,
       include: {
         branch: true,
@@ -205,7 +210,7 @@ router.get('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_READ), asy
       });
     }
 
-    return res.status(200).json({ employees: formatted });
+    return res.status(200).json({ employees: formatted, pagination: { limit, offset } });
   } catch (error) {
     console.error('Fetch employees error:', error);
     return res.status(500).json({ error: 'Failed to fetch employees list' });

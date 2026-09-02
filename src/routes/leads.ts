@@ -24,7 +24,7 @@ router.get(
   requireAuthz(Permissions.LEADS_READ),
   async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
     const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
     
     const leads = await LeadService.getLeads(req.user!, limit, offset);

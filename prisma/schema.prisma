@@ -171,6 +171,7 @@ model Employee {
 
   @@index([company_id])
   @@index([branch_id])
+  @@index([company_id, created_at])
 }
 
 model Role {
@@ -310,7 +311,7 @@ model CompanyHoliday {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  company    Company  @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
 
   @@unique([company_id, date])
   @@index([company_id])
@@ -487,6 +488,7 @@ model Lead {
   @@index([branch_id])
   @@index([assigned_to_id])
   @@index([status])
+  @@index([company_id, created_at])
 }
 
 model LeadActivity {
@@ -642,6 +644,7 @@ model Property {
   @@index([city])
   @@index([listing_type])
   @@index([digital_marketing_executive_id])
+  @@index([company_id, created_at])
 }
 
 model PropertyImage {

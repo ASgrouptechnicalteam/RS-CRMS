@@ -33,7 +33,7 @@ export class LeadService {
     return `RRH-LD-${currentYear}-${sequentialNum}`;
   }
 
-  static async getLeads(user: TokenPayload, take: number = 50, skip: number = 0) {
+  static async getLeads(user: TokenPayload, take: number = 20, skip: number = 0) {
     const whereCondition = await buildLeadScope(user);
 
     const leads = await p.lead.findMany({

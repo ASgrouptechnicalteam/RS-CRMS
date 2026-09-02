@@ -123,6 +123,47 @@ app.use('/api/v1/message-templates', messageTemplateRoutes);
 app.use('/api/v1/pm-routing', pmRoutingRoutes);
 app.use('/api/v1/whatsapp', whatsappRoutes);
 
+// =========================================
+// NEW NAMESPACE ROUTING (Phase 1 Migration)
+// =========================================
+const internalRouter = express.Router();
+internalRouter.use('/health', healthRoutes);
+internalRouter.use('/auth', authRoutes);
+internalRouter.use('/kiosk-auth', kioskAuthRoutes);
+internalRouter.use('/kiosk-credentials', kioskAuthRoutes);
+internalRouter.use('/attendance', attendanceRoutes);
+internalRouter.use('/md', mdRoutes);
+internalRouter.use('/reports', reportRoutes);
+internalRouter.use('/tasks', taskRoutes);
+internalRouter.use('/performance', performanceRoutes);
+internalRouter.use('/notifications', notificationRoutes);
+internalRouter.use('/targets', targetRoutes);
+internalRouter.use('/employees', employeeRoutes);
+internalRouter.use('/leads', leadRoutes);
+internalRouter.use('/customers', customerRoutes);
+internalRouter.use('/properties', propertyRoutes);
+internalRouter.use('/opportunities', opportunityRoutes);
+internalRouter.use('/installments', installmentRoutes);
+internalRouter.use('/projects', projectRoutes);
+internalRouter.use('/site-visits', siteVisitRoutes);
+internalRouter.use('/admin', adminRoutes);
+internalRouter.use('/expense-refunds', expenseRefundRoutes);
+internalRouter.use('/push', pushRoutes);
+internalRouter.use('/announcement', announcementRoutes);
+internalRouter.use('/bookings', bookingRoutes);
+internalRouter.use('/payments', paymentRoutes);
+internalRouter.use('/integration', integrationRoutes);
+internalRouter.use('/complaints', complaintRoutes);
+internalRouter.use('/analytics', analyticsRoutes);
+internalRouter.use('/ai', aiSearchRoutes);
+internalRouter.use('/message-templates', messageTemplateRoutes);
+internalRouter.use('/pm-routing', pmRoutingRoutes);
+internalRouter.use('/whatsapp', whatsappRoutes);
+
+app.use('/api/v1/internal', internalRouter);
+// Note: publicRoutes is already mounted at /api/v1/public above
+// =========================================
+
 // Fallback for unknown API routes
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: 'API route not found' });

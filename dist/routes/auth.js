@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
@@ -148,7 +149,7 @@ router.post('/login', rateLimiter_1.loginRateLimiter, (0, validate_1.validateReq
         });
     }
     catch (error) {
-        console.error('Login error:', error);
+        logger_1.logger.error('Login error:', error);
         return res.status(500).json({ error: 'Authentication failed' });
     }
 });
@@ -260,7 +261,7 @@ router.post('/change-password', auth_1.authenticateToken, (0, validate_1.validat
         });
     }
     catch (error) {
-        console.error('Change password error:', error);
+        logger_1.logger.error('Change password error:', error);
         return res.status(500).json({ error: 'Failed to update password' });
     }
 });
@@ -461,7 +462,7 @@ router.post('/refresh', rateLimiter_1.refreshRateLimiter, async (req, res) => {
         return res.status(200).json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
     }
     catch (error) {
-        console.error('Refresh error:', error);
+        logger_1.logger.error('Refresh error:', error);
         return res.status(500).json({ error: 'Refresh failed' });
     }
 });

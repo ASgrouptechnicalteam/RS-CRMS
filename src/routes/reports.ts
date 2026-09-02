@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
@@ -121,7 +122,7 @@ router.post('/daily', authenticateToken, validateRequestBody(DailyReportSchema),
       isBelowTarget,
     });
   } catch (error: any) {
-    console.error('Submit report error:', error);
+    logger.error('Submit report error:', error);
     return res.status(500).json({ error: 'Failed to submit daily report' });
   }
 });
@@ -182,7 +183,7 @@ router.get('/my-history', authenticateToken, async (req: AuthenticatedRequest, r
 
     return res.status(200).json({ reports });
   } catch (error) {
-    console.error('Fetch my-history error:', error);
+    logger.error('Fetch my-history error:', error);
     return res.status(500).json({ error: 'Failed to fetch report history' });
   }
 });
@@ -233,7 +234,7 @@ router.get('/all', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.
 
     return res.status(200).json({ reports });
   } catch (error) {
-    console.error('Fetch all reports error:', error);
+    logger.error('Fetch all reports error:', error);
     return res.status(500).json({ error: 'Failed to fetch reports' });
   }
 });
@@ -267,7 +268,7 @@ router.get('/:id', authenticateToken, async (req: AuthenticatedRequest, res: Res
 
     return res.status(200).json({ report });
   } catch (error) {
-    console.error('Fetch single report error:', error);
+    logger.error('Fetch single report error:', error);
     return res.status(500).json({ error: 'Failed to fetch report' });
   }
 });

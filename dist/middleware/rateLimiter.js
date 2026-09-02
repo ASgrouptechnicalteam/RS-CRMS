@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.aiSearchLimiter = exports.loginRateLimiter = exports.publicWriteLimiter = exports.publicReadLimiter = exports.refreshRateLimiter = exports.apiRateLimiter = void 0;
+const logger_1 = require("../utils/logger");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const prisma_1 = require("../lib/prisma");
 const p = prisma_1.prisma;
@@ -62,7 +63,7 @@ exports.loginRateLimiter = (0, express_rate_limit_1.default)({
             });
         }
         catch (err) {
-            console.error('Failed to log rate limit audit event', err);
+            logger_1.logger.error('Failed to log rate limit audit event', err);
         }
         res.status(options.statusCode).json(options.message);
     }

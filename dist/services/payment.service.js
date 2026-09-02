@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PaymentService = exports.AppError = void 0;
+const logger_1 = require("../utils/logger");
 const prisma_1 = require("../lib/prisma");
 const payment_policy_1 = require("../policies/payment.policy");
 const booking_policy_1 = require("../policies/booking.policy");
@@ -247,7 +248,7 @@ class PaymentService {
         if (status === 'SUCCESS') {
             // §7: receipt generation has moved to the customer portal (the document
             // module was removed from CRM). No-op here — the portal owns agreement/receipt docs.
-            console.info('Payment ' + id + ' succeeded; receipt generation is portal-owned (§7).');
+            logger_1.logger.info('Payment ' + id + ' succeeded; receipt generation is portal-owned (§7).');
         }
         return result;
     }

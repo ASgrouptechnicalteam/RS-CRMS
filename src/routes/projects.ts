@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
@@ -33,7 +34,7 @@ router.get(
     const projects = await ProjectService.listProjects(req.user!, filters, limit, offset);
     return res.status(200).json({ projects, pagination: { limit, offset } });
   } catch (error: any) {
-    console.error('Fetch projects error:', error);
+    logger.error('Fetch projects error:', error);
     if (error.status) {
       return res.status(error.status).json({ error: error.message });
     }
@@ -51,7 +52,7 @@ router.get('/:id', authenticateToken, requireAuthz(Permissions.PROJECTS_READ, as
     const project = await ProjectService.getProject(req.user!, projectId);
     return res.status(200).json({ project });
   } catch (error: any) {
-    console.error('Fetch project error:', error);
+    logger.error('Fetch project error:', error);
     if (error.status) {
       return res.status(error.status).json({ error: error.message });
     }
@@ -73,7 +74,7 @@ router.post(
         project,
       });
     } catch (error: any) {
-      console.error('Create project error:', error);
+      logger.error('Create project error:', error);
       if (error.status) {
         return res.status(error.status).json({ error: error.message });
       }
@@ -93,7 +94,7 @@ router.put(
     try {
       return await p.project.findFirst({ where: { id: projectId, ...scope } });
     } catch (e: any) {
-      console.error('Prisma validation error payload:', e.message);
+      logger.error('Prisma validation error payload:', e.message);
       throw e;
     }
   }),
@@ -107,7 +108,7 @@ router.put(
         project,
       });
     } catch (error: any) {
-      console.error('Update project error:', error);
+      logger.error('Update project error:', error);
       if (error.status) {
         return res.status(error.status).json({ error: error.message });
       }
@@ -127,7 +128,7 @@ router.delete(
     try {
       return await p.project.findFirst({ where: { id: projectId, ...scope } });
     } catch (e: any) {
-      console.error('Prisma validation error payload DELETE:', e.message);
+      logger.error('Prisma validation error payload DELETE:', e.message);
       throw e;
     }
   }),
@@ -140,7 +141,7 @@ router.delete(
         project,
       });
     } catch (error: any) {
-      console.error('Delete project error:', error);
+      logger.error('Delete project error:', error);
       if (error.status) {
         return res.status(error.status).json({ error: error.message });
       }

@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
@@ -44,7 +45,7 @@ router.get(
         activeConnections: 1 // Simulated for now
       });
     } catch (error) {
-      console.error('[Admin] System metrics fetch failed:', error);
+      logger.error('[Admin] System metrics fetch failed:', error);
       return res.status(500).json({ error: 'Failed to retrieve system telemetry' });
     }
   }
@@ -86,7 +87,7 @@ router.get(
 
       return res.status(200).json({ logs: hydratedEvents });
     } catch (error) {
-      console.error('[Admin] Audit logs fetch failed:', error);
+      logger.error('[Admin] Audit logs fetch failed:', error);
       return res.status(500).json({ error: 'Failed to retrieve forensic audit trail' });
     }
   }
@@ -122,7 +123,7 @@ router.get(
       });
       return res.status(200).json({ alerts });
     } catch (error) {
-      console.error('[Admin] Security alerts fetch failed:', error);
+      logger.error('[Admin] Security alerts fetch failed:', error);
       return res.status(500).json({ error: 'Failed to retrieve security alerts' });
     }
   }
@@ -156,8 +157,30 @@ router.post(
         timestamp: new Date().toISOString()
       });
     } catch (error) {
-      console.error('[Admin] Emergency lockdown failed:', error);
+      logger.error('[Admin] Emergency lockdown failed:', error);
       return res.status(500).json({ error: 'Failed to execute system lockdown command' });
+    }
+  }
+);
+
+import { clearCache } from '../utils/cache';
+
+// POST /cache/clear
+// Admin endpoint to manually flush the in-memory cache
+router.post(
+  '/cache/clear',
+  authenticateToken,
+  requireRole([Roles.ADMIN]),
+  (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const stats = clearCache();
+      return res.status(200).json({ 
+        message: 'Cache cleared successfully',
+        keysFlushed: stats.keys
+      });
+    } catch (error) {
+      logger.error('[Admin] Cache clear failed:', error);
+      return res.status(500).json({ error: 'Failed to clear cache' });
     }
   }
 );

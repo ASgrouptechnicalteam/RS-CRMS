@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -54,7 +55,7 @@ router.get(
 
       return res.status(200).json({ employees: formatted });
     } catch (error) {
-      console.error('MD employees fetch error:', error);
+      logger.error('MD employees fetch error:', error);
       return res.status(500).json({ error: 'Failed to fetch employee list' });
     }
   }
@@ -132,7 +133,7 @@ router.get(
       const metrics = await AnalyticsService.getExecutiveMetrics(companyId);
       return res.status(200).json(metrics);
     } catch (error: any) {
-      console.error('Fetch executive metrics error:', error);
+      logger.error('Fetch executive metrics error:', error);
       return res.status(500).json({ error: 'Failed to fetch executive metrics' });
     }
   }

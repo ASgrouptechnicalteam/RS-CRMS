@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
@@ -154,7 +155,7 @@ router.post('/login', loginRateLimiter, validateRequestBody(LoginSchema), async 
       },
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', error);
     return res.status(500).json({ error: 'Authentication failed' });
   }
 });
@@ -282,7 +283,7 @@ router.post(
         },
       });
     } catch (error) {
-      console.error('Change password error:', error);
+      logger.error('Change password error:', error);
       return res.status(500).json({ error: 'Failed to update password' });
     }
   }
@@ -502,7 +503,7 @@ router.post('/refresh', refreshRateLimiter, async (req, res: Response) => {
 
     return res.status(200).json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch (error) {
-    console.error('Refresh error:', error);
+    logger.error('Refresh error:', error);
     return res.status(500).json({ error: 'Refresh failed' });
   }
 });

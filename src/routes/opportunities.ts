@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response , NextFunction} from 'express';
 import { authenticateToken, AuthenticatedRequest, requirePermission } from '../middleware/auth';
 import { Permissions } from '../shared';
@@ -20,7 +21,7 @@ router.post(
         opportunity,
       });
     } catch (error: any) {
-      console.error('Create opportunity error:', error);
+      logger.error('Create opportunity error:', error);
       next(error);
     }
   }
@@ -52,7 +53,7 @@ router.get(
       const result = await OpportunityService.getOpportunities(req.user!, filters);
       return res.status(200).json(result);
     } catch (error: any) {
-      console.error('Fetch opportunities error:', error);
+      logger.error('Fetch opportunities error:', error);
       next(error);
     }
   }
@@ -68,7 +69,7 @@ router.get(
       const metrics = await OpportunityService.getPipelineMetrics(req.user!);
       return res.status(200).json({ metrics });
     } catch (error: any) {
-      console.error('Fetch pipeline metrics error:', error);
+      logger.error('Fetch pipeline metrics error:', error);
       next(error);
     }
   }
@@ -89,7 +90,7 @@ router.get(
       const opportunity = await OpportunityService.getOpportunityById(req.user!, id);
       return res.status(200).json({ opportunity });
     } catch (error: any) {
-      console.error('Fetch opportunity dossier error:', error);
+      logger.error('Fetch opportunity dossier error:', error);
       next(error);
     }
   }
@@ -113,7 +114,7 @@ router.patch(
         opportunity,
       });
     } catch (error: any) {
-      console.error('Update opportunity error:', error);
+      logger.error('Update opportunity error:', error);
       next(error);
     }
   }
@@ -138,7 +139,7 @@ router.post(
         booking,
       });
     } catch (error: any) {
-      console.error('Convert opportunity to booking error:', error);
+      logger.error('Convert opportunity to booking error:', error);
       next(error);
     }
   }

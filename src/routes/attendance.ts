@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole, authenticateKioskToken, KioskAuthenticatedRequest } from '../middleware/auth';
@@ -45,7 +46,7 @@ router.get('/my-qr', authenticateToken, async (req: AuthenticatedRequest, res: R
       qrData: JSON.stringify({ employeeId, employeeCode, version, signedToken }),
     });
   } catch (error) {
-    console.error('QR fetch error:', error);
+    logger.error('QR fetch error:', error);
     return res.status(500).json({ error: 'Failed to generate QR token' });
   }
 });
@@ -81,7 +82,7 @@ router.get('/employee-qr/:id', authenticateToken, requireRole([Roles.MD, Roles.H
       qrData: JSON.stringify({ employeeId: employee.id, employeeCode: employee.employee_code, version, signedToken }),
     });
   } catch (error) {
-    console.error('Admin QR fetch error:', error);
+    logger.error('Admin QR fetch error:', error);
     return res.status(500).json({ error: 'Failed to generate QR token' });
   }
 });
@@ -255,7 +256,7 @@ router.post('/scan', authenticateKioskToken, async (req: KioskAuthenticatedReque
         timeIST: getISTComponents(new Date()).timeString,
       });
     }
-    console.error('Scan attendance error:', error);
+    logger.error('Scan attendance error:', error);
     return res.status(500).json({ error: 'Attendance scan verification failed' });
   }
 });
@@ -369,7 +370,7 @@ router.post('/checkout', authenticateKioskToken, async (req: KioskAuthenticatedR
       full_name: scannedEmployee.full_name,
     });
   } catch (error) {
-    console.error('Logout error:', error);
+    logger.error('Logout error:', error);
     return res.status(500).json({ error: 'Attendance logout failed' });
   }
 });
@@ -419,7 +420,7 @@ router.post(
         proposalId: proposal.id,
       });
     } catch (error: any) {
-      console.error('Late proposal error:', error);
+      logger.error('Late proposal error:', error);
       return res
         .status(500)
         .json({ error: 'Failed to submit late proposal', detail: error?.message });
@@ -476,7 +477,7 @@ router.post(
         proposalId: proposal.id,
       });
     } catch (error: any) {
-      console.error('Leave proposal error:', error);
+      logger.error('Leave proposal error:', error);
       return res
         .status(500)
         .json({ error: 'Failed to submit leave proposal', detail: error?.message });
@@ -518,7 +519,7 @@ router.post(
         proposalId: proposal.id,
       });
     } catch (error: any) {
-      console.error('Early logout proposal error:', error);
+      logger.error('Early logout proposal error:', error);
       return res
         .status(500)
         .json({ error: 'Failed to submit emergency logout request', detail: error?.message });
@@ -556,7 +557,7 @@ router.get(
 
       return res.status(200).json({ proposals: mappedProposals });
     } catch (error) {
-      console.error('Proposal queue error:', error);
+      logger.error('Proposal queue error:', error);
       return res.status(500).json({ error: 'Failed to load HR proposal queue' });
     }
   },
@@ -591,7 +592,7 @@ router.post(
 
       return res.status(200).json({ message: 'Proposal approved', proposal: updated });
     } catch (error) {
-      console.error('Proposal approve error:', error);
+      logger.error('Proposal approve error:', error);
       return res.status(500).json({ error: 'Failed to approve proposal' });
     }
   },
@@ -626,7 +627,7 @@ router.post(
 
       return res.status(200).json({ message: 'Proposal rejected', proposal: updated });
     } catch (error) {
-      console.error('Proposal reject error:', error);
+      logger.error('Proposal reject error:', error);
       return res.status(500).json({ error: 'Failed to reject proposal' });
     }
   },
@@ -646,7 +647,7 @@ router.get(
 
       return res.status(200).json({ proposals });
     } catch (error) {
-      console.error('My proposals error:', error);
+      logger.error('My proposals error:', error);
       return res.status(500).json({ error: 'Failed to load my proposals' });
     }
   }
@@ -683,7 +684,7 @@ router.get(
 
       return res.status(200).json({ logs: todayLogs });
     } catch (error) {
-      console.error('Live attendance error:', error);
+      logger.error('Live attendance error:', error);
       return res.status(500).json({ error: 'Failed to load live attendance' });
     }
   },
@@ -753,7 +754,7 @@ router.get(
         },
       });
     } catch (error) {
-      console.error('History attendance error:', error);
+      logger.error('History attendance error:', error);
       return res.status(500).json({ error: 'Failed to load attendance history' });
     }
   },
@@ -944,7 +945,7 @@ router.get('/calendar', authenticateToken, async (req: AuthenticatedRequest, res
 
     return res.status(200).json({ calendar: calendarMap, penaltyAbsents, employeeCreatedAt: employee.created_at });
   } catch (err) {
-    console.error('Failed to generate calendar:', err);
+    logger.error('Failed to generate calendar:', err);
     return res.status(500).json({ error: 'Failed to generate calendar' });
   }
 });

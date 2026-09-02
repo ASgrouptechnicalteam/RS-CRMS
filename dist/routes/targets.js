@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -135,7 +136,7 @@ router.get('/my-target', auth_1.authenticateToken, async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Fetch my-target error:', error);
+        logger_1.logger.error('Fetch my-target error:', error);
         return res.status(500).json({ error: 'Failed to resolve active target' });
     }
 });
@@ -208,7 +209,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         return res.status(201).json({ message: 'Daily target set successfully', target: newTarget });
     }
     catch (error) {
-        console.error('Set target error:', error);
+        logger_1.logger.error('Set target error:', error);
         return res.status(500).json({ error: 'Failed to set target' });
     }
 });

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PortalWorker = void 0;
+const logger_1 = require("../utils/logger");
 const prisma_1 = require("../lib/prisma");
 const portalClient_1 = require("./portalClient");
 const kyc_service_1 = require("./kyc.service");
@@ -26,7 +27,7 @@ class PortalWorker {
             return;
         }
         this.running = true;
-        console.log('[portal-worker]: started (poll interval: ' + POLL_INTERVAL_MS + 'ms)');
+        logger_1.logger.info('[portal-worker]: started (poll interval: ' + POLL_INTERVAL_MS + 'ms)');
         this.loop();
     }
     static stop() {
@@ -35,7 +36,7 @@ class PortalWorker {
             clearTimeout(this.timer);
             this.timer = null;
         }
-        console.log('[portal-worker]: stopped');
+        logger_1.logger.info('[portal-worker]: stopped');
     }
     static async loop() {
         while (this.running) {
@@ -44,7 +45,7 @@ class PortalWorker {
             }
             catch (err) {
                 // Never crash the loop; log and continue
-                console.error('[portal-worker]: unexpected error:', err?.message || err);
+                logger_1.logger.error('[portal-worker]: unexpected error:', err?.message || err);
             }
             await this.delay(POLL_INTERVAL_MS);
         }

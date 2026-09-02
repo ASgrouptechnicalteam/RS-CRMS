@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 /**
  * Phase 17-B/17-D — AI Search + AI Chat API routes.
  *
@@ -81,7 +82,7 @@ function mapAIError(err: any, res: Response): void {
   if (err && (err as { statusCode?: number }).statusCode) {
     const status = (err as { statusCode: number }).statusCode;
     if (status >= 500) {
-      console.error('[ai-search]', err);
+      logger.error('[ai-search]', err);
       res.status(status).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
       return;
     }
@@ -89,7 +90,7 @@ function mapAIError(err: any, res: Response): void {
     return;
   }
 
-  console.error('[ai-search]', err);
+  logger.error('[ai-search]', err);
   res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
 }
 

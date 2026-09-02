@@ -1,3 +1,4 @@
+import { logger } from './logger';
 /**
  * notifyEmployee.ts
  * 
@@ -29,7 +30,7 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
       throw err; // Fail strictly in production
     }
     // In test environment, ignore invalid VAPID keys gracefully
-    console.warn('[WebPush] Invalid VAPID credentials skipped in test environment.');
+    logger.warn('[WebPush] Invalid VAPID credentials skipped in test environment.');
   }
 }
 
@@ -62,7 +63,7 @@ export async function notifyEmployee(
         },
       });
     } catch (err) {
-      console.error(`[NotifyEmployee] Failed to create in-app notification for employee ${employeeId}:`, err);
+      logger.error(`[NotifyEmployee] Failed to create in-app notification for employee ${employeeId}:`, err);
     }
 
     // 2. Send Web Push to all subscribed devices
@@ -91,13 +92,13 @@ export async function notifyEmployee(
             if (pushErr.statusCode === 410) {
               await p.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
             } else {
-              console.error(`[WebPush] Failed for subscription ${sub.id}:`, pushErr.message);
+              logger.error(`[WebPush] Failed for subscription ${sub.id}:`, pushErr.message);
             }
           }
         }
       }
     } catch (err) {
-      console.error(`[NotifyEmployee] Push subscription fetch failed for employee ${employeeId}:`, err);
+      logger.error(`[NotifyEmployee] Push subscription fetch failed for employee ${employeeId}:`, err);
     }
   }
 }

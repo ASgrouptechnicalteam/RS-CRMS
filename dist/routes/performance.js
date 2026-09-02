@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -61,7 +62,7 @@ router.get('/my-score', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ employeeId, score: totalScore, breakdown });
     }
     catch (error) {
-        console.error('Performance score calculation error:', error);
+        logger_1.logger.error('Performance score calculation error:', error);
         return res.status(500).json({ error: 'Failed to calculate performance score' });
     }
 });
@@ -117,7 +118,7 @@ router.get('/history', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ events });
     }
     catch (error) {
-        console.error('Fetch performance history error:', error);
+        logger_1.logger.error('Fetch performance history error:', error);
         return res.status(500).json({ error: 'Failed to fetch performance history' });
     }
 });
@@ -184,7 +185,7 @@ router.get('/team', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ team: teamScores, total: teamScores.length });
     }
     catch (error) {
-        console.error('Team performance error:', error);
+        logger_1.logger.error('Team performance error:', error);
         return res.status(500).json({ error: 'Failed to fetch team performance' });
     }
 });

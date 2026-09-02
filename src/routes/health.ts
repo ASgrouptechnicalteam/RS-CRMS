@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 
@@ -10,7 +11,7 @@ router.get('/', async (req: Request, res: Response) => {
     await prisma.$queryRaw`SELECT 1`;
     res.status(200).json({ status: 'OK', database: 'connected', timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error('Database connection failed:', error);
+    logger.error('Database connection failed:', error);
     res.status(503).json({ status: 'ERROR', database: 'disconnected', timestamp: new Date().toISOString() });
   }
 });

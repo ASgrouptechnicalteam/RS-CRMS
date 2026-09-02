@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -21,7 +22,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Respon
 
     return res.status(200).json({ notifications, unreadCount });
   } catch (error) {
-    console.error('Failed to fetch notifications:', error);
+    logger.error('Failed to fetch notifications:', error);
     return res.status(500).json({ error: 'Failed to fetch notifications' });
   }
 });

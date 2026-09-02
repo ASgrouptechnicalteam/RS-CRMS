@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const prisma_1 = require("../lib/prisma");
 const express_1 = require("express");
 const shared_1 = require("../shared");
@@ -138,7 +139,7 @@ const authenticatePublicKey = async (req, res, next) => {
         next();
     }
     catch (err) {
-        console.error('API Key Auth error:', err);
+        logger_1.logger.error('API Key Auth error:', err);
         res.status(500).json({ error: 'Internal server error during authentication' });
     }
 };
@@ -374,7 +375,7 @@ router.get('/:brand/properties', async (req, res) => {
         res.status(200).json(properties);
     }
     catch (error) {
-        console.error('Fetch public properties error:', error);
+        logger_1.logger.error('Fetch public properties error:', error);
         res.status(500).json({ error: 'Failed to fetch properties' });
     }
 });
@@ -422,7 +423,7 @@ router.get('/:brand/properties/:id', async (req, res) => {
         res.status(200).json(property);
     }
     catch (error) {
-        console.error('Fetch public property detail error:', error);
+        logger_1.logger.error('Fetch public property detail error:', error);
         res.status(500).json({ error: 'Failed to fetch property detail' });
     }
 });
@@ -510,7 +511,7 @@ router.get('/:brand/projects', async (req, res) => {
         res.status(200).json(projectsWithInventory);
     }
     catch (error) {
-        console.error('Fetch public projects error:', error);
+        logger_1.logger.error('Fetch public projects error:', error);
         res.status(500).json({ error: 'Failed to fetch projects' });
     }
 });
@@ -563,7 +564,7 @@ router.get('/:brand/projects/:id', async (req, res) => {
         res.status(200).json({ ...project, inventory_summary });
     }
     catch (error) {
-        console.error('Fetch public project detail error:', error);
+        logger_1.logger.error('Fetch public project detail error:', error);
         res.status(500).json({ error: 'Failed to fetch project detail' });
     }
 });
@@ -603,7 +604,7 @@ router.post('/:brand/leads', rateLimiter_1.publicWriteLimiter, (0, validate_1.va
         res.status(201).json({ message: 'Lead captured successfully', leadId: newLead.id });
     }
     catch (error) {
-        console.error('Public lead creation error:', error);
+        logger_1.logger.error('Public lead creation error:', error);
         res.status(500).json({ error: 'Failed to create lead' });
     }
 });

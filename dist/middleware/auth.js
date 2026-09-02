@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.authenticateKioskToken = exports.requirePermission = exports.requireRole = exports.authenticateToken = exports.authenticateServiceToken = void 0;
+const logger_1 = require("../utils/logger");
 const crypto_1 = __importDefault(require("crypto"));
 const jwt_1 = require("../utils/jwt");
 const prisma_1 = require("../lib/prisma");
@@ -57,7 +58,7 @@ const authenticateToken = async (req, res, next) => {
     try {
         const payload = (0, jwt_1.verifyAccessToken)(token);
         if (payload.tokenVersion === undefined) {
-            console.error('AUTH_FAIL: Token version missing (legacy token)');
+            logger_1.logger.error('AUTH_FAIL: Token version missing (legacy token)');
             return res.status(401).json({
                 error: 'Token version missing (legacy token)',
                 code: 'TOKEN_EXPIRED',
@@ -68,22 +69,22 @@ const authenticateToken = async (req, res, next) => {
             select: { status: true, token_version: true },
         });
         if (!employee) {
-            console.error('AUTH_FAIL: User not found in DB');
+            logger_1.logger.error('AUTH_FAIL: User not found in DB');
             return res.status(401).json({ error: 'User not found', code: 'UNAUTHORIZED' });
         }
         if (employee.status !== 'ACTIVE') {
-            console.error('AUTH_FAIL: User status is not ACTIVE');
+            logger_1.logger.error('AUTH_FAIL: User status is not ACTIVE');
             return res.status(401).json({ error: 'User is inactive or suspended', code: 'UNAUTHORIZED' });
         }
         if (payload.tokenVersion !== employee.token_version) {
-            console.error('AUTH_FAIL: Token version stale');
+            logger_1.logger.error('AUTH_FAIL: Token version stale');
             return res.status(401).json({ error: 'Token version stale', code: 'TOKEN_EXPIRED' });
         }
         req.user = payload;
         next();
     }
     catch (err) {
-        console.error('JWT VERIFICATION ERROR:', err.name, err.message, err);
+        logger_1.logger.error('JWT VERIFICATION ERROR:', err.name, err.message, err);
         // If token expired, return clear code so frontend automatically throws user to login page
         return res.status(401).json({
             error: 'Token expired or invalid',
@@ -175,7 +176,7 @@ const authenticateKioskToken = async (req, res, next) => {
         next();
     }
     catch (err) {
-        console.error('KIOSK JWT VERIFICATION ERROR:', err);
+        logger_1.logger.error('KIOSK JWT VERIFICATION ERROR:', err);
         return res.status(401).json({
             error: 'Kiosk token expired or invalid',
             code: 'TOKEN_EXPIRED',

@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import rateLimit from 'express-rate-limit';
 import { prisma } from '../lib/prisma';
 
@@ -63,7 +64,7 @@ export const loginRateLimiter = rateLimit({
         }
       });
     } catch (err) {
-      console.error('Failed to log rate limit audit event', err);
+      logger.error('Failed to log rate limit audit event', err);
     }
     
     res.status(options.statusCode).json(options.message);

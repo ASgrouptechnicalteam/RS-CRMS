@@ -1,4 +1,10 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.notifyEmployee = void 0;
+const logger_1 = require("./logger");
 /**
  * notifyEmployee.ts
  *
@@ -9,11 +15,6 @@
  *  1. Saves an in-app Notification record to the DB
  *  2. Sends a Web Push notification to all subscribed devices
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.notifyEmployee = void 0;
 const prisma_1 = require("../lib/prisma");
 const web_push_1 = __importDefault(require("web-push"));
 const p = prisma_1.prisma;
@@ -31,7 +32,7 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
             throw err; // Fail strictly in production
         }
         // In test environment, ignore invalid VAPID keys gracefully
-        console.warn('[WebPush] Invalid VAPID credentials skipped in test environment.');
+        logger_1.logger.warn('[WebPush] Invalid VAPID credentials skipped in test environment.');
     }
 }
 /**
@@ -53,7 +54,7 @@ async function notifyEmployee(employeeIds, payload) {
             });
         }
         catch (err) {
-            console.error(`[NotifyEmployee] Failed to create in-app notification for employee ${employeeId}:`, err);
+            logger_1.logger.error(`[NotifyEmployee] Failed to create in-app notification for employee ${employeeId}:`, err);
         }
         // 2. Send Web Push to all subscribed devices
         try {
@@ -78,14 +79,14 @@ async function notifyEmployee(employeeIds, payload) {
                             await p.pushSubscription.delete({ where: { id: sub.id } }).catch(() => { });
                         }
                         else {
-                            console.error(`[WebPush] Failed for subscription ${sub.id}:`, pushErr.message);
+                            logger_1.logger.error(`[WebPush] Failed for subscription ${sub.id}:`, pushErr.message);
                         }
                     }
                 }
             }
         }
         catch (err) {
-            console.error(`[NotifyEmployee] Push subscription fetch failed for employee ${employeeId}:`, err);
+            logger_1.logger.error(`[NotifyEmployee] Push subscription fetch failed for employee ${employeeId}:`, err);
         }
     }
 }

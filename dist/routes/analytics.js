@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const authz_1 = require("../middleware/authz");
@@ -40,7 +41,7 @@ router.get('/kpis', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1
         return res.status(200).json(kpis);
     }
     catch (error) {
-        console.error('Fetch analytics KPIs error:', error);
+        logger_1.logger.error('Fetch analytics KPIs error:', error);
         return res.status(500).json({ error: 'Failed to fetch analytics KPIs' });
     }
 });
@@ -53,7 +54,7 @@ router.get('/sales-manager', auth_1.authenticateToken, (0, authz_1.requireAuthz)
         return res.status(200).json(dashboardData);
     }
     catch (error) {
-        console.error('Fetch sales manager dashboard error:', error);
+        logger_1.logger.error('Fetch sales manager dashboard error:', error);
         return res.status(500).json({ error: 'Failed to fetch sales manager dashboard' });
     }
 });

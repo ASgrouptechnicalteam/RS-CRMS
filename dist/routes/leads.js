@@ -23,6 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const authz_1 = require("../middleware/authz");
@@ -36,13 +37,13 @@ const handleServiceError = (error, res) => {
     if (error instanceof lead_service_1.AppError || error.name === 'AppError' || error.statusCode) {
         return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
     }
-    console.error('Unhandled route error:', error);
+    logger_1.logger.error('Unhandled route error:', error);
     return res.status(500).json({ error: 'Internal Server Error' });
 };
 // GET /api/v1/leads - Fetch leads list (Role-aware)
 router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.LEADS_READ), async (req, res) => {
     try {
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
         const offset = Math.max(parseInt(req.query.offset) || 0, 0);
         const leads = await lead_service_1.LeadService.getLeads(req.user, limit, offset);
         return res.status(200).json({ leads, pagination: { limit, offset } });

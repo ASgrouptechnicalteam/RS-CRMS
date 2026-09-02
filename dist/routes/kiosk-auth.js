@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.KioskCredentialUpdateSchema = exports.KioskCredentialCreateSchema = exports.KioskLoginSchema = void 0;
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const jwt_1 = require("../utils/jwt");
@@ -85,7 +86,7 @@ router.post('/login', (0, validate_1.validateRequestBody)(exports.KioskLoginSche
         });
     }
     catch (error) {
-        console.error('Kiosk login error:', error);
+        logger_1.logger.error('Kiosk login error:', error);
         return res.status(500).json({ error: 'Kiosk authentication failed' });
     }
 });
@@ -145,7 +146,7 @@ router.post('/', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Rol
         });
     }
     catch (error) {
-        console.error('Kiosk credential create error:', error);
+        logger_1.logger.error('Kiosk credential create error:', error);
         if (error.code === 'P2002') {
             return res.status(409).json({ error: 'Username already exists in this company' });
         }
@@ -242,7 +243,7 @@ router.patch('/:id', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1
         });
     }
     catch (error) {
-        console.error('Kiosk credential update error:', error);
+        logger_1.logger.error('Kiosk credential update error:', error);
         return res.status(500).json({ error: 'Failed to update kiosk credential' });
     }
 });
@@ -278,7 +279,7 @@ router.get('/', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Role
         });
     }
     catch (error) {
-        console.error('Kiosk credentials list error:', error);
+        logger_1.logger.error('Kiosk credentials list error:', error);
         return res.status(500).json({ error: 'Failed to list kiosk credentials' });
     }
 });

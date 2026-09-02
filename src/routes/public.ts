@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { Router, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
@@ -147,7 +148,7 @@ const authenticatePublicKey = async (req: any, res: Response, next: any) => {
     req.apiKeyContext = validKey;
     next();
   } catch (err) {
-    console.error('API Key Auth error:', err);
+    logger.error('API Key Auth error:', err);
     res.status(500).json({ error: 'Internal server error during authentication' });
   }
 };
@@ -397,7 +398,7 @@ router.get('/:brand/properties', async (req: any, res: Response) => {
 
     res.status(200).json(properties);
   } catch (error) {
-    console.error('Fetch public properties error:', error);
+    logger.error('Fetch public properties error:', error);
     res.status(500).json({ error: 'Failed to fetch properties' });
   }
 });
@@ -453,7 +454,7 @@ router.get('/:brand/properties/:id', async (req: any, res: Response) => {
 
     res.status(200).json(property);
   } catch (error) {
-    console.error('Fetch public property detail error:', error);
+    logger.error('Fetch public property detail error:', error);
     res.status(500).json({ error: 'Failed to fetch property detail' });
   }
 });
@@ -552,7 +553,7 @@ router.get('/:brand/projects', async (req: any, res: Response) => {
 
     res.status(200).json(projectsWithInventory);
   } catch (error) {
-    console.error('Fetch public projects error:', error);
+    logger.error('Fetch public projects error:', error);
     res.status(500).json({ error: 'Failed to fetch projects' });
   }
 });
@@ -615,7 +616,7 @@ router.get('/:brand/projects/:id', async (req: any, res: Response) => {
 
     res.status(200).json({ ...project, inventory_summary });
   } catch (error) {
-    console.error('Fetch public project detail error:', error);
+    logger.error('Fetch public project detail error:', error);
     res.status(500).json({ error: 'Failed to fetch project detail' });
   }
 });
@@ -660,7 +661,7 @@ router.post('/:brand/leads', publicWriteLimiter, validateRequestBody(PublicLeadC
 
     res.status(201).json({ message: 'Lead captured successfully', leadId: newLead.id });
   } catch (error) {
-    console.error('Public lead creation error:', error);
+    logger.error('Public lead creation error:', error);
     res.status(500).json({ error: 'Failed to create lead' });
   }
 });

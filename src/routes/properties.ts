@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { Router, Response , NextFunction} from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -53,7 +54,7 @@ router.get(
     const properties = await PropertyService.listProperties(req.user!, filters, limit, offset);
     return res.status(200).json({ properties, pagination: { limit, offset } });
   } catch (error: any) {
-    console.error('Fetch properties error:', error);
+    logger.error('Fetch properties error:', error);
     if (error.status) {
       return next(error);
     }
@@ -75,7 +76,7 @@ router.post(
       property,
     });
   } catch (error: any) {
-    console.error('Create property error:', error);
+    logger.error('Create property error:', error);
     if (error.status) {
       return next(error);
     }
@@ -102,7 +103,7 @@ router.put(
         property,
       });
     } catch (error: any) {
-      console.error('Update property error:', error);
+      logger.error('Update property error:', error);
       if (error.status) {
         return next(error);
       }
@@ -127,7 +128,7 @@ router.post(
         property: result,
       });
     } catch (error: any) {
-      console.error('Confirm location error:', error);
+      logger.error('Confirm location error:', error);
       if (error.status) return next(error);
       return res.status(500).json({ error: 'Failed to confirm location' });
     }
@@ -154,7 +155,7 @@ router.post(
         property: updated,
       });
     } catch (error: any) {
-      console.error('PM Verify error:', error);
+      logger.error('PM Verify error:', error);
       if (error.status) {
         return next(error);
       }
@@ -183,7 +184,7 @@ router.post(
         property: updated,
       });
     } catch (error: any) {
-      console.error('DM Polish error:', error);
+      logger.error('DM Polish error:', error);
       if (error.status) {
         return next(error);
       }
@@ -211,7 +212,7 @@ router.post(
         property: updated,
       });
     } catch (error: any) {
-      console.error('DM Verify As-Is error:', error);
+      logger.error('DM Verify As-Is error:', error);
       if (error.status) {
         return next(error);
       }
@@ -240,7 +241,7 @@ router.post(
         property: updated,
       });
     } catch (error: any) {
-      console.error('MD Approve error:', error);
+      logger.error('MD Approve error:', error);
       if (error.status) {
         return next(error);
       }
@@ -279,7 +280,7 @@ router.post(
         publication,
       });
     } catch (error: any) {
-      console.error('Toggle publication error:', error);
+      logger.error('Toggle publication error:', error);
       if (error.status) {
         return next(error);
       }
@@ -303,7 +304,7 @@ router.get(
       const publications = await PropertyService.getPublications(req.user!, propertyId);
       return res.status(200).json({ publications });
     } catch (error: any) {
-      console.error('Get publications error:', error);
+      logger.error('Get publications error:', error);
       if (error.status) {
         return next(error);
       }
@@ -367,7 +368,7 @@ router.post(
 
       return res.status(201).json({ message: 'Image uploaded successfully', image });
     } catch (error: any) {
-      console.error('Upload property image error:', error);
+      logger.error('Upload property image error:', error);
       if (error.status) {
         return next(error);
       }
@@ -436,7 +437,7 @@ router.put(
 
       return res.status(200).json({ message: 'Image updated successfully', image: updated });
     } catch (error: any) {
-      console.error('Update property image error:', error);
+      logger.error('Update property image error:', error);
       if (error.status) {
         return next(error);
       }
@@ -506,7 +507,7 @@ router.delete(
 
       return res.status(200).json({ message: 'Image deleted successfully' });
     } catch (error: any) {
-      console.error('Delete property image error:', error);
+      logger.error('Delete property image error:', error);
       if (error.status) {
         return next(error);
       }
@@ -552,7 +553,7 @@ router.post(
 
       return res.status(200).json({ message: 'Image approved', image: updated });
     } catch (error: any) {
-      console.error('Approve image error:', error);
+      logger.error('Approve image error:', error);
       if (error.status) {
         return next(error);
       }
@@ -598,7 +599,7 @@ router.post(
 
       return res.status(200).json({ message: 'Image rejected', image: updated });
     } catch (error: any) {
-      console.error('Reject image error:', error);
+      logger.error('Reject image error:', error);
       if (error.status) {
         return next(error);
       }

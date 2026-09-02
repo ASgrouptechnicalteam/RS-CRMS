@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -48,7 +49,7 @@ router.get('/employees', auth_1.authenticateToken, (0, authz_1.requireAuthz)(sha
         return res.status(200).json({ employees: formatted });
     }
     catch (error) {
-        console.error('MD employees fetch error:', error);
+        logger_1.logger.error('MD employees fetch error:', error);
         return res.status(500).json({ error: 'Failed to fetch employee list' });
     }
 });
@@ -108,7 +109,7 @@ router.get('/executive-metrics', auth_1.authenticateToken, (0, authz_1.requireAu
         return res.status(200).json(metrics);
     }
     catch (error) {
-        console.error('Fetch executive metrics error:', error);
+        logger_1.logger.error('Fetch executive metrics error:', error);
         return res.status(500).json({ error: 'Failed to fetch executive metrics' });
     }
 });

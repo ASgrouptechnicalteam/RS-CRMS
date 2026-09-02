@@ -1,4 +1,7 @@
 "use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createAISearchRouter = void 0;
+const logger_1 = require("../utils/logger");
 /**
  * Phase 17-B/17-D — AI Search + AI Chat API routes.
  *
@@ -15,8 +18,6 @@
  * control tenant identity, provider, model, credentials, permissions, or tools.
  * Chat history is ephemeral (client-managed); nothing is persisted server-side.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createAISearchRouter = void 0;
 const express_1 = require("express");
 const shared_1 = require("../shared");
 const auth_1 = require("../middleware/auth");
@@ -70,14 +71,14 @@ function mapAIError(err, res) {
     if (err && err.statusCode) {
         const status = err.statusCode;
         if (status >= 500) {
-            console.error('[ai-search]', err);
+            logger_1.logger.error('[ai-search]', err);
             res.status(status).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
             return;
         }
         res.status(status).json({ error: 'Invalid request', code: 'INVALID_REQUEST' });
         return;
     }
-    console.error('[ai-search]', err);
+    logger_1.logger.error('[ai-search]', err);
     res.status(500).json({ error: 'Internal Server Error', code: 'INTERNAL_ERROR' });
 }
 function defaultService() {

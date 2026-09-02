@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -32,7 +33,7 @@ router.get('/system-metrics', auth_1.authenticateToken, (0, auth_1.requireRole)(
         });
     }
     catch (error) {
-        console.error('[Admin] System metrics fetch failed:', error);
+        logger_1.logger.error('[Admin] System metrics fetch failed:', error);
         return res.status(500).json({ error: 'Failed to retrieve system telemetry' });
     }
 });
@@ -62,7 +63,7 @@ router.get('/audit-logs', auth_1.authenticateToken, (0, auth_1.requireRole)([sha
         return res.status(200).json({ logs: hydratedEvents });
     }
     catch (error) {
-        console.error('[Admin] Audit logs fetch failed:', error);
+        logger_1.logger.error('[Admin] Audit logs fetch failed:', error);
         return res.status(500).json({ error: 'Failed to retrieve forensic audit trail' });
     }
 });
@@ -91,7 +92,7 @@ router.get('/security-alerts', auth_1.authenticateToken, (0, auth_1.requireRole)
         return res.status(200).json({ alerts });
     }
     catch (error) {
-        console.error('[Admin] Security alerts fetch failed:', error);
+        logger_1.logger.error('[Admin] Security alerts fetch failed:', error);
         return res.status(500).json({ error: 'Failed to retrieve security alerts' });
     }
 });
@@ -118,7 +119,7 @@ router.post('/emergency/lockdown', auth_1.authenticateToken, (0, auth_1.requireR
         });
     }
     catch (error) {
-        console.error('[Admin] Emergency lockdown failed:', error);
+        logger_1.logger.error('[Admin] Emergency lockdown failed:', error);
         return res.status(500).json({ error: 'Failed to execute system lockdown command' });
     }
 });

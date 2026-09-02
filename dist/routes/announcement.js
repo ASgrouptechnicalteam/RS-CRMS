@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -26,7 +27,7 @@ router.get('/', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Error fetching announcement:', error);
+        logger_1.logger.error('Error fetching announcement:', error);
         return res.status(500).json({ error: 'Failed to fetch announcement' });
     }
 });
@@ -53,7 +54,7 @@ router.post('/', auth_1.authenticateToken, async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Error updating announcement:', error);
+        logger_1.logger.error('Error updating announcement:', error);
         return res.status(500).json({ error: 'Failed to update announcement' });
     }
 });

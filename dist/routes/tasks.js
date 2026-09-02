@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -56,7 +57,7 @@ router.get('/all-team-tasks', auth_1.authenticateToken, (0, authz_1.requireAuthz
         return res.status(200).json({ tasks: allTasks });
     }
     catch (error) {
-        console.error('Fetch all team tasks error:', error);
+        logger_1.logger.error('Fetch all team tasks error:', error);
         return res.status(500).json({ error: 'Failed to fetch team tasks' });
     }
 });
@@ -81,7 +82,7 @@ router.get('/my-tasks', auth_1.authenticateToken, async (req, res, next) => {
         return res.status(200).json({ tasks });
     }
     catch (error) {
-        console.error('Fetch tasks error:', error);
+        logger_1.logger.error('Fetch tasks error:', error);
         return res.status(500).json({ error: 'Failed to fetch tasks' });
     }
 });
@@ -137,7 +138,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         return res.status(201).json({ message: 'Task created successfully', task });
     }
     catch (error) {
-        console.error('Create task error:', error);
+        logger_1.logger.error('Create task error:', error);
         return res.status(500).json({ error: 'Failed to create task' });
     }
 });
@@ -176,7 +177,7 @@ router.get('/:id/sla', auth_1.authenticateToken, async (req, res, next) => {
         });
     }
     catch (error) {
-        console.error('Read task SLA error:', error);
+        logger_1.logger.error('Read task SLA error:', error);
         return res.status(500).json({ error: 'Failed to read task SLA status' });
     }
 });

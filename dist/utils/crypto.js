@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.decryptData = exports.encryptData = void 0;
+const logger_1 = require("./logger");
 const crypto_1 = __importDefault(require("crypto"));
 // Production REQUIRES a real ENCRYPTION_KEY (>= 32 chars) — the dev fallback is
 // only for development/test and is never used in production (Phase 11 Packet 3C).
@@ -35,7 +36,7 @@ function decryptData(text) {
         return decrypted.toString();
     }
     catch (error) {
-        console.error('Decryption failed, returning null or masked data', error);
+        logger_1.logger.error('Decryption failed, returning null or masked data', error);
         return null; // Return null if decryption fails so we don't break the app
     }
 }

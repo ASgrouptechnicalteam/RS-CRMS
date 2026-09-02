@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response, Request } from 'express';
 import { prisma } from '../lib/prisma';
 import { generateAccessToken, TokenPayload } from '../utils/jwt';
@@ -93,7 +94,7 @@ router.post('/login', validateRequestBody(KioskLoginSchema), async (req: Request
       label: matchedCred.label,
     });
   } catch (error: any) {
-    console.error('Kiosk login error:', error);
+    logger.error('Kiosk login error:', error);
     return res.status(500).json({ error: 'Kiosk authentication failed' });
   }
 });
@@ -166,7 +167,7 @@ router.post(
         },
       });
     } catch (error: any) {
-      console.error('Kiosk credential create error:', error);
+      logger.error('Kiosk credential create error:', error);
       if (error.code === 'P2002') {
         return res.status(409).json({ error: 'Username already exists in this company' });
       }
@@ -284,7 +285,7 @@ router.patch(
         },
       });
     } catch (error: any) {
-      console.error('Kiosk credential update error:', error);
+      logger.error('Kiosk credential update error:', error);
       return res.status(500).json({ error: 'Failed to update kiosk credential' });
     }
   },
@@ -329,7 +330,7 @@ router.get(
         })),
       });
     } catch (error: any) {
-      console.error('Kiosk credentials list error:', error);
+      logger.error('Kiosk credentials list error:', error);
       return res.status(500).json({ error: 'Failed to list kiosk credentials' });
     }
   },

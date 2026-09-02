@@ -1,3 +1,4 @@
+import { logger } from './logger';
 import crypto from 'crypto';
 
 // Production REQUIRES a real ENCRYPTION_KEY (>= 32 chars) — the dev fallback is
@@ -37,7 +38,7 @@ export function decryptData(text: string | null | undefined): string | null {
     
     return decrypted.toString();
   } catch (error) {
-    console.error('Decryption failed, returning null or masked data', error);
+    logger.error('Decryption failed, returning null or masked data', error);
     return null; // Return null if decryption fails so we don't break the app
   }
 }

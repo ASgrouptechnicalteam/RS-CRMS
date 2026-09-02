@@ -5,8 +5,7 @@ import { buildProjectScope } from '../authz/dataScope';
 import { ProjectCreateInput, ProjectUpdateInput, Roles, Permissions } from '../shared';
 import { can } from '../authz/authorization';
 import { slugify, generateUniqueSlug } from '../utils/slugify';
-
-
+import { fetchWithCache } from '../utils/cache';
 const p = prisma;
 
 export class ProjectService {
@@ -24,14 +23,17 @@ export class ProjectService {
       whereCondition.status = filters.status;
     }
 
-    return await p.project.findMany({
-      where: whereCondition,
-      take,
-      skip,
-      include: {
-        assigned_pm: { select: { id: true, employee_code: true, full_name: true, phone: true } },
-      },
-      orderBy: { created_at: 'desc' },
+    const cacheKey = `projects_${user.employeeId}_${JSON.stringify(filters)}_${take}_${skip}`;
+    return await fetchWithCache(cacheKey, async () => {
+      return await p.project.findMany({
+        where: whereCondition,
+        take,
+        skip,
+        include: {
+          assigned_pm: { select: { id: true, employee_code: true, full_name: true, phone: true } },
+        },
+        orderBy: { created_at: 'desc' },
+      });
     });
   }
 

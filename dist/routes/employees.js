@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
@@ -98,7 +99,7 @@ router.patch('/me', auth_1.authenticateToken, async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Self update error:', error);
+        logger_1.logger.error('Self update error:', error);
         return res.status(500).json({ error: 'Failed to update profile' });
     }
 });
@@ -106,7 +107,7 @@ router.patch('/me', auth_1.authenticateToken, async (req, res) => {
 router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
     profileUpload.single('profile_image')(req, res, async (err) => {
         if (err) {
-            console.error('Multer error:', err);
+            logger_1.logger.error('Multer error:', err);
             return res.status(400).json({ error: err.message || 'File upload failed' });
         }
         try {
@@ -123,7 +124,7 @@ router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
                 data: { profile_image_url: newImageUrl },
             });
             if (emp?.profile_image_url) {
-                await storageService.delete(emp.profile_image_url).catch(e => console.warn('Could not delete old profile photo:', e));
+                await storageService.delete(emp.profile_image_url).catch(e => logger_1.logger.warn('Could not delete old profile photo:', e));
             }
             return res.status(200).json({
                 message: 'Profile photo updated successfully',
@@ -131,7 +132,7 @@ router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
             });
         }
         catch (error) {
-            console.error('Profile photo upload error:', error);
+            logger_1.logger.error('Profile photo upload error:', error);
             return res.status(500).json({ error: 'Failed to upload profile photo' });
         }
     });
@@ -139,8 +140,12 @@ router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
 // GET /api/v1/employees - List all active/inactive employees (Admin invisible filtered)
 router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.EMPLOYEES_READ), async (req, res) => {
     try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
+        const offset = Math.max(parseInt(req.query.offset) || 0, 0);
         const whereClause = await (0, dataScope_1.buildEmployeeScope)(req.user);
         const employees = await prisma_1.prisma.employee.findMany({
+            take: limit,
+            skip: offset,
             where: whereClause,
             include: {
                 branch: true,
@@ -197,10 +202,10 @@ router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Per
                 delete emp.salaryCtc;
             });
         }
-        return res.status(200).json({ employees: formatted });
+        return res.status(200).json({ employees: formatted, pagination: { limit, offset } });
     }
     catch (error) {
-        console.error('Fetch employees error:', error);
+        logger_1.logger.error('Fetch employees error:', error);
         return res.status(500).json({ error: 'Failed to fetch employees list' });
     }
 });
@@ -371,7 +376,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         });
     }
     catch (error) {
-        console.error('Create employee error:', error);
+        logger_1.logger.error('Create employee error:', error);
         return res.status(500).json({ error: 'Failed to create employee' });
     }
 });
@@ -703,7 +708,7 @@ router.put('/:id/roles', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ message: 'Roles updated successfully' });
     }
     catch (error) {
-        console.error('Update roles error:', error);
+        logger_1.logger.error('Update roles error:', error);
         return res.status(500).json({ error: 'Failed to update roles' });
     }
 });

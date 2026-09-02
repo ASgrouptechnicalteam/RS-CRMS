@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -28,7 +29,7 @@ router.get('/', async (req, res: Response) => {
       active: company.announcement_active
     });
   } catch (error) {
-    console.error('Error fetching announcement:', error);
+    logger.error('Error fetching announcement:', error);
     return res.status(500).json({ error: 'Failed to fetch announcement' });
   }
 });
@@ -58,7 +59,7 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res: Respo
       active: updatedCompany.announcement_active,
     });
   } catch (error) {
-    console.error('Error updating announcement:', error);
+    logger.error('Error updating announcement:', error);
     return res.status(500).json({ error: 'Failed to update announcement' });
   }
 });

@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const authz_1 = require("../middleware/authz");
@@ -13,7 +14,7 @@ const handleServiceError = (error, res) => {
     if (error instanceof customer_service_1.AppError) {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
-    console.error('Unhandled route error:', error);
+    logger_1.logger.error('Unhandled route error:', error);
     return res.status(500).json({ error: 'Internal Server Error' });
 };
 // GET /api/v1/customers - Fetch customers list

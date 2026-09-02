@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { PrismaClient, Payment } from '@prisma/client';
 import { TokenPayload } from '../utils/jwt';
@@ -282,7 +283,7 @@ export class PaymentService {
     if (status === 'SUCCESS') {
       // §7: receipt generation has moved to the customer portal (the document
       // module was removed from CRM). No-op here — the portal owns agreement/receipt docs.
-      console.info('Payment ' + id + ' succeeded; receipt generation is portal-owned (§7).');
+      logger.info('Payment ' + id + ' succeeded; receipt generation is portal-owned (§7).');
     }
 
     return result;

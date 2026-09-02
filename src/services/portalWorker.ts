@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { PortalClient } from './portalClient';
 import { KYC_EVENT_TYPE } from './kyc.service';
@@ -30,7 +31,7 @@ export class PortalWorker {
       return;
     }
     this.running = true;
-    console.log('[portal-worker]: started (poll interval: ' + POLL_INTERVAL_MS + 'ms)');
+    logger.info('[portal-worker]: started (poll interval: ' + POLL_INTERVAL_MS + 'ms)');
     this.loop();
   }
 
@@ -40,7 +41,7 @@ export class PortalWorker {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    console.log('[portal-worker]: stopped');
+    logger.info('[portal-worker]: stopped');
   }
 
   private static async loop() {
@@ -49,7 +50,7 @@ export class PortalWorker {
         await this.processNextEvent();
       } catch (err: any) {
         // Never crash the loop; log and continue
-        console.error('[portal-worker]: unexpected error:', err?.message || err);
+        logger.error('[portal-worker]: unexpected error:', err?.message || err);
       }
       await this.delay(POLL_INTERVAL_MS);
     }

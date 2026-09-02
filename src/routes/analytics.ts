@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
@@ -39,7 +40,7 @@ router.get(
       const kpis = await AnalyticsService.getKpis(companyId, req.user!);
       return res.status(200).json(kpis);
     } catch (error: any) {
-      console.error('Fetch analytics KPIs error:', error);
+      logger.error('Fetch analytics KPIs error:', error);
       return res.status(500).json({ error: 'Failed to fetch analytics KPIs' });
     }
   }
@@ -55,7 +56,7 @@ router.get(
       const dashboardData = await AnalyticsService.getSalesManagerDashboard(companyId, req.user!);
       return res.status(200).json(dashboardData);
     } catch (error: any) {
-      console.error('Fetch sales manager dashboard error:', error);
+      logger.error('Fetch sales manager dashboard error:', error);
       return res.status(500).json({ error: 'Failed to fetch sales manager dashboard' });
     }
   }

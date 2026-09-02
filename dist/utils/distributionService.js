@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.findBestAssigneeForLead = void 0;
+const logger_1 = require("./logger");
 const prisma_1 = require("../lib/prisma");
 const shared_1 = require("../shared");
 const p = prisma_1.prisma;
@@ -89,7 +90,7 @@ const findBestAssigneeForLead = async (companyId, preferredPmId) => {
         return candidates[0] || null;
     }
     catch (err) {
-        console.error('Error in distribution algorithm:', err.message);
+        logger_1.logger.error('Error in distribution algorithm:', err.message);
         return null;
     }
 };

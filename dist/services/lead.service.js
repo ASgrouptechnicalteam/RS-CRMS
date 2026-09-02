@@ -31,7 +31,7 @@ class LeadService {
         const sequentialNum = (count + 1).toString().padStart(4, '0');
         return `RRH-LD-${currentYear}-${sequentialNum}`;
     }
-    static async getLeads(user, take = 50, skip = 0) {
+    static async getLeads(user, take = 20, skip = 0) {
         const whereCondition = await (0, dataScope_1.buildLeadScope)(user);
         const leads = await p.lead.findMany({
             where: whereCondition,

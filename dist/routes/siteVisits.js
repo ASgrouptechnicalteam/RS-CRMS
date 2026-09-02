@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const shared_1 = require("../shared");
@@ -19,7 +20,7 @@ router.get('/', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_
         return res.status(200).json({ visits });
     }
     catch (error) {
-        console.error('Fetch site visits error:', error);
+        logger_1.logger.error('Fetch site visits error:', error);
         next(error);
     }
 });
@@ -33,7 +34,7 @@ router.post('/', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared
         });
     }
     catch (error) {
-        console.error('Book site visit error:', error);
+        logger_1.logger.error('Book site visit error:', error);
         next(error);
     }
 });
@@ -51,7 +52,7 @@ router.post('/:id/accept', auth_1.authenticateToken, (0, auth_1.requirePermissio
         });
     }
     catch (error) {
-        console.error('Accept site visit error:', error);
+        logger_1.logger.error('Accept site visit error:', error);
         next(error);
     }
 });
@@ -69,7 +70,7 @@ router.post('/:id/reassign', auth_1.authenticateToken, (0, auth_1.requirePermiss
         });
     }
     catch (error) {
-        console.error('Reassign site visit error:', error);
+        logger_1.logger.error('Reassign site visit error:', error);
         next(error);
     }
 });
@@ -87,7 +88,7 @@ router.post('/:id/escalate', auth_1.authenticateToken, (0, auth_1.requirePermiss
         });
     }
     catch (error) {
-        console.error('Escalate site visit error:', error);
+        logger_1.logger.error('Escalate site visit error:', error);
         next(error);
     }
 });
@@ -104,7 +105,7 @@ router.post('/:id/reconfirm-customer', auth_1.authenticateToken, (0, auth_1.requ
         });
     }
     catch (error) {
-        console.error('Reconfirm-customer error:', error);
+        logger_1.logger.error('Reconfirm-customer error:', error);
         next(error);
     }
 });
@@ -121,7 +122,7 @@ router.post('/:id/reschedule', auth_1.authenticateToken, (0, auth_1.requirePermi
         });
     }
     catch (error) {
-        console.error('Reschedule error:', error);
+        logger_1.logger.error('Reschedule error:', error);
         next(error);
     }
 });
@@ -141,7 +142,7 @@ router.post('/:id/pm-reconfirm', auth_1.authenticateToken, (0, auth_1.requirePer
         });
     }
     catch (error) {
-        console.error('PM reconfirm error:', error);
+        logger_1.logger.error('PM reconfirm error:', error);
         next(error);
     }
 });
@@ -158,7 +159,7 @@ router.post('/:id/confirm', auth_1.authenticateToken, (0, auth_1.requirePermissi
         });
     }
     catch (error) {
-        console.error('Confirm visit error:', error);
+        logger_1.logger.error('Confirm visit error:', error);
         next(error);
     }
 });
@@ -175,7 +176,7 @@ router.post('/:id/start', auth_1.authenticateToken, (0, auth_1.requirePermission
         });
     }
     catch (error) {
-        console.error('Start visit error:', error);
+        logger_1.logger.error('Start visit error:', error);
         next(error);
     }
 });
@@ -193,7 +194,7 @@ router.post('/:id/complete', auth_1.authenticateToken, (0, auth_1.requirePermiss
         });
     }
     catch (error) {
-        console.error('Complete site visit error:', error);
+        logger_1.logger.error('Complete site visit error:', error);
         next(error);
     }
 });
@@ -211,7 +212,7 @@ router.post('/:id/cancel', auth_1.authenticateToken, (0, auth_1.requirePermissio
         });
     }
     catch (error) {
-        console.error('Cancel site visit error:', error);
+        logger_1.logger.error('Cancel site visit error:', error);
         next(error);
     }
 });

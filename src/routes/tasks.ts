@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response , NextFunction} from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -63,7 +64,7 @@ router.get('/all-team-tasks', authenticateToken, requireAuthz(Permissions.REPORT
 
     return res.status(200).json({ tasks: allTasks });
   } catch (error) {
-    console.error('Fetch all team tasks error:', error);
+    logger.error('Fetch all team tasks error:', error);
     return res.status(500).json({ error: 'Failed to fetch team tasks' });
   }
 });
@@ -91,7 +92,7 @@ router.get('/my-tasks', authenticateToken, async (req: AuthenticatedRequest, res
 
     return res.status(200).json({ tasks });
   } catch (error) {
-    console.error('Fetch tasks error:', error);
+    logger.error('Fetch tasks error:', error);
     return res.status(500).json({ error: 'Failed to fetch tasks' });
   }
 });
@@ -153,7 +154,7 @@ router.post('/', authenticateToken, requireAuthz(Permissions.TASKS_CREATE), vali
 
     return res.status(201).json({ message: 'Task created successfully', task });
   } catch (error) {
-    console.error('Create task error:', error);
+    logger.error('Create task error:', error);
     return res.status(500).json({ error: 'Failed to create task' });
   }
 });
@@ -192,7 +193,7 @@ router.get('/:id/sla', authenticateToken, async (req: AuthenticatedRequest, res:
       sla_status: slaStatus,
     });
   } catch (error) {
-    console.error('Read task SLA error:', error);
+    logger.error('Read task SLA error:', error);
     return res.status(500).json({ error: 'Failed to read task SLA status' });
   }
 })

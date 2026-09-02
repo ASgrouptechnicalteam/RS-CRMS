@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -112,7 +113,7 @@ router.post('/daily', auth_1.authenticateToken, (0, validate_1.validateRequestBo
         });
     }
     catch (error) {
-        console.error('Submit report error:', error);
+        logger_1.logger.error('Submit report error:', error);
         return res.status(500).json({ error: 'Failed to submit daily report' });
     }
 });
@@ -167,7 +168,7 @@ router.get('/my-history', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ reports });
     }
     catch (error) {
-        console.error('Fetch my-history error:', error);
+        logger_1.logger.error('Fetch my-history error:', error);
         return res.status(500).json({ error: 'Failed to fetch report history' });
     }
 });
@@ -215,7 +216,7 @@ router.get('/all', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.R
         return res.status(200).json({ reports });
     }
     catch (error) {
-        console.error('Fetch all reports error:', error);
+        logger_1.logger.error('Fetch all reports error:', error);
         return res.status(500).json({ error: 'Failed to fetch reports' });
     }
 });
@@ -247,7 +248,7 @@ router.get('/:id', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ report });
     }
     catch (error) {
-        console.error('Fetch single report error:', error);
+        logger_1.logger.error('Fetch single report error:', error);
         return res.status(500).json({ error: 'Failed to fetch report' });
     }
 });

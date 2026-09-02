@@ -1,3 +1,4 @@
+import { logger } from './logger';
 import { prisma } from '../lib/prisma';
 import { Roles } from '../shared';
 
@@ -112,7 +113,7 @@ export const findBestAssigneeForLead = async (
 
     return candidates[0] || null;
   } catch (err: any) {
-    console.error('Error in distribution algorithm:', err.message);
+    logger.error('Error in distribution algorithm:', err.message);
     return null;
   }
 };

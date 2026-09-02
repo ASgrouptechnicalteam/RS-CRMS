@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const prisma_1 = require("../lib/prisma");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
@@ -28,13 +29,13 @@ router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Per
         if (isDMExecutiveOnly && !filters.dm_executive_id) {
             filters.dm_executive_id = req.user.employeeId;
         }
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
         const offset = Math.max(parseInt(req.query.offset) || 0, 0);
         const properties = await property_service_1.PropertyService.listProperties(req.user, filters, limit, offset);
         return res.status(200).json({ properties, pagination: { limit, offset } });
     }
     catch (error) {
-        console.error('Fetch properties error:', error);
+        logger_1.logger.error('Fetch properties error:', error);
         if (error.status) {
             return next(error);
         }
@@ -51,7 +52,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         });
     }
     catch (error) {
-        console.error('Create property error:', error);
+        logger_1.logger.error('Create property error:', error);
         if (error.status) {
             return next(error);
         }
@@ -77,7 +78,7 @@ router.put('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.
         });
     }
     catch (error) {
-        console.error('Update property error:', error);
+        logger_1.logger.error('Update property error:', error);
         if (error.status) {
             return next(error);
         }
@@ -98,7 +99,7 @@ router.post('/:id/confirm-location', auth_1.authenticateToken, (0, authz_1.requi
         });
     }
     catch (error) {
-        console.error('Confirm location error:', error);
+        logger_1.logger.error('Confirm location error:', error);
         if (error.status)
             return next(error);
         return res.status(500).json({ error: 'Failed to confirm location' });
@@ -123,7 +124,7 @@ router.post('/:id/verify', auth_1.authenticateToken, (0, authz_1.requireAuthz)(s
         });
     }
     catch (error) {
-        console.error('PM Verify error:', error);
+        logger_1.logger.error('PM Verify error:', error);
         if (error.status) {
             return next(error);
         }
@@ -149,7 +150,7 @@ router.post('/:id/dm-polish', auth_1.authenticateToken, (0, authz_1.requireAuthz
         });
     }
     catch (error) {
-        console.error('DM Polish error:', error);
+        logger_1.logger.error('DM Polish error:', error);
         if (error.status) {
             return next(error);
         }
@@ -171,7 +172,7 @@ router.post('/:id/dm-verify-as-is', auth_1.authenticateToken, (0, authz_1.requir
         });
     }
     catch (error) {
-        console.error('DM Verify As-Is error:', error);
+        logger_1.logger.error('DM Verify As-Is error:', error);
         if (error.status) {
             return next(error);
         }
@@ -197,7 +198,7 @@ router.post('/:id/md-approve', auth_1.authenticateToken, (0, authz_1.requireAuth
         });
     }
     catch (error) {
-        console.error('MD Approve error:', error);
+        logger_1.logger.error('MD Approve error:', error);
         if (error.status) {
             return next(error);
         }
@@ -227,7 +228,7 @@ router.post('/:id/publications', auth_1.authenticateToken, (0, authz_1.requireAu
         });
     }
     catch (error) {
-        console.error('Toggle publication error:', error);
+        logger_1.logger.error('Toggle publication error:', error);
         if (error.status) {
             return next(error);
         }
@@ -250,7 +251,7 @@ router.get('/:id/publications', auth_1.authenticateToken, (0, authz_1.requireAut
         return res.status(200).json({ publications });
     }
     catch (error) {
-        console.error('Get publications error:', error);
+        logger_1.logger.error('Get publications error:', error);
         if (error.status) {
             return next(error);
         }
@@ -307,7 +308,7 @@ router.post('/:id/images', auth_1.authenticateToken, (0, authz_1.requireAuthz)(s
         return res.status(201).json({ message: 'Image uploaded successfully', image });
     }
     catch (error) {
-        console.error('Upload property image error:', error);
+        logger_1.logger.error('Upload property image error:', error);
         if (error.status) {
             return next(error);
         }
@@ -375,7 +376,7 @@ router.put('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.require
         return res.status(200).json({ message: 'Image updated successfully', image: updated });
     }
     catch (error) {
-        console.error('Update property image error:', error);
+        logger_1.logger.error('Update property image error:', error);
         if (error.status) {
             return next(error);
         }
@@ -441,7 +442,7 @@ router.delete('/:id/images/:imageId', auth_1.authenticateToken, (0, authz_1.requ
         return res.status(200).json({ message: 'Image deleted successfully' });
     }
     catch (error) {
-        console.error('Delete property image error:', error);
+        logger_1.logger.error('Delete property image error:', error);
         if (error.status) {
             return next(error);
         }
@@ -487,7 +488,7 @@ router.post('/:id/images/:imageId/approve', auth_1.authenticateToken, (0, authz_
         return res.status(200).json({ message: 'Image approved', image: updated });
     }
     catch (error) {
-        console.error('Approve image error:', error);
+        logger_1.logger.error('Approve image error:', error);
         if (error.status) {
             return next(error);
         }
@@ -533,7 +534,7 @@ router.post('/:id/images/:imageId/reject', auth_1.authenticateToken, (0, authz_1
         return res.status(200).json({ message: 'Image rejected', image: updated });
     }
     catch (error) {
-        console.error('Reject image error:', error);
+        logger_1.logger.error('Reject image error:', error);
         if (error.status) {
             return next(error);
         }

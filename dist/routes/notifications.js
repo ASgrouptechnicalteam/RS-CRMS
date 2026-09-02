@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -18,7 +19,7 @@ router.get('/', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ notifications, unreadCount });
     }
     catch (error) {
-        console.error('Failed to fetch notifications:', error);
+        logger_1.logger.error('Failed to fetch notifications:', error);
         return res.status(500).json({ error: 'Failed to fetch notifications' });
     }
 });

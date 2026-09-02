@@ -1,11 +1,12 @@
 "use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 /**
  * pushSubscriptions.ts
  *
  * Manages Web Push subscription registration per employee device.
  * Employees subscribe when they allow browser notifications.
  */
-Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
@@ -53,7 +54,7 @@ router.post('/subscribe', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ message: 'Push subscription saved.' });
     }
     catch (error) {
-        console.error('[PushSubscribe] Error:', error);
+        logger_1.logger.error('[PushSubscribe] Error:', error);
         return res.status(500).json({ error: 'Failed to save push subscription.' });
     }
 });
@@ -78,7 +79,7 @@ router.delete('/unsubscribe', auth_1.authenticateToken, async (req, res) => {
         return res.status(200).json({ message: 'Push subscription removed.' });
     }
     catch (error) {
-        console.error('[PushUnsubscribe] Error:', error);
+        logger_1.logger.error('[PushUnsubscribe] Error:', error);
         return res.status(500).json({ error: 'Failed to remove push subscription.' });
     }
 });

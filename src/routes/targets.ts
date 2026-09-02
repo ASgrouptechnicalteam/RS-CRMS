@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -144,7 +145,7 @@ router.get('/my-target', authenticateToken, async (req: AuthenticatedRequest, re
       },
     });
   } catch (error) {
-    console.error('Fetch my-target error:', error);
+    logger.error('Fetch my-target error:', error);
     return res.status(500).json({ error: 'Failed to resolve active target' });
   }
 });
@@ -225,7 +226,7 @@ router.post('/', authenticateToken, requireAuthz(Permissions.REPORTS_TARGETS_CON
 
     return res.status(201).json({ message: 'Daily target set successfully', target: newTarget });
   } catch (error) {
-    console.error('Set target error:', error);
+    logger.error('Set target error:', error);
     return res.status(500).json({ error: 'Failed to set target' });
   }
 });

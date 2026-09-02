@@ -27,6 +27,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getStorageService = exports.FtpStorageService = exports.LocalStorageService = exports.getPropertyImageStorage = exports.FtpPropertyImageStorage = exports.LocalPropertyImageStorage = exports.processImageBuffer = exports.memoryUpload = exports.propertyImageUpload = void 0;
+const logger_1 = require("../utils/logger");
 const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -73,7 +74,7 @@ class LocalPropertyImageStorage {
     async delete(imageUrl) {
         const match = imageUrl.match(/^\/uploads\/(properties\/\d+\/images\/[a-f0-9-]+\.webp|property-images\/prop-[0-9-]+\.[a-z]+)$/i);
         if (!match) {
-            console.warn(`Invalid or unrecognizable image URL for deletion: ${imageUrl}`);
+            logger_1.logger.warn(`Invalid or unrecognizable image URL for deletion: ${imageUrl}`);
             return;
         }
         const relativeSafePath = match[1];
@@ -83,7 +84,7 @@ class LocalPropertyImageStorage {
                 fs_1.default.unlinkSync(absolutePath);
             }
             catch (err) {
-                console.error(`Failed to delete physical file: ${absolutePath}`, err);
+                logger_1.logger.error(`Failed to delete physical file: ${absolutePath}`, err);
             }
         }
     }
@@ -123,7 +124,7 @@ class FtpPropertyImageStorage {
     async delete(imageUrl) {
         const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
         if (!imageUrl.startsWith(baseUrl)) {
-            console.warn(`Cannot delete FTP image, URL does not match base URL: ${imageUrl}`);
+            logger_1.logger.warn(`Cannot delete FTP image, URL does not match base URL: ${imageUrl}`);
             return;
         }
         const relativePath = imageUrl.slice(baseUrl.length);
@@ -133,7 +134,7 @@ class FtpPropertyImageStorage {
             await client.remove(remotePath);
         }
         catch (err) {
-            console.error(`Failed to delete remote FTP file: ${remotePath}`, err);
+            logger_1.logger.error(`Failed to delete remote FTP file: ${remotePath}`, err);
         }
         finally {
             client.close();
@@ -226,7 +227,7 @@ class FtpStorageService {
     async delete(storagePath) {
         const baseUrl = process.env.FTP_PUBLIC_BASE_URL || '';
         if (!storagePath.startsWith(baseUrl)) {
-            console.warn(`Cannot delete FTP file, URL does not match base URL: ${storagePath}`);
+            logger_1.logger.warn(`Cannot delete FTP file, URL does not match base URL: ${storagePath}`);
             return;
         }
         const relativePath = storagePath.slice(baseUrl.length);
@@ -236,7 +237,7 @@ class FtpStorageService {
             await client.remove(remotePath);
         }
         catch (err) {
-            console.error(`Failed to delete remote FTP file: ${remotePath}`, err);
+            logger_1.logger.error(`Failed to delete remote FTP file: ${remotePath}`, err);
         }
         finally {
             client.close();

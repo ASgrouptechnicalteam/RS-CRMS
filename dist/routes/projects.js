@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const authz_1 = require("../middleware/authz");
@@ -23,7 +24,7 @@ router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Per
         return res.status(200).json({ projects, pagination: { limit, offset } });
     }
     catch (error) {
-        console.error('Fetch projects error:', error);
+        logger_1.logger.error('Fetch projects error:', error);
         if (error.status) {
             return res.status(error.status).json({ error: error.message });
         }
@@ -41,7 +42,7 @@ router.get('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.
         return res.status(200).json({ project });
     }
     catch (error) {
-        console.error('Fetch project error:', error);
+        logger_1.logger.error('Fetch project error:', error);
         if (error.status) {
             return res.status(error.status).json({ error: error.message });
         }
@@ -58,7 +59,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         });
     }
     catch (error) {
-        console.error('Create project error:', error);
+        logger_1.logger.error('Create project error:', error);
         if (error.status) {
             return res.status(error.status).json({ error: error.message });
         }
@@ -74,7 +75,7 @@ router.put('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.
         return await p.project.findFirst({ where: { id: projectId, ...scope } });
     }
     catch (e) {
-        console.error('Prisma validation error payload:', e.message);
+        logger_1.logger.error('Prisma validation error payload:', e.message);
         throw e;
     }
 }), (0, validate_1.validateRequestBody)(shared_1.ProjectUpdateSchema), async (req, res) => {
@@ -87,7 +88,7 @@ router.put('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.
         });
     }
     catch (error) {
-        console.error('Update project error:', error);
+        logger_1.logger.error('Update project error:', error);
         if (error.status) {
             return res.status(error.status).json({ error: error.message });
         }
@@ -103,7 +104,7 @@ router.delete('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared
         return await p.project.findFirst({ where: { id: projectId, ...scope } });
     }
     catch (e) {
-        console.error('Prisma validation error payload DELETE:', e.message);
+        logger_1.logger.error('Prisma validation error payload DELETE:', e.message);
         throw e;
     }
 }), async (req, res) => {
@@ -116,7 +117,7 @@ router.delete('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared
         });
     }
     catch (error) {
-        console.error('Delete project error:', error);
+        logger_1.logger.error('Delete project error:', error);
         if (error.status) {
             return res.status(error.status).json({ error: error.message });
         }

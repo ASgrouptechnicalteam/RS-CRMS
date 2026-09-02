@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
@@ -62,7 +63,7 @@ router.get('/my-score', authenticateToken, async (req: AuthenticatedRequest, res
 
     return res.status(200).json({ employeeId, score: totalScore, breakdown });
   } catch (error) {
-    console.error('Performance score calculation error:', error);
+    logger.error('Performance score calculation error:', error);
     return res.status(500).json({ error: 'Failed to calculate performance score' });
   }
 });
@@ -114,7 +115,7 @@ router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res:
 
     return res.status(200).json({ events });
   } catch (error) {
-    console.error('Fetch performance history error:', error);
+    logger.error('Fetch performance history error:', error);
     return res.status(500).json({ error: 'Failed to fetch performance history' });
   }
 });
@@ -186,7 +187,7 @@ router.get('/team', authenticateToken, async (req: AuthenticatedRequest, res: Re
     teamScores.sort((a, b) => b.score - a.score);
     return res.status(200).json({ team: teamScores, total: teamScores.length });
   } catch (error: any) {
-    console.error('Team performance error:', error);
+    logger.error('Team performance error:', error);
     return res.status(500).json({ error: 'Failed to fetch team performance' });
   }
 });

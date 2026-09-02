@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 /**
  * pushSubscriptions.ts
  * 
@@ -58,7 +59,7 @@ router.post('/subscribe', authenticateToken, async (req: AuthenticatedRequest, r
 
     return res.status(200).json({ message: 'Push subscription saved.' });
   } catch (error) {
-    console.error('[PushSubscribe] Error:', error);
+    logger.error('[PushSubscribe] Error:', error);
     return res.status(500).json({ error: 'Failed to save push subscription.' });
   }
 });
@@ -83,7 +84,7 @@ router.delete('/unsubscribe', authenticateToken, async (req: AuthenticatedReques
     }
     return res.status(200).json({ message: 'Push subscription removed.' });
   } catch (error) {
-    console.error('[PushUnsubscribe] Error:', error);
+    logger.error('[PushUnsubscribe] Error:', error);
     return res.status(500).json({ error: 'Failed to remove push subscription.' });
   }
 });

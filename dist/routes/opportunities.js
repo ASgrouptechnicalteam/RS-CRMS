@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const logger_1 = require("../utils/logger");
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const shared_1 = require("../shared");
@@ -16,7 +17,7 @@ async (req, res, next) => {
         });
     }
     catch (error) {
-        console.error('Create opportunity error:', error);
+        logger_1.logger.error('Create opportunity error:', error);
         next(error);
     }
 });
@@ -42,7 +43,7 @@ router.get('/', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_
         return res.status(200).json(result);
     }
     catch (error) {
-        console.error('Fetch opportunities error:', error);
+        logger_1.logger.error('Fetch opportunities error:', error);
         next(error);
     }
 });
@@ -53,7 +54,7 @@ router.get('/pipeline-metrics', auth_1.authenticateToken, (0, auth_1.requirePerm
         return res.status(200).json({ metrics });
     }
     catch (error) {
-        console.error('Fetch pipeline metrics error:', error);
+        logger_1.logger.error('Fetch pipeline metrics error:', error);
         next(error);
     }
 });
@@ -73,7 +74,7 @@ router.get('/:id', auth_1.authenticateToken, (0, auth_1.requirePermission)([shar
         return res.status(200).json({ opportunity });
     }
     catch (error) {
-        console.error('Fetch opportunity dossier error:', error);
+        logger_1.logger.error('Fetch opportunity dossier error:', error);
         next(error);
     }
 });
@@ -96,7 +97,7 @@ router.patch('/:id', auth_1.authenticateToken, (0, auth_1.requirePermission)([sh
         });
     }
     catch (error) {
-        console.error('Update opportunity error:', error);
+        logger_1.logger.error('Update opportunity error:', error);
         next(error);
     }
 });
@@ -120,7 +121,7 @@ async (req, res, next) => {
         });
     }
     catch (error) {
-        console.error('Convert opportunity to booking error:', error);
+        logger_1.logger.error('Convert opportunity to booking error:', error);
         next(error);
     }
 });

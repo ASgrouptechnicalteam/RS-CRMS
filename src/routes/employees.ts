@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
@@ -93,7 +94,7 @@ router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Re
       employee: updatedEmp,
     });
   } catch (error) {
-    console.error('Self update error:', error);
+    logger.error('Self update error:', error);
     return res.status(500).json({ error: 'Failed to update profile' });
   }
 });
@@ -102,7 +103,7 @@ router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Re
 router.post('/me/photo', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   profileUpload.single('profile_image')(req, res, async (err: any) => {
     if (err) {
-      console.error('Multer error:', err);
+      logger.error('Multer error:', err);
       return res.status(400).json({ error: err.message || 'File upload failed' });
     }
 
@@ -125,7 +126,7 @@ router.post('/me/photo', authenticateToken, async (req: AuthenticatedRequest, re
       });
 
       if (emp?.profile_image_url) {
-        await storageService.delete(emp.profile_image_url).catch(e => console.warn('Could not delete old profile photo:', e));
+        await storageService.delete(emp.profile_image_url).catch(e => logger.warn('Could not delete old profile photo:', e));
       }
 
       return res.status(200).json({
@@ -133,7 +134,7 @@ router.post('/me/photo', authenticateToken, async (req: AuthenticatedRequest, re
         profile_image_url: publicAssetUrl(newImageUrl),
       });
     } catch (error) {
-      console.error('Profile photo upload error:', error);
+      logger.error('Profile photo upload error:', error);
       return res.status(500).json({ error: 'Failed to upload profile photo' });
     }
   });
@@ -212,7 +213,7 @@ router.get('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_READ), asy
 
     return res.status(200).json({ employees: formatted, pagination: { limit, offset } });
   } catch (error) {
-    console.error('Fetch employees error:', error);
+    logger.error('Fetch employees error:', error);
     return res.status(500).json({ error: 'Failed to fetch employees list' });
   }
 });
@@ -428,7 +429,7 @@ router.post('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_CREATE), 
       },
     });
   } catch (error) {
-    console.error('Create employee error:', error);
+    logger.error('Create employee error:', error);
     return res.status(500).json({ error: 'Failed to create employee' });
   }
 });
@@ -780,7 +781,7 @@ router.put('/:id/roles', authenticateToken, async (req: AuthenticatedRequest, re
 
     return res.status(200).json({ message: 'Roles updated successfully' });
   } catch (error) {
-    console.error('Update roles error:', error);
+    logger.error('Update roles error:', error);
     return res.status(500).json({ error: 'Failed to update roles' });
   }
 });

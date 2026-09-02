@@ -39,7 +39,7 @@ class PropertyService {
         const seq = (count + 1).toString().padStart(4, '0');
         return `RRH-PR-${currentYear}-${seq}`;
     }
-    static async listProperties(user, filters, take = 50, skip = 0) {
+    static async listProperties(user, filters, take = 20, skip = 0) {
         const whereCondition = await (0, dataScope_1.buildPropertyScope)(user);
         if (filters.brand) {
             whereCondition.brand_type = filters.brand;

@@ -71,10 +71,15 @@ app.use(compression({ threshold: 0 }));
 // Body Parser
 app.use(express.json());
 
+// Enforce max pagination cap of 100 globally
+import { enforceMaxPagination } from './middleware/pagination';
+app.use(enforceMaxPagination);
+
 import { setupSwagger } from './utils/swagger';
 setupSwagger(app);
 
 import { apiRateLimiter } from './middleware/rateLimiter';
+app.use(apiRateLimiter);
 
 // Serve property and profile images publicly.
 const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');

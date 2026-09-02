@@ -10,6 +10,9 @@ import {
   PropertyDMVerifyAsIsSchema,
   PropertyMDApprovalSchema,
   PropertyUpdateSchema,
+  PropertyTogglePublicationBodySchema,
+  PropertyImageMetadataSchema,
+  EmptyBodySchema,
   Permissions,
 } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
@@ -118,6 +121,7 @@ router.post(
   '/:id/confirm-location',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_VERIFY),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
@@ -255,6 +259,7 @@ router.post(
   '/:id/publications',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_UPDATE),
+  validateRequestBody(PropertyTogglePublicationBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
@@ -319,6 +324,7 @@ router.post(
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_UPDATE),
   propertyImageUpload.single('image'),
+  validateRequestBody(PropertyImageMetadataSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
@@ -382,6 +388,7 @@ router.put(
   '/:id/images/:imageId',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_UPDATE),
+  validateRequestBody(PropertyImageMetadataSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
@@ -451,6 +458,7 @@ router.delete(
   '/:id/images/:imageId',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_UPDATE),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
@@ -521,6 +529,7 @@ router.post(
   '/:id/images/:imageId/approve',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_DM_POLISH),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
@@ -567,6 +576,7 @@ router.post(
   '/:id/images/:imageId/reject',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_DM_POLISH),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);

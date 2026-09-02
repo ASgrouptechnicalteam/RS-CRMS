@@ -172,6 +172,8 @@ model Employee {
   @@index([company_id])
   @@index([branch_id])
   @@index([company_id, created_at])
+  @@index([phone])
+  @@index([email])
 }
 
 model Role {
@@ -489,6 +491,8 @@ model Lead {
   @@index([assigned_to_id])
   @@index([status])
   @@index([company_id, created_at])
+  @@index([phone])
+  @@index([email])
 }
 
 model LeadActivity {
@@ -645,6 +649,8 @@ model Property {
   @@index([listing_type])
   @@index([digital_marketing_executive_id])
   @@index([company_id, created_at])
+  @@index([price])
+  @@index([category])
 }
 
 model PropertyImage {

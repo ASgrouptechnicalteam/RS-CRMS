@@ -4,7 +4,16 @@ import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
-import { Roles, DepartmentCodes, Permissions } from '../shared';
+import { 
+  Roles, 
+  DepartmentCodes, 
+  Permissions,
+  EmployeeSelfUpdateSchema,
+  EmployeeCreateSchema,
+  EmployeeUpdateSchema,
+  EmployeeRolesUpdateSchema,
+  EmptyBodySchema
+} from '../shared';
 import { can } from '../authz/authorization';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import { encryptData } from '../utils/crypto';
@@ -13,6 +22,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import { publicAssetUrl } from '../utils/media';
+import { validateRequestBody } from '../middleware/validate';
 
 const router = Router();
 
@@ -20,7 +30,7 @@ import { memoryUpload, getStorageService } from '../services/storage.service';
 
 const profileUpload = memoryUpload;
 // PATCH /api/v1/employees/me - Self-update for safe profile fields
-router.patch('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.patch('/me', authenticateToken, validateRequestBody(EmployeeSelfUpdateSchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const employeeId = req.user!.employeeId;
     const { 
@@ -264,7 +274,7 @@ router.get('/managers', authenticateToken, async (req: AuthenticatedRequest, res
 });
 
 // POST /api/v1/employees - Add new employee with all 20 industrial fields
-router.post('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_CREATE), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_CREATE), validateRequestBody(EmployeeCreateSchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
 
     const {
@@ -435,7 +445,7 @@ router.post('/', authenticateToken, requireAuthz(Permissions.EMPLOYEES_CREATE), 
 });
 
 // PATCH /api/v1/employees/:id - Update employee status, branch, roles or any profile detail
-router.patch('/:id', authenticateToken, requireAuthz(Permissions.EMPLOYEES_UPDATE), async (req: AuthenticatedRequest, res: Response) => {
+router.patch('/:id', authenticateToken, requireAuthz(Permissions.EMPLOYEES_UPDATE), validateRequestBody(EmployeeUpdateSchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const employeeId = parseInt(req.params.id, 10);
     const targetEmployee = await prisma.employee.findUnique({ where: { id: employeeId } });
@@ -625,7 +635,7 @@ router.patch('/:id', authenticateToken, requireAuthz(Permissions.EMPLOYEES_UPDAT
 });
 
 // POST /api/v1/employees/:id/reset-password - Admin 1-click Password Reset
-router.post('/:id/reset-password', authenticateToken, requireAuthz(Permissions.EMPLOYEES_RESET_PASSWORD), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:id/reset-password', authenticateToken, requireAuthz(Permissions.EMPLOYEES_RESET_PASSWORD), validateRequestBody(EmptyBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const employeeId = parseInt(req.params.id, 10);
     const targetEmployee = await prisma.employee.findUnique({ where: { id: employeeId } });
@@ -671,7 +681,7 @@ router.post('/:id/reset-password', authenticateToken, requireAuthz(Permissions.E
 });
 
 // PUT /api/v1/employees/:id/roles - Update an employee's roles
-router.put('/:id/roles', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.put('/:id/roles', authenticateToken, validateRequestBody(EmployeeRolesUpdateSchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const employeeId = parseInt(req.params.id, 10);
     const { role_names } = req.body;

@@ -87,7 +87,8 @@ router.get('/presets', authenticateToken, async (req: AuthenticatedRequest, res:
 router.get('/my-target', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const employeeId = req.user!.employeeId;
-    const roleName = req.user!.roles[0];
+    const requestedRole = req.query.role as string;
+    const roleName = (requestedRole && req.user!.roles.includes(requestedRole)) ? requestedRole : req.user!.roles[0];
 
     // Priority 1: Employee-Specific Target (if active)
     let empTarget: any = null;

@@ -358,7 +358,10 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
   }
 });
 
-router.post('/refresh', refreshRateLimiter, async (req, res: Response) => {
+import { z } from 'zod';
+const EmptyBodySchema = z.object({}).strict();
+
+router.post('/refresh', refreshRateLimiter, validateRequestBody(EmptyBodySchema), async (req, res: Response) => {
   try {
     const refreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
     if (!refreshToken) {
@@ -508,7 +511,7 @@ router.post('/refresh', refreshRateLimiter, async (req, res: Response) => {
   }
 });
 
-router.post('/logout', async (req, res: Response) => {
+router.post('/logout', validateRequestBody(EmptyBodySchema), async (req, res: Response) => {
   const refreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
   if (refreshToken) {
     const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');

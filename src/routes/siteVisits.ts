@@ -10,6 +10,7 @@ import {
   SiteVisitRescheduleSchema,
   SiteVisitReconfirmSchema,
   SiteVisitCompleteSchema,
+  EmptyBodySchema,
 } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
 import { SiteVisitService } from '../services/siteVisit.service';
@@ -132,6 +133,7 @@ router.post(
   '/:id/reconfirm-customer',
   authenticateToken,
   requirePermission([Permissions.SITE_VISITS_VERIFY]),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const visitId = parseInt(req.params.id, 10);
@@ -200,6 +202,7 @@ router.post(
   '/:id/confirm',
   authenticateToken,
   requirePermission([Permissions.SITE_VISITS_VERIFY]),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const visitId = parseInt(req.params.id, 10);
@@ -221,6 +224,7 @@ router.post(
   '/:id/start',
   authenticateToken,
   requirePermission([Permissions.SITE_VISITS_COMPLETE]),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const visitId = parseInt(req.params.id, 10);
@@ -265,6 +269,7 @@ router.post(
   '/:id/cancel',
   authenticateToken,
   requirePermission([Permissions.SITE_VISITS_COMPLETE]),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const visitId = parseInt(req.params.id, 10);

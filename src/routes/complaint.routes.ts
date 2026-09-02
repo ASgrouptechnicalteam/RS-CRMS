@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
 import { Permissions } from '../shared';
+import { validateRequestBody } from '../middleware/validate';
 import { ComplaintService } from '../services/complaint.service';
 
 const router = Router();
@@ -75,10 +76,10 @@ router.get(
 router.post(
   '/',
   requireAuthz(Permissions.COMPLAINTS_CREATE as any),
+  validateRequestBody(CreateComplaintSchema),
   async (req: any, res, next) => {
     try {
-      const dto = CreateComplaintSchema.parse(req.body);
-      const complaint = await ComplaintService.create(req.user, dto);
+      const complaint = await ComplaintService.create(req.user, req.body);
       res.status(201).json(complaint);
     } catch (error) {
       next(error);
@@ -90,10 +91,10 @@ router.post(
 router.patch(
   '/:id',
   requireAuthz(Permissions.COMPLAINTS_UPDATE as any),
+  validateRequestBody(UpdateComplaintSchema),
   async (req: any, res, next) => {
     try {
-      const dto = UpdateComplaintSchema.parse(req.body);
-      const complaint = await ComplaintService.update(req.user, parseInt(req.params.id, 10), dto);
+      const complaint = await ComplaintService.update(req.user, parseInt(req.params.id, 10), req.body);
       res.json(complaint);
     } catch (error) {
       next(error);
@@ -105,10 +106,10 @@ router.patch(
 router.patch(
   '/:id/status',
   requireAuthz(Permissions.COMPLAINTS_UPDATE as any),
+  validateRequestBody(StatusSchema),
   async (req: any, res, next) => {
     try {
-      const { status } = StatusSchema.parse(req.body);
-      const complaint = await ComplaintService.changeStatus(req.user, parseInt(req.params.id, 10), status);
+      const complaint = await ComplaintService.changeStatus(req.user, parseInt(req.params.id, 10), req.body.status);
       res.json(complaint);
     } catch (error) {
       next(error);
@@ -120,10 +121,10 @@ router.patch(
 router.patch(
   '/:id/assign',
   requireAuthz(Permissions.COMPLAINTS_ASSIGN as any),
+  validateRequestBody(AssignComplaintSchema),
   async (req: any, res, next) => {
     try {
-      const { employee_id } = AssignComplaintSchema.parse(req.body);
-      const complaint = await ComplaintService.assign(req.user, parseInt(req.params.id, 10), employee_id);
+      const complaint = await ComplaintService.assign(req.user, parseInt(req.params.id, 10), req.body.employee_id);
       res.json(complaint);
     } catch (error) {
       next(error);
@@ -135,10 +136,10 @@ router.patch(
 router.patch(
   '/:id/resolve',
   requireAuthz(Permissions.COMPLAINTS_RESOLVE as any),
+  validateRequestBody(ResolveSchema),
   async (req: any, res, next) => {
     try {
-      const { resolution_description } = ResolveSchema.parse(req.body);
-      const complaint = await ComplaintService.resolve(req.user, parseInt(req.params.id, 10), resolution_description);
+      const complaint = await ComplaintService.resolve(req.user, parseInt(req.params.id, 10), req.body.resolution_description);
       res.json(complaint);
     } catch (error) {
       next(error);
@@ -150,10 +151,10 @@ router.patch(
 router.patch(
   '/:id/close',
   requireAuthz(Permissions.COMPLAINTS_CLOSE as any),
+  validateRequestBody(CloseSchema),
   async (req: any, res, next) => {
     try {
-      const parsed = CloseSchema.parse(req.body);
-      const complaint = await ComplaintService.close(req.user, parseInt(req.params.id, 10), parsed.closure_reason);
+      const complaint = await ComplaintService.close(req.user, parseInt(req.params.id, 10), req.body.closure_reason);
       res.json(complaint);
     } catch (error) {
       next(error);

@@ -4,7 +4,14 @@ import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole, authenticateKioskToken, KioskAuthenticatedRequest } from '../middleware/auth';
 import { generateQrHmac, verifyQrHmac } from '../utils/qr';
 import { calculateAttendanceStatus, getISTComponents } from '../utils/time';
-import { Roles, LateProposalSchema } from '../shared';
+import { 
+  Roles, 
+  LateProposalSchema, 
+  LeaveProposalSchema, 
+  AttendanceQRPayloadSchema, 
+  AttendanceHolidaySchema, 
+  EmptyBodySchema 
+} from '../shared';
 import { validateRequestBody } from '../middleware/validate';
 import { notifyEmployee } from '../utils/notifyEmployee';
 
@@ -142,7 +149,7 @@ const parseAndVerifyQR = (req: AuthenticatedRequest, qrPayload: any) => {
 // The token's embedded branchId is written to AttendanceLog.branch_id so the
 // attendance record carries the physical scan location, not the employee's
 // assigned branch.
-router.post('/scan', authenticateKioskToken, async (req: KioskAuthenticatedRequest, res: Response) => {
+router.post('/scan', authenticateKioskToken, validateRequestBody(AttendanceQRPayloadSchema), async (req: KioskAuthenticatedRequest, res: Response) => {
   const targetCompanyId = req.kiosk!.companyId;
   const branchId = req.kiosk!.branchId; // physical scan location
 
@@ -261,11 +268,8 @@ router.post('/scan', authenticateKioskToken, async (req: KioskAuthenticatedReque
   }
 });
 
-// POST /api/v1/attendance/checkout - Verify QR and Stamp Checkout
-// Kiosk-only: must be authenticated with a type:'KIOSK' token.
-// branch_id from the kiosk token is written to AttendanceLog so the checkout
-// record carries the physical scan location.
-router.post('/checkout', authenticateKioskToken, async (req: KioskAuthenticatedRequest, res: Response) => {
+// POST /api/v1/attendance/checkout - Stamp Checkout (IST rules)
+router.post('/checkout', authenticateKioskToken, validateRequestBody(AttendanceQRPayloadSchema), async (req: KioskAuthenticatedRequest, res: Response) => {
   const targetCompanyId = req.kiosk!.companyId;
   const branchId = req.kiosk!.branchId;
 
@@ -432,6 +436,7 @@ router.post(
 router.post(
   '/leave-proposal',
   authenticateToken,
+  validateRequestBody(LeaveProposalSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { start_date, end_date, reason } = req.body;
@@ -568,6 +573,7 @@ router.post(
   '/proposals/:id/approve',
   authenticateToken,
   requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -603,6 +609,7 @@ router.post(
   '/proposals/:id/reject',
   authenticateToken,
   requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
+  validateRequestBody(EmptyBodySchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -780,7 +787,8 @@ router.get('/holidays', authenticateToken, async (req: AuthenticatedRequest, res
   }
 });
 
-router.post('/holidays', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]), async (req: AuthenticatedRequest, res: Response) => {
+// POST /api/v1/attendance/holidays
+router.post('/holidays', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]), validateRequestBody(AttendanceHolidaySchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { name, date } = req.body;
     if (!name || !date) return res.status(400).json({ error: 'Name and date are required' });
@@ -800,7 +808,8 @@ router.post('/holidays', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, 
   }
 });
 
-router.delete('/holidays/:id', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]), async (req: AuthenticatedRequest, res: Response) => {
+// DELETE /api/v1/attendance/holidays/:id
+router.delete('/holidays/:id', authenticateToken, requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]), validateRequestBody(EmptyBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const id = Number(req.params.id);
     const companyId = req.user!.companyId;

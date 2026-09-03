@@ -201,7 +201,7 @@ export class LeadService {
       include: {
         assigned_to: { select: { id: true, full_name: true, employee_code: true } },
         site_visits: {
-          where: { status: { in: ['CANCELLED', 'NO_SHOW'] } },
+          where: { status: { in: ['CANCELLED'] } },
           include: { property: { select: { title: true, status: true } } },
           orderBy: { created_at: 'desc' },
           take: 1
@@ -302,7 +302,7 @@ export class LeadService {
     let assignmentType = null;
     let status = 'NEW';
     let ownershipType = dto.ownership_type || 'POOL';
-    let bestAssignee = null;
+    let bestAssignee: any = null;
     
     if (ownershipType === 'DIRECT' || isChannelPartner) {
       assignedToId = user.employeeId;
@@ -587,8 +587,8 @@ export class LeadService {
     const entityContext: any = {
       ...lead,
       exit_reason: guardFields?.exit_reason ?? lead.exit_reason,
-      demo_scheduled_at: guardFields?.demo_scheduled_at ?? lead.demo_scheduled_at,
-      demo_handler_id: guardFields?.demo_handler_id ?? lead.demo_handler_id,
+      demo_scheduled_at: guardFields?.demo_scheduled_at ?? (lead as any).demo_scheduled_at,
+      demo_handler_id: guardFields?.demo_handler_id ?? (lead as any).demo_handler_id,
     };
     if (guardFields?.demo_scheduled_at) {
       entityContext.demo_scheduled_at = new Date(guardFields.demo_scheduled_at);
@@ -977,7 +977,7 @@ export class LeadService {
           await tx.leadActivity.create({
             data: {
               lead_id: lead.id,
-              actor_id: lead.created_by_id,
+              actor_id: lead.created_by_id || 1,
               activity_type: 'ASSIGNED_TO_AGENT',
               notes: `Auto-distributed to ${bestAssignee.name} (${bestAssignee.employeeCode}) [Weight Score: ${bestAssignee.weight.toFixed(1)}]`,
             },

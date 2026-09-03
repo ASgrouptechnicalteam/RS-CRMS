@@ -1506,3 +1506,13 @@ export const EmployeeRolesUpdateSchema = z.object({
   role_names: z.array(z.string()).min(1, 'At least one role is required')
 });
 
+export const AttendanceQRPayloadSchema = z.object({
+  payload: z.string()
+});
+
+export const AttendanceHolidaySchema = z.object({
+  date: z.string(),
+  name: z.string(),
+  description: z.string().optional()
+});
+

@@ -40,7 +40,7 @@ router.get(
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 router.get(
@@ -54,14 +54,14 @@ router.get(
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 router.post(
   '/',
   authenticateToken,
   requirePermission([Permissions.EXPENSES_CREATE]),
-  upload.single('proof_image'),
+  upload.single('proof_image') as any,
   validateRequestBody(ExpenseRefundCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next) => {
     try {
@@ -69,14 +69,22 @@ router.post(
       let proofImageUrl: string | null = null;
       if (req.file) {
         const storageService = getStorageService('expense-proofs');
-        proofImageUrl = await storageService.upload(req.file.buffer, req.file.originalname, req.file.mimetype);
+        proofImageUrl = await storageService.upload(
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
+        );
       }
-      const refund = await ExpenseRefundService.createRefund(req.user!, { purpose, amount }, proofImageUrl);
+      const refund = await ExpenseRefundService.createRefund(
+        req.user!,
+        { purpose, amount },
+        proofImageUrl,
+      );
       return res.status(201).json({ message: 'Refund request submitted.', refund });
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 router.patch(
@@ -93,7 +101,7 @@ router.patch(
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 router.patch(
@@ -110,7 +118,7 @@ router.patch(
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 router.patch(
@@ -126,7 +134,7 @@ router.patch(
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 router.get(
@@ -145,7 +153,7 @@ router.get(
     } catch (error: any) {
       next(error);
     }
-  }
+  },
 );
 
 export default router;

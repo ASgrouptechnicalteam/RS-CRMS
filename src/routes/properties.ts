@@ -1,6 +1,6 @@
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
-import { Router, Response , NextFunction} from 'express';
+import { Router, Response, NextFunction } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
 import {
@@ -17,10 +17,7 @@ import {
 } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
 import { PropertyService } from '../services/property.service';
-import {
-  propertyImageUpload,
-  getPropertyImageStorage,
-} from '../services/storage.service';
+import { propertyImageUpload, getPropertyImageStorage } from '../services/storage.service';
 import { PrismaClient, Prisma } from '@prisma/client';
 
 const router = Router();
@@ -33,37 +30,48 @@ router.get(
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_READ),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  try {
-    const { brand, status, project_id, unassigned, dm_executive_id } = req.query;
-    const filters: { brand?: string; status?: string; project_id?: number; unassigned?: boolean; dm_executive_id?: number } = {
-      brand: typeof brand === 'string' ? brand : undefined,
-      status: typeof status === 'string' ? status : undefined,
-      project_id: typeof project_id === 'string' ? parseInt(project_id, 10) : undefined,
-      unassigned: unassigned === 'true',
-      dm_executive_id: typeof dm_executive_id === 'string' ? parseInt(dm_executive_id, 10) : undefined,
-    };
+    try {
+      const { brand, status, project_id, unassigned, dm_executive_id } = req.query;
+      const filters: {
+        brand?: string;
+        status?: string;
+        project_id?: number;
+        unassigned?: boolean;
+        dm_executive_id?: number;
+      } = {
+        brand: typeof brand === 'string' ? brand : undefined,
+        status: typeof status === 'string' ? status : undefined,
+        project_id: typeof project_id === 'string' ? parseInt(project_id, 10) : undefined,
+        unassigned: unassigned === 'true',
+        dm_executive_id:
+          typeof dm_executive_id === 'string' ? parseInt(dm_executive_id, 10) : undefined,
+      };
 
-    // DM Executives automatically see only their own assigned-to-polish properties
-    const userRoles: string[] = (req.user as any)?.roles || [];
-    const isDMExecutiveOnly = userRoles.includes('digital marketing executive') &&
-      !userRoles.some((r: string) => ['Digital Marketing head(manager)', 'Marketing Director', 'md', 'admin'].includes(r));
-    if (isDMExecutiveOnly && !filters.dm_executive_id) {
-      filters.dm_executive_id = req.user!.employeeId;
+      // DM Executives automatically see only their own assigned-to-polish properties
+      const userRoles: string[] = (req.user as any)?.roles || [];
+      const isDMExecutiveOnly =
+        userRoles.includes('digital marketing executive') &&
+        !userRoles.some((r: string) =>
+          ['Digital Marketing head(manager)', 'Marketing Director', 'md', 'admin'].includes(r),
+        );
+      if (isDMExecutiveOnly && !filters.dm_executive_id) {
+        filters.dm_executive_id = req.user!.employeeId;
+      }
+
+      const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
+      const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+
+      const properties = await PropertyService.listProperties(req.user!, filters, limit, offset);
+      return res.status(200).json({ properties, pagination: { limit, offset } });
+    } catch (error: any) {
+      logger.error('Fetch properties error:', error);
+      if (error.status) {
+        return next(error);
+      }
+      return res.status(500).json({ error: 'Failed to fetch properties' });
     }
-
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
-    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
-
-    const properties = await PropertyService.listProperties(req.user!, filters, limit, offset);
-    return res.status(200).json({ properties, pagination: { limit, offset } });
-  } catch (error: any) {
-    logger.error('Fetch properties error:', error);
-    if (error.status) {
-      return next(error);
-    }
-    return res.status(500).json({ error: 'Failed to fetch properties' });
-  }
-});
+  },
+);
 
 // POST /api/v1/properties - Create Property Listing
 router.post(
@@ -72,20 +80,21 @@ router.post(
   requireAuthz(Permissions.PROPERTIES_CREATE),
   validateRequestBody(PropertyCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  try {
-    const property = await PropertyService.createProperty(req.user!, req.body);
-    return res.status(201).json({
-      message: 'Property listing created and submitted for PM On-Site Verification',
-      property,
-    });
-  } catch (error: any) {
-    logger.error('Create property error:', error);
-    if (error.status) {
-      return next(error);
+    try {
+      const property = await PropertyService.createProperty(req.user!, req.body);
+      return res.status(201).json({
+        message: 'Property listing created and submitted for PM On-Site Verification',
+        property,
+      });
+    } catch (error: any) {
+      logger.error('Create property error:', error);
+      if (error.status) {
+        return next(error);
+      }
+      return res.status(500).json({ error: 'Failed to create property listing' });
     }
-    return res.status(500).json({ error: 'Failed to create property listing' });
-  }
-});
+  },
+);
 
 // PUT /api/v1/properties/:id - Update Property Listing
 router.put(
@@ -96,10 +105,14 @@ router.put(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const property = await PropertyService.updateProperty(req.user!, propertyId, req.body);
       return res.status(200).json({
         message: 'Property listing updated successfully',
@@ -112,7 +125,7 @@ router.put(
       }
       return res.status(500).json({ error: 'Failed to update property listing' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/confirm-location - PM confirms on-site location details are accurate
@@ -125,7 +138,8 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const result = await PropertyService.confirmLocationByPM(req.user!, propertyId);
       return res.status(200).json({
         message: `Location confirmed for property ${result.property_code}`,
@@ -136,7 +150,7 @@ router.post(
       if (error.status) return next(error);
       return res.status(500).json({ error: 'Failed to confirm location' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/verify - PM On-Site Verification Step
@@ -148,10 +162,14 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const updated = await PropertyService.verifyProperty(req.user!, propertyId, req.body);
 
       return res.status(200).json({
@@ -165,7 +183,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to execute PM verification step' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/dm-polish - Digital Marketing Polish & SEO Tagging Step
@@ -177,10 +195,14 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const updated = await PropertyService.dmPolishProperty(req.user!, propertyId, req.body);
 
       return res.status(200).json({
@@ -194,7 +216,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to execute DM polish step' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/dm-verify-as-is - Digital Marketing Head "Verified As-Is" bypass
@@ -208,7 +230,8 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const updated = await PropertyService.dmVerifyAsIsProperty(req.user!, propertyId, req.body);
 
       return res.status(200).json({
@@ -222,7 +245,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to execute DM verify-as-is step' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/md-approve - MD Final Approval Step (Go Live)
@@ -234,10 +257,14 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const updated = await PropertyService.mdApproveProperty(req.user!, propertyId, req.body);
 
       return res.status(200).json({
@@ -251,7 +278,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to execute MD approval step' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/publications - Toggle publication for a brand
@@ -263,21 +290,27 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const { company_id, is_published } = req.body;
 
       if (!company_id || typeof is_published !== 'boolean') {
-        return res.status(400).json({ error: 'company_id and is_published (boolean) are required' });
+        return res
+          .status(400)
+          .json({ error: 'company_id and is_published (boolean) are required' });
       }
 
       const publication = await PropertyService.togglePublication(
         req.user!,
         propertyId,
         company_id,
-        is_published
+        is_published,
       );
 
       return res.status(200).json({
@@ -291,7 +324,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to toggle publication' });
     }
-  }
+  },
 );
 
 // GET /api/v1/properties/:id/publications - List publications for a property
@@ -302,10 +335,14 @@ router.get(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const publications = await PropertyService.getPublications(req.user!, propertyId);
       return res.status(200).json({ publications });
     } catch (error: any) {
@@ -315,7 +352,7 @@ router.get(
       }
       return res.status(500).json({ error: 'Failed to fetch publications' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/images - Upload property image
@@ -323,15 +360,19 @@ router.post(
   '/:id/images',
   authenticateToken,
   requireAuthz(Permissions.PROPERTIES_UPDATE),
-  propertyImageUpload.single('image'),
+  propertyImageUpload.single('image') as any,
   validateRequestBody(PropertyImageMetadataSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const companyId = req.user!.companyId;
 
       // Verify property exists and belongs to company
@@ -380,7 +421,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to upload image' });
     }
-  }
+  },
 );
 
 // PUT /api/v1/properties/:id/images/:imageId - Update image metadata
@@ -392,15 +433,23 @@ router.put(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const imageId = parseInt(req.params.imageId, 10);
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const companyId = req.user!.companyId;
 
       // Verify property belongs to company
@@ -424,7 +473,7 @@ router.put(
 
       if (alt_text !== undefined) updateData.alt_text = alt_text || null;
       if (sort_order !== undefined) updateData.sort_order = parseInt(sort_order, 10);
-      
+
       const isPrimaryBool = is_primary === 'true' || is_primary === true;
       if (is_primary !== undefined) updateData.is_primary = isPrimaryBool;
 
@@ -450,7 +499,7 @@ router.put(
       }
       return res.status(500).json({ error: 'Failed to update image' });
     }
-  }
+  },
 );
 
 // DELETE /api/v1/properties/:id/images/:imageId - Delete property image
@@ -462,15 +511,23 @@ router.delete(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const imageId = parseInt(req.params.imageId, 10);
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const companyId = req.user!.companyId;
 
       // Verify property belongs to company
@@ -521,7 +578,7 @@ router.delete(
       }
       return res.status(500).json({ error: 'Failed to delete image' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/images/:imageId/approve - Approve image
@@ -533,22 +590,30 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const imageId = parseInt(req.params.imageId, 10);
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const companyId = req.user!.companyId;
 
       const image = await p.propertyImage.findFirst({
-        where: { 
-          id: imageId, 
+        where: {
+          id: imageId,
           property_id: propertyId,
-          property: { company_id: companyId }
+          property: { company_id: companyId },
         },
       });
       if (!image) {
@@ -568,7 +633,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to approve image' });
     }
-  }
+  },
 );
 
 // POST /api/v1/properties/:id/images/:imageId/reject - Reject image
@@ -580,22 +645,30 @@ router.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const propertyId = parseInt(req.params.id, 10);
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(propertyId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const imageId = parseInt(req.params.imageId, 10);
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(imageId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      if (isNaN(imageId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const companyId = req.user!.companyId;
 
       const image = await p.propertyImage.findFirst({
-        where: { 
-          id: imageId, 
+        where: {
+          id: imageId,
           property_id: propertyId,
-          property: { company_id: companyId }
+          property: { company_id: companyId },
         },
       });
       if (!image) {
@@ -615,7 +688,7 @@ router.post(
       }
       return res.status(500).json({ error: 'Failed to reject image' });
     }
-  }
+  },
 );
 
 export default router;

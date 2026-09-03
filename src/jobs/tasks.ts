@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { notifyEmployee } from '../utils/notifyEmployee';
-import { Roles } from '@rrh-ems/shared';
+import { Roles } from '../shared';
 // Mock state for idempotency testing
 const jobState: Record<string, boolean> = {};
 
@@ -111,7 +111,7 @@ export const siteVisitEscalationJob = async () => {
       const md: number[] = [];
       const marketing: number[] = [];
       for (const emp of emps) {
-        const roleNames = emp.roles.map(r => r.role.name);
+        const roleNames = emp.roles.map((r) => r.role.name);
         if (roleNames.includes(Roles.MD)) md.push(emp.id);
         if (roleNames.includes(Roles.MARKETING_DIRECTOR)) marketing.push(emp.id);
       }
@@ -124,7 +124,8 @@ export const siteVisitEscalationJob = async () => {
 
   for (const visit of pendingVisits) {
     const hoursUntilVisit = (visit.scheduled_date.getTime() - now.getTime()) / (1000 * 60 * 60);
-    const hoursNotice = (visit.scheduled_date.getTime() - visit.created_at.getTime()) / (1000 * 60 * 60);
+    const hoursNotice =
+      (visit.scheduled_date.getTime() - visit.created_at.getTime()) / (1000 * 60 * 60);
 
     const needsMD = hoursUntilVisit <= 10 || hoursNotice <= 10;
     const needsMarketing = hoursUntilVisit <= 12 || hoursNotice <= 12;
@@ -134,13 +135,24 @@ export const siteVisitEscalationJob = async () => {
     // Ensure escalation record exists
     if (!visit.escalation) {
       await prisma.siteVisitEscalation.create({
-        data: { site_visit_booking_id: visit.id }
+        data: { site_visit_booking_id: visit.id },
       });
-      visit.escalation = { id: 0, site_visit_booking_id: visit.id, marketing_director_notified_at: null, managing_director_notified_at: null } as any;
+      visit.escalation = {
+        id: 0,
+        site_visit_booking_id: visit.id,
+        marketing_director_notified_at: null,
+        managing_director_notified_at: null,
+      } as any;
     }
 
-    const pmStatus = visit.project_manager ? `${visit.project_manager.full_name || visit.project_manager.employee_code} (Assigned)` : 'Unassigned';
-    const locationInfo = visit.project ? visit.project.name : (visit.property ? visit.property.title : 'Unknown Location');
+    const pmStatus = visit.project_manager
+      ? `${visit.project_manager.full_name || visit.project_manager.employee_code} (Assigned)`
+      : 'Unassigned';
+    const locationInfo = visit.project
+      ? visit.project.name
+      : visit.property
+        ? visit.property.title
+        : 'Unknown Location';
 
     const notificationPayload = {
       type: 'SITE_VISIT_ESCALATED',
@@ -199,10 +211,10 @@ export const staleRescheduleSweepJob = async () => {
         some: {
           status: 'CANCELLED',
           updated_at: { lt: twoDaysAgo },
-        }
-      }
+        },
+      },
     },
-    select: { id: true, lead_code: true, customer_name: true, assigned_to_id: true }
+    select: { id: true, lead_code: true, customer_name: true, assigned_to_id: true },
   });
 
   let notifiedCount = 0;
@@ -218,7 +230,7 @@ export const staleRescheduleSweepJob = async () => {
       // Touch last_contacted_at so we don't spam them every hour
       await prisma.lead.update({
         where: { id: lead.id },
-        data: { last_contacted_at: new Date() }
+        data: { last_contacted_at: new Date() },
       });
     }
   }
@@ -235,7 +247,7 @@ export const leadRecoveryJob = async () => {
   // Fetch all LIVE properties
   const liveProperties = await prisma.property.findMany({
     where: { status: 'LIVE' },
-    select: { id: true }
+    select: { id: true },
   });
 
   let recoveredCount = 0;

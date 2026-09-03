@@ -88,7 +88,7 @@ app.use(
   }),
 );
 app.use(cookieParser());
-app.use(compression({ threshold: 0 }));
+app.use(compression({ threshold: 0 }) as any);
 
 // Body Parser
 app.use(express.json());

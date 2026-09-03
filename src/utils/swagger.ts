@@ -53,9 +53,9 @@ export const setupSwagger = (app: Express) => {
   app.use(
     '/api-docs',
     authenticateToken,
-    swaggerUi.serve,
-    swaggerUi.setup(specs, { explorer: true })
+    swaggerUi.serve as any,
+    swaggerUi.setup(specs, { explorer: true }) as any,
   );
-  
+
   logger.info('[Swagger] API Documentation initialized at /api-docs (Protected)');
 };

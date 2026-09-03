@@ -34,7 +34,7 @@ router.patch('/me', authenticateToken, validateRequestBody(EmployeeSelfUpdateSch
   try {
     const employeeId = req.user!.employeeId;
     const { 
-      full_name, phone, secondary_phone, whatsapp_number, current_address, permanent_address, 
+      full_name, phone, secondary_phone, whatsapp_number, email, current_address, permanent_address, 
       emergency_contact_name, emergency_contact_relation, emergency_contact_phone, 
       blood_group, social_links,
       pan_number, aadhaar_number, bank_name, bank_account_number, bank_ifsc, bank_branch 
@@ -54,6 +54,7 @@ router.patch('/me', authenticateToken, validateRequestBody(EmployeeSelfUpdateSch
     if (phone !== undefined) updateData.phone = phone;
     if (secondary_phone !== undefined) updateData.secondary_phone = secondary_phone;
     if (whatsapp_number !== undefined) updateData.whatsapp_number = whatsapp_number;
+    if (email !== undefined) updateData.email = email;
     if (current_address !== undefined) updateData.current_address = current_address;
     if (permanent_address !== undefined) updateData.permanent_address = permanent_address;
     if (emergency_contact_name !== undefined) updateData.emergency_contact_name = emergency_contact_name;

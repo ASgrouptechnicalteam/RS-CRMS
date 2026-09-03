@@ -44,15 +44,13 @@
     "ts-node": "^10.9.2",
     "typescript": "5.4.5",
     "web-push": "^3.6.7",
-    "zod": "^3.22.4"
-  },
-  "prisma": {
-    "seed": "ts-node prisma/seed.ts"
-  },
-  "devDependencies": {
+    "zod": "^3.22.4",
     "@types/compression": "^1.8.1",
     "@types/node-cron": "^3.0.11",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }

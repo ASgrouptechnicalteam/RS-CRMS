@@ -975,8 +975,13 @@ export const KYC_STATUSES = Object.values(KycStatus) as string[];
  * Raw PAN/Aadhaar NEVER cross the CRM ↔ Portal boundary (Packet 3C §3.4).
  */
 export const CustomerKycWriteSchema = z.object({
-  pan_number: z.string().regex(/^[A-Z0-9]{10}$/, 'PAN must be 10 alphanumeric characters').optional(),
-  aadhaar_number: z.string().regex(/^\d{12}$/, 'Aadhaar must be 12 digits').optional(),
+  pan_number: z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format').or(z.literal('')).optional().nullable(),
+  aadhaar_number: z.string().regex(/^\d{12}$/, 'Aadhaar must be 12 digits').or(z.literal('')).optional().nullable(),
+});
+
+export const LeadBulkUploadSchema = z.object({
+  leads: z.array(LeadCreateSchema).max(500, 'Maximum 500 leads per bulk upload'),
+  source: z.string().optional(),
 });
 
 export type CustomerKycWriteInput = z.infer<typeof CustomerKycWriteSchema>;
@@ -1472,5 +1477,49 @@ export const EmployeeUpdateSchema = EmployeeSelfUpdateSchema.extend({
 
 export const EmployeeRolesUpdateSchema = z.object({
   role_names: z.array(z.string()).min(1, 'At least one role is required')
+});
+
+
+export const BookingCreateSchema = z.object({
+  customer_id: z.number().int().positive(),
+  property_id: z.number().int().positive(),
+  agreed_price: z.number().positive(),
+  booking_amount: z.number().positive(),
+  notes: z.string().optional().nullable(),
+  assigned_employee_id: z.number().int().positive().optional().nullable(),
+});
+
+export const BookingStatusUpdateSchema = z.object({
+  status: z.enum(['TOKEN_RECEIVED', 'CONFIRMED', 'CANCELLED', 'COMPLETED']),
+});
+
+export const PaymentCreateSchema = z.object({
+  booking_id: z.number().int().positive(),
+  installment_id: z.number().int().positive().optional().nullable(),
+  amount: z.number().positive().multipleOf(0.01, 'Amount must have at most 2 decimal places').max(1000000000, 'Amount exceeds sanity check upper bound (100 Crores)'),
+  payment_method: z.enum(['CASH', 'CHEQUE', 'BANK_TRANSFER', 'ONLINE']),
+  reference_number: z.string().min(1, 'Reference number is required').optional().nullable(),
+  notes: z.string().optional().nullable(),
+});
+
+export const PaymentStatusUpdateSchema = z.object({
+  status: z.enum(['SUCCESS', 'FAILED', 'REFUNDED']),
+});
+
+export const InstallmentCreateSchema = z.object({
+  booking_id: z.number().int().positive(),
+  total_booking_amount: z.number().positive().multipleOf(0.01, 'Amount must have at most 2 decimal places'),
+  installments: z.array(z.object({
+    installment_number: z.number().int().positive(),
+    expected_amount: z.number().positive().multipleOf(0.01, 'Amount must have at most 2 decimal places'),
+    due_date: z.string().datetime(),
+    remarks: z.string().optional().nullable(),
+  })).min(1, 'At least one installment is required')
+}).refine((data) => {
+  const sum = data.installments.reduce((acc, curr) => acc + curr.expected_amount, 0);
+  return Math.abs(sum - data.total_booking_amount) < 0.01;
+}, {
+  message: 'The sum of installment amounts must exactly equal the total booking amount.',
+  path: ['installments'],
 });
 

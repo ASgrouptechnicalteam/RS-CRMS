@@ -1071,6 +1071,7 @@ model Payment {
   @@index([booking_id])
   @@index([status])
   @@index([portal_payment_id]) // Phase 11 Packet 3F — scoped dedup lookup
+  @@unique([reference_number])
 }
 
 model Installment {

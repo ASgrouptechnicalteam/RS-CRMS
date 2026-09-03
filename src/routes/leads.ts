@@ -2,7 +2,7 @@ import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
-import { Roles, LeadCreateSchema, LeadStatusUpdateSchema, LeadReassignSchema, Permissions, AddPropertyInterestSchema } from '../shared';
+import { Roles, LeadCreateSchema, LeadStatusUpdateSchema, LeadReassignSchema, LeadBulkUploadSchema, Permissions, AddPropertyInterestSchema } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
 import { LeadService, AppError } from '../services/lead.service';
 import { OpportunityService } from '../services/opportunity.service';
@@ -93,12 +93,10 @@ router.post(
   '/bulk-upload',
   authenticateToken,
   requireAuthz(Permissions.LEADS_BULK_UPLOAD),
+  validateRequestBody(LeadBulkUploadSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { leads: rawLeads } = req.body;
-      if (!Array.isArray(rawLeads) || rawLeads.length === 0) {
-        return res.status(400).json({ error: 'Array of lead rows required in body under "leads"' });
-      }
 
       const result = await LeadService.bulkUploadLeads(req.user!, rawLeads);
       return res.status(200).json({

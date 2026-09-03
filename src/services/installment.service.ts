@@ -15,16 +15,24 @@ export class AppError extends Error {
 
 export class InstallmentService {
   /**
-   * Create a new installment schedule for a booking.
+   * Create a new installment schedule for a booking in bulk.
    */
-  static async createInstallment(
+  static async createInstallments(
     user: TokenPayload,
-    bookingId: number,
-    dto: { installment_number: number; expected_amount: number; due_date: string; remarks?: string }
+    dto: {
+      booking_id: number;
+      total_booking_amount: number;
+      installments: Array<{
+        installment_number: number;
+        expected_amount: number;
+        due_date: string;
+        remarks?: string | null;
+      }>;
+    }
   ) {
     // 1. Verify booking exists and user has access
     const booking = await p.booking.findFirst({
-      where: { id: bookingId, company_id: user.companyId },
+      where: { id: dto.booking_id, company_id: user.companyId },
     });
 
     if (!booking) {
@@ -35,38 +43,48 @@ export class InstallmentService {
       throw new AppError(403, 'You do not have access to this booking');
     }
 
-    // 2. Validate basic rules
-    if (dto.expected_amount <= 0) {
-      throw new AppError(400, 'Installment amount must be greater than zero');
+    // 2. Validate total amount matches booking amount
+    if (Math.abs(booking.agreed_price - dto.total_booking_amount) > 0.01) {
+      throw new AppError(400, 'Total installment amount does not match the agreed price of the booking');
     }
 
     try {
-      // 3. Create installment
-      const installment = await p.installment.create({
-        data: {
-          booking_id: booking.id,
-          installment_number: dto.installment_number,
-          expected_amount: dto.expected_amount,
-          due_date: new Date(dto.due_date),
-          remarks: dto.remarks,
-          recorded_by_id: user.employeeId,
-        },
-      });
+      return await p.$transaction(async (tx) => {
+        // Delete existing PENDING installments to allow recreation if needed
+        await tx.installment.deleteMany({
+          where: { booking_id: booking.id, status: 'PENDING' }
+        });
 
-      // Audit log
-      await p.auditEvent.create({
-        data: {
-          actor_id: user.employeeId,
-          action: 'INSTALLMENT_CREATED',
-          entity_type: 'Installment',
-          entity_id: installment.id,
-          new_value: JSON.stringify({ amount: dto.expected_amount, due: dto.due_date }),
-        },
-      });
+        // Create new installments
+        const createdInstallments = [];
+        for (const inst of dto.installments) {
+          const installment = await tx.installment.create({
+            data: {
+              booking_id: booking.id,
+              installment_number: inst.installment_number,
+              expected_amount: inst.expected_amount,
+              due_date: new Date(inst.due_date),
+              remarks: inst.remarks,
+              recorded_by_id: user.employeeId,
+            },
+          });
+          createdInstallments.push(installment);
+        }
 
-      return installment;
+        // Audit log
+        await tx.auditEvent.create({
+          data: {
+            actor_id: user.employeeId,
+            action: 'INSTALLMENTS_CREATED',
+            entity_type: 'Booking',
+            entity_id: booking.id,
+            new_value: JSON.stringify({ count: dto.installments.length, total: dto.total_booking_amount }),
+          },
+        });
+
+        return createdInstallments;
+      });
     } catch (error: any) {
-      // Catch duplicate constraint unique(booking_id, installment_number)
       if (error.code === 'P2002') {
         throw new AppError(409, 'An installment with this number already exists for this booking');
       }

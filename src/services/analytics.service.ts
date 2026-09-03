@@ -392,7 +392,7 @@ export class AnalyticsService {
       return acc;
     }, {});
     
-    const statuses = ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFICATION_PENDING', 'QUALIFIED', 'DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED', 'BOOKED', 'DROPPED', 'RECOVERED_TO_POOL'];
+    const statuses = ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED', 'BOOKED', 'DROPPED', 'RECOVERED_TO_POOL'];
     const pipeline = statuses.map(status => ({
       status,
       count: pipelineCounts[status] || 0

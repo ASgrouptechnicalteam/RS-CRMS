@@ -9,7 +9,7 @@ import { WorkflowDomain } from '../workflows/types';
 import { PropertyPolicy } from '../policies/property.policy';
 import { buildPropertyScope } from '../authz/dataScope';
 import { slugify, generateUniqueSlug } from '../utils/slugify';
-
+import { logger } from '../utils/logger';
 
 const p = prisma;
 
@@ -302,10 +302,20 @@ export class PropertyService {
       }
     }
 
-    return await p.property.update({
+    const updatedProperty = await p.property.update({
       where: { id: propertyId },
       data: safeData,
     });
+
+    if (updatedProperty.status === 'LIVE') {
+      import('./lead.service').then(({ LeadService }) => {
+        LeadService.triggerLeadRecoveryForProperty(updatedProperty.id).catch(err => 
+          logger.error(`Error triggering lead recovery for property ${updatedProperty.id}:`, err)
+        );
+      });
+    }
+
+    return updatedProperty;
   }
 
   static async verifyProperty(user: TokenPayload, propertyId: number, data: { approved: boolean; notes: string }) {
@@ -523,7 +533,7 @@ export class PropertyService {
 
     const nextStatus = data.approved ? 'LIVE' : 'REJECTED';
 
-    return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+    const result = await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       const updated = await tx.property.update({
         where: { id: propertyId },
         data: {
@@ -556,6 +566,16 @@ export class PropertyService {
 
       return updated;
     });
+
+    if (result.status === 'LIVE') {
+      import('./lead.service').then(({ LeadService }) => {
+        LeadService.triggerLeadRecoveryForProperty(result.id).catch(err => 
+          logger.error(`Error triggering lead recovery for property ${result.id}:`, err)
+        );
+      });
+    }
+
+    return result;
   }
 
   static async togglePublication(user: TokenPayload, propertyId: number, companyId: number, isPublished: boolean) {

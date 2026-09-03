@@ -10,6 +10,7 @@ import {
   SiteVisitRescheduleSchema,
   SiteVisitReconfirmSchema,
   SiteVisitCompleteSchema,
+  SiteVisitCancelConfirmSchema,
   EmptyBodySchema,
 } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
@@ -282,6 +283,99 @@ router.post(
       });
     } catch (error: any) {
       logger.error('Cancel site visit error:', error);
+      next(error);
+    }
+  }
+);
+
+// ==========================================
+// Phase D: Hold/Cancel Flow Endpoints
+// ==========================================
+
+// POST /api/v1/site-visits/:id/hold - Reconfirmation fails → ON_HOLD
+router.post(
+  '/:id/hold',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_VERIFY]),
+  validateRequestBody(EmptyBodySchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      const visit = await SiteVisitService.holdVisit(req.user!, visitId);
+      return res.status(200).json({
+        message: `Site visit ${visit.booking_code} placed on hold.`,
+        visit,
+      });
+    } catch (error: any) {
+      logger.error('Hold site visit error:', error);
+      next(error);
+    }
+  }
+);
+
+// POST /api/v1/site-visits/:id/initiate-cancel - Telecaller requests PM cross-check
+router.post(
+  '/:id/initiate-cancel',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_VERIFY]),
+  validateRequestBody(EmptyBodySchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      const visit = await SiteVisitService.initiateCancellation(req.user!, visitId);
+      return res.status(200).json({
+        message: `Cancellation cross-check initiated for ${visit.booking_code}.`,
+        visit,
+      });
+    } catch (error: any) {
+      logger.error('Initiate cancel site visit error:', error);
+      next(error);
+    }
+  }
+);
+
+// POST /api/v1/site-visits/:id/reject-cancel - PM indicates customer responded
+router.post(
+  '/:id/reject-cancel',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT]),
+  validateRequestBody(EmptyBodySchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      const visit = await SiteVisitService.rejectCancellation(req.user!, visitId);
+      return res.status(200).json({
+        message: `Cancellation rejected for ${visit.booking_code}. Reverted to active reconfirmation.`,
+        visit,
+      });
+    } catch (error: any) {
+      logger.error('Reject cancel site visit error:', error);
+      next(error);
+    }
+  }
+);
+
+// POST /api/v1/site-visits/:id/confirm-cancel - PM explicitly confirms cancellation
+router.post(
+  '/:id/confirm-cancel',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT]),
+  validateRequestBody(SiteVisitCancelConfirmSchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId)) return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      const { reason } = req.body;
+      const visit = await SiteVisitService.confirmCancellation(req.user!, visitId, reason);
+      return res.status(200).json({
+        message: `Site visit ${visit.booking_code} cancellation confirmed.`,
+        visit,
+      });
+    } catch (error: any) {
+      logger.error('Confirm cancel site visit error:', error);
       next(error);
     }
   }

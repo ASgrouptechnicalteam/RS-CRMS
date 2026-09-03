@@ -40,7 +40,11 @@ export type SiteVisitAction =
   | 'CONFIRM'
   | 'START'
   | 'COMPLETE'
-  | 'CANCEL';
+  | 'CANCEL'
+  | 'HOLD'
+  | 'INITIATE_CANCEL'
+  | 'CONFIRM_CANCEL'
+  | 'PM_CANCEL_REJECT';
 
 export class SiteVisitWorkflow implements DomainWorkflow {
   // Only REAL transitions are listed; any action not present is invalid.
@@ -68,9 +72,20 @@ export class SiteVisitWorkflow implements DomainWorkflow {
       CANCEL: 'CANCELLED',
     },
     PENDING_CUSTOMER_RECONFIRMATION: {
+      HOLD: 'ON_HOLD',
       RESCHEDULE: 'RESCHEDULE_REQUESTED',
       CONFIRM: 'CONFIRMED',
       CANCEL: 'CANCELLED',
+    },
+    ON_HOLD: {
+      INITIATE_CANCEL: 'CANCELLATION_PENDING_PM_CONFIRMATION',
+      RESCHEDULE: 'RESCHEDULE_REQUESTED',
+      CANCEL: 'CANCELLED',
+    },
+    CANCELLATION_PENDING_PM_CONFIRMATION: {
+      CONFIRM_CANCEL: 'CANCELLED',
+      PM_CANCEL_REJECT: 'PENDING_CUSTOMER_RECONFIRMATION',
+      RESCHEDULE: 'RESCHEDULE_REQUESTED',
     },
     RESCHEDULE_REQUESTED: {
       PM_CONFIRM: 'PENDING_PM_RECONFIRMATION',

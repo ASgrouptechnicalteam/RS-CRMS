@@ -1,0 +1,186 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.authenticateKioskToken = exports.requirePermission = exports.requireRole = exports.authenticateToken = exports.authenticateServiceToken = void 0;
+const logger_1 = require("../utils/logger");
+const crypto_1 = __importDefault(require("crypto"));
+const jwt_1 = require("../utils/jwt");
+const prisma_1 = require("../lib/prisma");
+const timingSafeEqual = (a, b) => {
+    const aBuf = Buffer.from(a);
+    const bBuf = Buffer.from(b);
+    if (aBuf.length !== bBuf.length)
+        return false;
+    return crypto_1.default.timingSafeEqual(aBuf, bBuf);
+};
+/**
+ * Service-to-service authentication for Portal callbacks.
+ * Validates a Service Bearer Secret against PORTAL_CRM_SECRET (constant-time comparison).
+ * Does NOT require a user JWT — service tokens do not carry user identity.
+ */
+const authenticateServiceToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({
+            error: 'Service token required',
+            code: 'UNAUTHORIZED',
+        });
+    }
+    const expected = process.env.PORTAL_CRM_SECRET;
+    if (!expected) {
+        return res.status(500).json({
+            error: 'Service secret not configured',
+            code: 'SERVER_ERROR',
+        });
+    }
+    if (!timingSafeEqual(token, expected)) {
+        return res.status(401).json({
+            error: 'Invalid service token',
+            code: 'UNAUTHORIZED',
+        });
+    }
+    req.service = { service: 'portal' };
+    next();
+};
+exports.authenticateServiceToken = authenticateServiceToken;
+const authenticateToken = async (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({
+            error: 'Access token required',
+            code: 'UNAUTHORIZED',
+        });
+    }
+    try {
+        const payload = (0, jwt_1.verifyAccessToken)(token);
+        if (payload.tokenVersion === undefined) {
+            logger_1.logger.error('AUTH_FAIL: Token version missing (legacy token)');
+            return res.status(401).json({
+                error: 'Token version missing (legacy token)',
+                code: 'TOKEN_EXPIRED',
+            });
+        }
+        const employee = await prisma_1.prisma.employee.findUnique({
+            where: { id: payload.employeeId },
+            select: { status: true, token_version: true },
+        });
+        if (!employee) {
+            logger_1.logger.error('AUTH_FAIL: User not found in DB');
+            return res.status(401).json({ error: 'User not found', code: 'UNAUTHORIZED' });
+        }
+        if (employee.status !== 'ACTIVE') {
+            logger_1.logger.error('AUTH_FAIL: User status is not ACTIVE');
+            return res.status(401).json({ error: 'User is inactive or suspended', code: 'UNAUTHORIZED' });
+        }
+        if (payload.tokenVersion !== employee.token_version) {
+            logger_1.logger.error('AUTH_FAIL: Token version stale');
+            return res.status(401).json({ error: 'Token version stale', code: 'TOKEN_EXPIRED' });
+        }
+        req.user = payload;
+        next();
+    }
+    catch (err) {
+        logger_1.logger.error('JWT VERIFICATION ERROR:', err.name, err.message, err);
+        // If token expired, return clear code so frontend automatically throws user to login page
+        return res.status(401).json({
+            error: 'Token expired or invalid',
+            code: 'TOKEN_EXPIRED',
+        });
+    }
+};
+exports.authenticateToken = authenticateToken;
+const requireRole = (allowedRoles) => {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Unauthenticated', code: 'UNAUTHORIZED' });
+        }
+        const hasRole = (req.user.roles || []).some((r) => allowedRoles.includes(r));
+        if (!hasRole) {
+            return res.status(403).json({ error: 'Forbidden: Insufficient privileges', code: 'FORBIDDEN' });
+        }
+        next();
+    };
+};
+exports.requireRole = requireRole;
+const requirePermission = (requiredPermissions) => {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Unauthenticated', code: 'UNAUTHORIZED' });
+        }
+        if (!req.user.permissions || !Array.isArray(req.user.permissions)) {
+            return res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+        }
+        const userPermissions = req.user.permissions;
+        const hasPermission = requiredPermissions.some((perm) => userPermissions.includes(perm));
+        if (!hasPermission) {
+            return res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+        }
+        next();
+    };
+};
+exports.requirePermission = requirePermission;
+/**
+ * authenticateKioskToken — accepts ONLY type:'KIOSK' tokens.
+ * Verifies credential_version matches the current DB value so rotations
+ * kill active sessions immediately.
+ * Attaches kiosk info to req.kiosk.
+ */
+const authenticateKioskToken = async (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({
+            error: 'Kiosk token required',
+            code: 'UNAUTHORIZED',
+        });
+    }
+    try {
+        const payload = (0, jwt_1.verifyAccessToken)(token);
+        if (payload.type !== 'KIOSK') {
+            return res.status(401).json({
+                error: 'Token is not a kiosk token',
+                code: 'UNAUTHORIZED',
+            });
+        }
+        if (payload.kioskCredentialId === undefined) {
+            return res.status(401).json({
+                error: 'Kiosk token missing credential ID',
+                code: 'UNAUTHORIZED',
+            });
+        }
+        const kioskCred = await prisma_1.prisma.kioskCredential.findUnique({
+            where: { id: payload.kioskCredentialId },
+            include: { branch: true },
+        });
+        if (!kioskCred) {
+            return res.status(401).json({ error: 'Kiosk credential not found', code: 'UNAUTHORIZED' });
+        }
+        if (!kioskCred.is_active) {
+            return res.status(401).json({ error: 'Kiosk credential is deactivated', code: 'UNAUTHORIZED' });
+        }
+        if (payload.credentialVersion !== kioskCred.credential_version) {
+            return res.status(401).json({ error: 'Kiosk token version stale — please log in again', code: 'TOKEN_EXPIRED' });
+        }
+        req.kiosk = {
+            companyId: kioskCred.company_id,
+            branchId: kioskCred.branch_id,
+            kioskCredentialId: kioskCred.id,
+            credentialVersion: kioskCred.credential_version,
+            label: kioskCred.label,
+            branchName: kioskCred.branch.name,
+        };
+        next();
+    }
+    catch (err) {
+        logger_1.logger.error('KIOSK JWT VERIFICATION ERROR:', err);
+        return res.status(401).json({
+            error: 'Kiosk token expired or invalid',
+            code: 'TOKEN_EXPIRED',
+        });
+    }
+};
+exports.authenticateKioskToken = authenticateKioskToken;

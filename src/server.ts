@@ -60,12 +60,33 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:4173',
-  'https://rscrm.radharealhomeproperties.com'
+  'https://rscrm.radharealhomeproperties.com',
 ];
 if (process.env.APP_URL && !allowedOrigins.includes(process.env.APP_URL)) {
   allowedOrigins.push(process.env.APP_URL);
 }
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Allow known origins or any vercel preview URL
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.vercel.app') ||
+        origin.includes('radharealhomeproperties.com')
+      ) {
+        return callback(null, true);
+      }
+
+      logger.warn(`CORS blocked for origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  }),
+);
 app.use(cookieParser());
 app.use(compression({ threshold: 0 }));
 
@@ -230,7 +251,9 @@ const bootstrapHostingerDatabase = async () => {
     });
 
     const mainBranch =
-      (await p.branch.findFirst({ where: { company_id: company.id, name: 'Miyapur (Main Branch)' } })) ||
+      (await p.branch.findFirst({
+        where: { company_id: company.id, name: 'Miyapur (Main Branch)' },
+      })) ||
       (await p.branch.create({ data: { company_id: company.id, name: 'Miyapur (Main Branch)' } }));
 
     const secondaryBranch =
@@ -265,7 +288,9 @@ const bootstrapHostingerDatabase = async () => {
 
     const empCount = await p.employee.count();
     if (empCount > 0) {
-      logger.info(`[database]: Connected to Hostinger MySQL (${empCount} active employee records loaded)`);
+      logger.info(
+        `[database]: Connected to Hostinger MySQL (${empCount} active employee records loaded)`,
+      );
       return;
     }
 
@@ -274,25 +299,27 @@ const bootstrapHostingerDatabase = async () => {
     const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD;
     if (!defaultPassword) {
       if (process.env.NODE_ENV === 'production') {
-        throw new Error('FATAL: DEFAULT_ADMIN_PASSWORD must be provided in production for initial bootstrap.');
+        throw new Error(
+          'FATAL: DEFAULT_ADMIN_PASSWORD must be provided in production for initial bootstrap.',
+        );
       }
       logger.warn('WARNING: Using insecure default admin password for development bootstrap.');
     }
     const passwordHash = await bcrypt.hash(defaultPassword || 'Radhareal@123', 12);
 
     const initialEmployees = [
-      { 
-        roleName: Roles.ADMIN, 
-        code: 'RRH-ADMIN-001', 
-        name: 'Technical Admin', 
-        phone: '+91 99999 00001', 
-        email: 'admin@radharealhomes.com', 
-        dept: 'IT Systems', 
-        title: 'System Technical Admin', 
-        salary: 120000, 
-        exempt: true, 
-        branchId: mainBranch.id 
-      }
+      {
+        roleName: Roles.ADMIN,
+        code: 'RRH-ADMIN-001',
+        name: 'Technical Admin',
+        phone: '+91 99999 00001',
+        email: 'admin@radharealhomes.com',
+        dept: 'IT Systems',
+        title: 'System Technical Admin',
+        salary: 120000,
+        exempt: true,
+        branchId: mainBranch.id,
+      },
     ];
 
     for (const empDef of initialEmployees) {
@@ -335,7 +362,6 @@ const bootstrapHostingerDatabase = async () => {
     }
 
     logger.info('[database]: Hostinger MySQL database seeded successfully on startup!');
-
   } catch (err: any) {
     logger.error('[database error]:', err.message);
   }
@@ -350,10 +376,14 @@ if (process.env.NODE_ENV === 'production') {
     logger.warn('WARNING: JWT_REFRESH_SECRET is missing or too short for production.');
   }
   if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length < 32) {
-    logger.warn('WARNING: ENCRYPTION_KEY is missing or too short for production. KYC data cannot be encrypted safely.');
+    logger.warn(
+      'WARNING: ENCRYPTION_KEY is missing or too short for production. KYC data cannot be encrypted safely.',
+    );
   }
   if (!process.env.QR_HMAC_SECRET || process.env.QR_HMAC_SECRET.length < 32) {
-    logger.warn('WARNING: QR_HMAC_SECRET is missing or too short for production. Kiosk QR codes cannot be securely signed.');
+    logger.warn(
+      'WARNING: QR_HMAC_SECRET is missing or too short for production. Kiosk QR codes cannot be securely signed.',
+    );
   }
 }
 
@@ -362,7 +392,7 @@ import { initJobs } from './jobs/scheduler';
 if (process.env.NODE_ENV !== 'test') {
   app.listen(port, () => {
     logger.info(`[server]: API running at http://localhost:${port}`);
-  
+
     // Initialize background jobs
     initJobs();
     bootstrapHostingerDatabase();
@@ -372,4 +402,4 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-export default app;
+export default app; // clean commit test

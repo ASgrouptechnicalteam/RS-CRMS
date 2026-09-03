@@ -217,3 +217,59 @@ ${
 
 Reply to this message or call us directly to schedule an exclusive site visit!`;
 }
+
+/**
+ * § Phase E: Mechanism 1 - Automatic Inventory Matching
+ * Finds all dropped leads (due to NO_MATCHING_INVENTORY) that match a given property.
+ * Criteria: Strict Location match AND Budget range overlap.
+ */
+export const matchDroppedLeadsToProperty = async (propertyId: number): Promise<number[]> => {
+  const prop = await p.property.findUnique({
+    where: { id: propertyId }
+  });
+
+  if (!prop || prop.status !== 'LIVE') return [];
+
+  // Fetch candidate leads
+  const candidateLeads = await p.lead.findMany({
+    where: {
+      company_id: prop.company_id,
+      status: 'DROPPED',
+      exit_reason: 'NO_MATCHING_INVENTORY'
+    }
+  });
+
+  const matchedLeadIds: number[] = [];
+
+  for (const lead of candidateLeads) {
+    let locationMatch = false;
+    let budgetMatch = false;
+
+    // 1. Location Match
+    if (lead.preferred_location && prop.location) {
+      const prefLoc = lead.preferred_location.toLowerCase();
+      const propLoc = prop.location.toLowerCase();
+
+      if (prefLoc.includes(propLoc) || propLoc.includes(prefLoc)) {
+        locationMatch = true;
+      } else {
+        const prefWords = prefLoc.split(/[\s,/]+/);
+        locationMatch = prefWords.some((w: string) => w.length > 3 && propLoc.includes(w));
+      }
+    }
+
+    // 2. Budget Overlap (allow 15% flex)
+    if (lead.budget_max && lead.budget_max > 0) {
+      if (prop.price <= lead.budget_max * 1.15) {
+        budgetMatch = true;
+      }
+    }
+
+    // Require both
+    if (locationMatch && budgetMatch) {
+      matchedLeadIds.push(lead.id);
+    }
+  }
+
+  return matchedLeadIds;
+};

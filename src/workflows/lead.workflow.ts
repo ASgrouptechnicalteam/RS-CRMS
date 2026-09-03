@@ -34,7 +34,6 @@ export class LeadWorkflow implements DomainWorkflow {
   private static readonly DROPPABLE_FROM = new Set<string>([
     LeadStatus.ASSIGNED,
     LeadStatus.CONTACTED,
-    LeadStatus.QUALIFICATION_PENDING,
     LeadStatus.QUALIFIED,
     LeadStatus.DEMO_SCHEDULED,
     LeadStatus.DEMO_COMPLETED,
@@ -48,19 +47,6 @@ export class LeadWorkflow implements DomainWorkflow {
    * Spec §1 row 2: "LeadActivity with activity_type: CALL_LOGGED must exist". */
   private static readonly REQUIRES_CALL_LOGGED = new Set<string>([
     LeadStatus.ASSIGNED,
-  ]);
-
-  /** Statuses that can auto-advance to QUALIFICATION_PENDING when all qualification
-   * fields (budget_min, budget_max, property_type_preference, preferred_location)
-   * are still null. Spec §1 row 3. */
-  private static readonly AUTO_TO_QUALIFICATION_PENDING_FROM = new Set<string>([
-    LeadStatus.CONTACTED,
-  ]);
-
-  /** Statuses that can directly go to QUALIFIED when all qualification fields are
-   * already present, skipping QUALIFICATION_PENDING. Spec §1 row 4. */
-  private static readonly CAN_SKIP_TO_QUALIFIED_FROM = new Set<string>([
-    LeadStatus.CONTACTED,
   ]);
 
   /** Which qualification fields must be non-null to count as "qualified". */
@@ -92,12 +78,6 @@ export class LeadWorkflow implements DomainWorkflow {
     [LeadStatus.ASSIGNED]: [LeadStatus.CONTACTED, LeadStatus.DROPPED],
 
     [LeadStatus.CONTACTED]: [
-      LeadStatus.QUALIFICATION_PENDING,
-      LeadStatus.QUALIFIED,
-      LeadStatus.DROPPED,
-    ],
-
-    [LeadStatus.QUALIFICATION_PENDING]: [
       LeadStatus.QUALIFIED,
       LeadStatus.DROPPED,
     ],
@@ -178,26 +158,13 @@ export class LeadWorkflow implements DomainWorkflow {
       }
     }
 
-    // §1 row 3: CONTACTED → QUALIFICATION_PENDING is auto only when all
-    // qualification fields are still null.
-    if (newStatus === LeadStatus.QUALIFICATION_PENDING &&
-        LeadWorkflow.AUTO_TO_QUALIFICATION_PENDING_FROM.has(currentState)) {
-      if (!LeadWorkflow.isQualificationEmpty(entity)) {
-        return {
-          allowed: false,
-          reason: 'Transition to QUALIFICATION_PENDING is only auto-valid when all qualification fields (budget_min, budget_max, property_type_preference, preferred_location) are null. When fields are present, use QUALIFIED directly.',
-        };
-      }
-    }
-
-    // §1 row 4: CONTACTED → QUALIFIED direct is only valid when all
-    // qualification fields are already present (skip QUALIFICATION_PENDING).
-    if (newStatus === LeadStatus.QUALIFIED &&
-        LeadWorkflow.CAN_SKIP_TO_QUALIFIED_FROM.has(currentState)) {
+    // §1 row 4: CONTACTED → QUALIFIED is only valid when all
+    // qualification fields are present.
+    if (newStatus === LeadStatus.QUALIFIED) {
       if (!LeadWorkflow.isFullyQualified(entity)) {
         return {
           allowed: false,
-          reason: 'Transition to QUALIFIED requires all qualification fields (budget_min, budget_max, property_type_preference, preferred_location) to be present. Use QUALIFICATION_PENDING first to capture them.',
+          reason: 'Transition to QUALIFIED requires all qualification fields (budget_min, budget_max, property_type_preference, preferred_location) to be present.',
         };
       }
     }

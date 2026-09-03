@@ -29,8 +29,10 @@ export class JobManager {
       cron.schedule(job.schedule, async () => {
         try {
           logger.info(`[Jobs] Starting ${job.name}...`);
+          const start = performance.now();
           await job.handler();
-          logger.info(`[Jobs] Completed ${job.name} successfully.`);
+          const duration = Math.round(performance.now() - start);
+          logger.info(`[Jobs] Completed ${job.name} successfully in ${duration}ms.`);
         } catch (error) {
           logger.error({ err: error }, `[Jobs] FAILURE in ${job.name}: Alerting system!`);
         }
@@ -44,8 +46,10 @@ export class JobManager {
     if (!job) throw new Error(`Job ${name} not found`);
     logger.info(`[Jobs] Manually triggering ${job.name}...`);
     try {
+      const start = performance.now();
       await job.handler();
-      logger.info(`[Jobs] Manual execution of ${job.name} completed successfully.`);
+      const duration = Math.round(performance.now() - start);
+      logger.info(`[Jobs] Manual execution of ${job.name} completed successfully in ${duration}ms.`);
     } catch (error) {
       logger.error({ err: error }, `[Jobs] FAILURE in manual execution of ${job.name}: Alerting system!`);
       throw error;

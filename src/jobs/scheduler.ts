@@ -57,12 +57,28 @@ jobManager.register({
   envDisableKey: 'DISABLE_JOB_REPORT_GEN'
 });
 
-// 8. Intentional failing job (For testing failure alert)
+// 8. Site Visit Escalation (Every 15 minutes)
 jobManager.register({
-  name: 'Failing Test Job',
-  schedule: '0 0 * * *', // midnight, but triggered manually
-  handler: tasks.failingTestJob,
-  envDisableKey: 'DISABLE_JOB_FAILING_TEST'
+  name: 'Site Visit Escalation',
+  schedule: '*/15 * * * *',
+  handler: tasks.siteVisitEscalationJob,
+  envDisableKey: 'DISABLE_JOB_SITE_VISIT_ESCALATION'
+});
+
+// 9. Stale Reschedule Notification (Hourly)
+jobManager.register({
+  name: 'Stale Reschedule Sweep',
+  schedule: '0 * * * *',
+  handler: tasks.staleRescheduleSweepJob,
+  envDisableKey: 'DISABLE_JOB_STALE_RESCHEDULE'
+});
+
+// 10. Lead Recovery Job (Mechanism 1 Nightly Sweep) (Daily at 2:00 AM)
+jobManager.register({
+  name: 'Lead Recovery Sweep',
+  schedule: '0 2 * * *',
+  handler: tasks.leadRecoveryJob,
+  envDisableKey: 'DISABLE_JOB_LEAD_RECOVERY'
 });
 
 export const initJobs = () => {

@@ -2,7 +2,7 @@ import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
-import { Roles, LeadCreateSchema, LeadStatusUpdateSchema, LeadReassignSchema, LeadBulkUploadSchema, Permissions, AddPropertyInterestSchema } from '../shared';
+import { Roles, LeadCreateSchema, LeadStatusUpdateSchema, LeadReassignSchema, Permissions, AddPropertyInterestSchema } from '../shared';
 import { validateRequestBody } from '../middleware/validate';
 import { LeadService, AppError } from '../services/lead.service';
 import { OpportunityService } from '../services/opportunity.service';
@@ -93,10 +93,12 @@ router.post(
   '/bulk-upload',
   authenticateToken,
   requireAuthz(Permissions.LEADS_BULK_UPLOAD),
-  validateRequestBody(LeadBulkUploadSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { leads: rawLeads } = req.body;
+      if (!Array.isArray(rawLeads) || rawLeads.length === 0) {
+        return res.status(400).json({ error: 'Array of lead rows required in body under "leads"' });
+      }
 
       const result = await LeadService.bulkUploadLeads(req.user!, rawLeads);
       return res.status(200).json({
@@ -305,6 +307,46 @@ router.get(
       const tasks = await LeadService.getLeadTasks(req.user!, leadId);
 
       return res.status(200).json({ tasks });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  }
+);
+
+// POST /api/v1/leads/:id/recover-manual - Manually recover a dropped/cancelled lead (Same ID)
+router.post(
+  '/:id/recover-manual',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      const recovered = await LeadService.recoverManualLead(req.user!, leadId);
+
+      return res.status(200).json({
+        message: 'Lead manually recovered successfully',
+        lead: recovered
+      });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  }
+);
+
+// POST /api/v1/leads/:id/recover-fresh - Start a fresh lead from a dropped/cancelled one (New ID)
+router.post(
+  '/:id/recover-fresh',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE), // Or LEADS_CREATE, but practically they need access to the old lead
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      const freshLead = await LeadService.recoverFreshLead(req.user!, leadId);
+
+      return res.status(201).json({
+        message: 'Fresh lead created successfully from history',
+        lead: freshLead
+      });
     } catch (error: any) {
       return handleServiceError(error, res);
     }

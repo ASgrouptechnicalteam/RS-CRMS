@@ -2,11 +2,24 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
-import { Permissions, BookingCreateSchema, BookingStatusUpdateSchema } from '../shared';
+import { Permissions } from '../shared';
 import { BookingService } from '../services/booking.service';
-import { validateRequestBody } from '../middleware/validate';
 
 const router = Router();
+
+// Zod schemas for validation
+const CreateBookingSchema = z.object({
+  customer_id: z.number().int().positive(),
+  property_id: z.number().int().positive(),
+  agreed_price: z.number().positive(),
+  booking_amount: z.number().positive(),
+  notes: z.string().optional(),
+  assigned_employee_id: z.number().int().positive().optional(),
+});
+
+const UpdateBookingStatusSchema = z.object({
+  status: z.enum(['TOKEN_RECEIVED', 'CONFIRMED', 'CANCELLED', 'COMPLETED']),
+});
 
 // Routes
 router.use(authenticateToken);
@@ -53,10 +66,9 @@ router.get(
 router.post(
   '/',
   requireAuthz(Permissions.BOOKINGS_CREATE as any),
-  validateRequestBody(BookingCreateSchema),
   async (req: any, res, next) => {
     try {
-      const dto = req.body;
+      const dto = CreateBookingSchema.parse(req.body);
       const booking = await BookingService.createBooking(req.user, dto);
       res.status(201).json(booking);
     } catch (error) {
@@ -97,10 +109,9 @@ router.put(
   // Use BOOKINGS_UPDATE as base for this generic facade, 
   // the service layer enforces specific permissions (like CONFIRM/CANCEL)
   requireAuthz(Permissions.BOOKINGS_UPDATE as any), 
-  validateRequestBody(BookingStatusUpdateSchema),
   async (req: any, res, next) => {
     try {
-      const { status } = req.body;
+      const { status } = UpdateBookingStatusSchema.parse(req.body);
       
       const booking = await BookingService.updateBookingStatus(req.user, parseInt(req.params.id, 10), status);
       res.json(booking);

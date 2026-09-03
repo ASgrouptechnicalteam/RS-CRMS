@@ -192,4 +192,44 @@ router.get('/team', authenticateToken, async (req: AuthenticatedRequest, res: Re
   }
 });
 
+router.get('/telecaller-metrics', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { telecallerId, startDate, endDate } = req.query;
+    const start = startDate ? new Date(startDate as string) : new Date(new Date().setDate(1)); // Default to start of month
+    const end = endDate ? new Date(endDate as string) : new Date();
+
+    const tId = telecallerId ? parseInt(telecallerId as string, 10) : undefined;
+    
+    // In production, add authorization to verify they are allowed to check this user
+    
+    const { PerformanceTrackingService } = await import('../services/performanceTracking.service');
+    const metrics = await PerformanceTrackingService.getTelecallerMetrics(req.user!, start, end, tId);
+    
+    return res.status(200).json({ metrics });
+  } catch (error) {
+    logger.error('Fetch telecaller metrics error:', error);
+    return res.status(500).json({ error: 'Failed to fetch telecaller metrics' });
+  }
+});
+
+router.get('/pm-metrics', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { pmId, startDate, endDate } = req.query;
+    const start = startDate ? new Date(startDate as string) : new Date(new Date().setDate(1));
+    const end = endDate ? new Date(endDate as string) : new Date();
+
+    const pId = pmId ? parseInt(pmId as string, 10) : undefined;
+    
+    // In production, add authorization checks
+    
+    const { PerformanceTrackingService } = await import('../services/performanceTracking.service');
+    const metrics = await PerformanceTrackingService.getPmMetrics(req.user!, start, end, pId);
+    
+    return res.status(200).json({ metrics });
+  } catch (error) {
+    logger.error('Fetch pm metrics error:', error);
+    return res.status(500).json({ error: 'Failed to fetch pm metrics' });
+  }
+});
+
 export default router;

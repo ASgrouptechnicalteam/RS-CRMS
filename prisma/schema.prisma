@@ -10,6 +10,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum LeadOwnershipType {
+  POOL
+  DIRECT
+}
+
+enum LeadExitReason {
+  NO_MATCHING_INVENTORY
+  CHOSE_COMPETITOR
+  BUDGET_MISMATCH
+  NOT_READY
+  DO_NOT_CONTACT
+  OTHER
+}
+
+enum SiteVisitStatus {
+  REQUESTED
+  PENDING_ACCEPTANCE
+  REASSIGNED
+  ESCALATED_TO_MARKETING_DIRECTOR
+  ACCEPTED
+  PENDING_CUSTOMER_RECONFIRMATION
+  RESCHEDULE_REQUESTED
+  PENDING_PM_RECONFIRMATION
+  CONFIRMED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+  CANCELLATION_PENDING_PM_CONFIRMATION
+}
+
 model Company {
   id                  Int    @id @default(autoincrement())
   name                String
@@ -118,34 +149,38 @@ model Employee {
   company Company @relation(fields: [company_id], references: [id])
   branch  Branch? @relation(fields: [branch_id], references: [id])
 
-  roles                      EmployeeRole[]
-  branches                   EmployeeBranch[]
-  permission_overrides       EmployeePermissionOverride[]
-  qr_codes                   EmployeeQrCode[]
-  attendance_logs            AttendanceLog[]
-  daily_reports              DailyReport[]
-  kiosk_credentials_created  KioskCredential[]            @relation("KioskCredentialsCreated")
-  assigned_tasks             Task[]                       @relation("AssignedTasks")
-  notifications              Notification[]
-  performance_snapshots      PerformanceSnapshot[]
-  daily_targets              DailyTarget[]
-  assigned_leads             Lead[]                       @relation("AssignedLeads")
-  created_leads              Lead[]                       @relation("CreatedLeads")
-  referred_leads             Lead[]                       @relation("ReferredLeads")
-  assigned_customers         Customer[]                   @relation("AssignedCustomers")
-  lead_activities            LeadActivity[]
-  assigned_projects          Project[]                    @relation("AssignedPMProjects")
-  assigned_properties        Property[]                   @relation("AssignedPMProperties")
-  dm_executive_properties    Property[]                   @relation("DMExecutiveProperties")
-  created_properties         Property[]                   @relation("CreatedProperties")
-  property_images            PropertyImage[]
-  property_verification_logs PropertyVerificationLog[]
-  telecaller_bookings        SiteVisitBooking[]           @relation("TelecallerBookings")
-  pm_bookings                SiteVisitBooking[]           @relation("PMBookings")
-  agent_bookings             SiteVisitBooking[]           @relation("AgentBookings")
+  roles                         EmployeeRole[]
+  branches                      EmployeeBranch[]
+  permission_overrides          EmployeePermissionOverride[]
+  qr_codes                      EmployeeQrCode[]
+  attendance_logs               AttendanceLog[]
+  daily_reports                 DailyReport[]
+  kiosk_credentials_created     KioskCredential[]            @relation("KioskCredentialsCreated")
+  assigned_tasks                Task[]                       @relation("AssignedTasks")
+  notifications                 Notification[]
+  performance_snapshots         PerformanceSnapshot[]
+  daily_targets                 DailyTarget[]
+  assigned_leads                Lead[]                       @relation("AssignedLeads")
+  created_leads                 Lead[]                       @relation("CreatedLeads")
+  introduced_leads              Lead[]                       @relation("IntroducedLeads")
+  demos_handled                 Demo[]                       @relation("DemoHandler")
+  referred_leads                Lead[]                       @relation("ReferredLeads")
+  assigned_customers            Customer[]                   @relation("AssignedCustomers")
+  lead_activities               LeadActivity[]
+  assigned_projects             Project[]                    @relation("AssignedPMProjects")
+  assigned_properties           Property[]                   @relation("AssignedPMProperties")
+  dm_executive_properties       Property[]                   @relation("DMExecutiveProperties")
+  created_properties            Property[]                   @relation("CreatedProperties")
+  property_images               PropertyImage[]
+  property_verification_logs    PropertyVerificationLog[]
+  telecaller_bookings           SiteVisitBooking[]           @relation("TelecallerBookings")
+  pm_bookings                   SiteVisitBooking[]           @relation("PMBookings")
+  pm_cancellation_confirmations SiteVisitBooking[]           @relation("PMCancellationConfirmations")
+  pm_reassignments_made         PMReassignmentHistory[]      @relation("ReassignedByPM")
+  pm_reassignments_received     PMReassignmentHistory[]      @relation("ReassignedToPM")
+  agent_bookings                SiteVisitBooking[]           @relation("AgentBookings")
 
   // §1 + §2 back-relations
-  demo_handler_leads         Lead[]                  @relation("DemoHandlerLeads")
   sv_reassignments_from      SiteVisitReassignment[] @relation("SiteVisitReassignmentFrom")
   sv_reassignments_to        SiteVisitReassignment[] @relation("SiteVisitReassignmentTo")
   expense_refunds            ExpenseRefund[]         @relation("SubmittedRefunds")
@@ -427,15 +462,16 @@ model PerformanceSnapshot {
 }
 
 model Lead {
-  id                       Int       @id @default(autoincrement())
-  lead_code                String    @unique
+  id                       Int               @id @default(autoincrement())
+  lead_code                String            @unique
   company_id               Int
   branch_id                Int?
   customer_name            String
   phone                    String
   email                    String?
-  source                   String    @default("MANUAL_ENTRY") // MANUAL_ENTRY, BULK_UPLOAD, WEBSITE, FACEBOOK_ADS, GOOGLE_ADS, WALK_IN, REFERRAL
-  status                   String    @default("NEW") // NEW, ASSIGNED, CONTACTED, QUALIFICATION_PENDING, QUALIFIED, DEMO_SCHEDULED, DEMO_COMPLETED, SITE_VISIT_SCHEDULED, SITE_VISIT_COMPLETED, NEGOTIATION, BOOKING_INITIATED, BOOKED, DROPPED, RECOVERED_TO_POOL
+  source                   String            @default("MANUAL_ENTRY") // MANUAL_ENTRY, BULK_UPLOAD, WEBSITE, FACEBOOK_ADS, GOOGLE_ADS, WALK_IN, REFERRAL
+  ownership_type           LeadOwnershipType @default(POOL)
+  status                   String            @default("NEW") // NEW, ASSIGNED, CONTACTED, QUALIFIED, DEMO_SCHEDULED, DEMO_COMPLETED, SITE_VISIT_SCHEDULED, SITE_VISIT_COMPLETED, NEGOTIATION, BOOKING_INITIATED, BOOKED, DROPPED, RECOVERED_TO_POOL
   assigned_to_id           Int?
   assigned_at              DateTime?
   assignment_type          String? // PERFORMANCE_WEIGHTED, MANUAL_OVERRIDE, PROJECT_PM_PREFERENCE
@@ -443,8 +479,9 @@ model Lead {
   budget_min               Float?
   budget_max               Float?
   preferred_location       String?
-  notes                    String?   @db.Text
+  notes                    String?           @db.Text
   created_by_id            Int? // Nullable: public website leads have no employee creator
+  introduced_by_id         Int?
   last_contacted_at        DateTime?
 
   // Phase 4 - Lead Engine Enhancements
@@ -456,26 +493,29 @@ model Lead {
   sla_breach_at        DateTime?
   referral_person_name String?
   referral_employee_id Int?
+  previous_lead_id     Int?
 
   company                Company   @relation(fields: [company_id], references: [id])
   branch                 Branch?   @relation(fields: [branch_id], references: [id])
   assigned_to            Employee? @relation("AssignedLeads", fields: [assigned_to_id], references: [id])
   created_by             Employee? @relation("CreatedLeads", fields: [created_by_id], references: [id])
+  introduced_by          Employee? @relation("IntroducedLeads", fields: [introduced_by_id], references: [id])
   referral_employee      Employee? @relation("ReferredLeads", fields: [referral_employee_id], references: [id])
   project_id             Int?
   project                Project?  @relation(fields: [project_id], references: [id])
+  previous_lead          Lead?     @relation("LeadHistory", fields: [previous_lead_id], references: [id])
+  next_leads             Lead[]    @relation("LeadHistory")
+  
   enquiry_type           String?
   preferred_contact_time String?
   property_ids           Json?
 
   // §1 Lead Macro-Status Pipeline — exit & demo tracking
-  exit_reason        String?   @db.Text
+  exit_reason        LeadExitReason?
   exited_from_status String? // snapshot of Lead.status at the moment of DROPPED (for reporting)
-  demo_scheduled_at  DateTime?
-  demo_handler_id    Int?
-  demo_handler       Employee? @relation("DemoHandlerLeads", fields: [demo_handler_id], references: [id])
 
   activities           LeadActivity[]
+  demos                Demo[]
   matching_requirement LeadMatchingRequirement?
   site_visits          SiteVisitBooking[]
   property_interests   LeadPropertyInterest[]
@@ -636,8 +676,9 @@ model Property {
   locked_by_booking_id Int?      @unique
   locked_by_booking    Booking?  @relation("PropertyLock", fields: [locked_by_booking_id], references: [id])
 
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  created_at             DateTime                 @default(now())
+  updated_at             DateTime                 @updatedAt
+  DemoInterestedProperty DemoInterestedProperty[]
 
   @@unique([company_id, slug])
   @@index([company_id])
@@ -707,38 +748,39 @@ model PropertyVerificationLog {
 }
 
 model SiteVisitBooking {
-  id                      Int       @id @default(autoincrement())
-  booking_code            String    @unique
-  lead_id                 Int
-  property_id             Int?
-  telecaller_id           Int
-  project_manager_id      Int?
-  assigned_agent_id       Int?
-  project_id              Int? // A 2: authoritative project for this visit (all linked properties share it)
-  scheduled_date          DateTime
-  status                  String    @default("REQUESTED")
-  // §2 Site Visit Sub-Workflow state machine:
-  // REQUESTED, PENDING_ACCEPTANCE, REASSIGNED, ESCALATED_TO_MARKETING_DIRECTOR,
-  // ACCEPTED, PENDING_CUSTOMER_RECONFIRMATION, RESCHEDULE_REQUESTED,
-  // PENDING_PM_RECONFIRMATION, CONFIRMED, ACTIVE, COMPLETED, CANCELLED
-  verification_call_notes String?   @db.Text
-  feedback_notes          String?   @db.Text
-  rating                  String? // HOT_INTERESTED, WARM, COLD, NOT_INTERESTED
-  proof_photo_url         String?
-  completed_at            DateTime?
-  opportunity_id          Int?
+  id                              Int             @id @default(autoincrement())
+  booking_code                    String          @unique
+  lead_id                         Int
+  property_id                     Int?
+  telecaller_id                   Int
+  project_manager_id              Int?
+  assigned_agent_id               Int?
+  project_id                      Int? // A 2: authoritative project for this visit (all linked properties share it)
+  scheduled_date                  DateTime
+  status                          SiteVisitStatus @default(REQUESTED)
+  cancellation_reason             String?         @db.Text
+  cancellation_confirmed_by_pm_id Int?
+  verification_call_notes         String?         @db.Text
+  feedback_notes                  String?         @db.Text
+  rating                          String? // HOT_INTERESTED, WARM, COLD, NOT_INTERESTED
+  proof_photo_url                 String?
+  completed_at                    DateTime?
+  opportunity_id                  Int?
 
-  lead            Lead         @relation(fields: [lead_id], references: [id], onDelete: Cascade)
-  opportunity     Opportunity? @relation(fields: [opportunity_id], references: [id], onDelete: SetNull)
-  property        Property?    @relation(fields: [property_id], references: [id], onDelete: SetNull)
-  project         Project?     @relation(fields: [project_id], references: [id], onDelete: SetNull)
-  telecaller      Employee     @relation("TelecallerBookings", fields: [telecaller_id], references: [id])
-  project_manager Employee?    @relation("PMBookings", fields: [project_manager_id], references: [id])
-  assigned_agent  Employee?    @relation("AgentBookings", fields: [assigned_agent_id], references: [id])
+  lead                         Lead         @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  opportunity                  Opportunity? @relation(fields: [opportunity_id], references: [id], onDelete: SetNull)
+  property                     Property?    @relation(fields: [property_id], references: [id], onDelete: SetNull)
+  project                      Project?     @relation(fields: [project_id], references: [id], onDelete: SetNull)
+  telecaller                   Employee     @relation("TelecallerBookings", fields: [telecaller_id], references: [id])
+  project_manager              Employee?    @relation("PMBookings", fields: [project_manager_id], references: [id])
+  cancellation_confirmed_by_pm Employee?    @relation("PMCancellationConfirmations", fields: [cancellation_confirmed_by_pm_id], references: [id])
+  assigned_agent               Employee?    @relation("AgentBookings", fields: [assigned_agent_id], references: [id])
 
   // §2 nested models
   site_visit_properties SiteVisitProperty[]
   reassignments         SiteVisitReassignment[]
+  reassignment_history  PMReassignmentHistory[]
+  escalation            SiteVisitEscalation?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -945,12 +987,16 @@ model Customer {
   phone      String
   email      String?
 
-  status       String  @default("ACTIVE") // ACTIVE, INACTIVE, BLACKLISTED
-  source       String  @default("MANUAL_ENTRY")
-  campaign     String?
-  utm_source   String?
-  utm_medium   String?
-  utm_campaign String?
+  temp_password_expiry DateTime?
+  force_password_reset Boolean   @default(false)
+  password_hash        String?
+  avatar_url           String?
+  status               String    @default("ACTIVE") // ACTIVE, INACTIVE, BLACKLISTED
+  source               String    @default("MANUAL_ENTRY")
+  campaign             String?
+  utm_source           String?
+  utm_medium           String?
+  utm_campaign         String?
 
   assigned_to_id Int?
   origin_lead_id Int? @unique
@@ -1071,7 +1117,6 @@ model Payment {
   @@index([booking_id])
   @@index([status])
   @@index([portal_payment_id]) // Phase 11 Packet 3F — scoped dedup lookup
-  @@unique([reference_number])
 }
 
 model Installment {
@@ -1252,4 +1297,51 @@ model PMLocationAssignment {
   company Company  @relation(fields: [company_id], references: [id])
 
   @@unique([pm_id, location, company_id])
+}
+
+model PMReassignmentHistory {
+  id                    Int      @id @default(autoincrement())
+  site_visit_booking_id Int
+  reassigned_by_pm_id   Int
+  reassigned_to_pm_id   Int
+  created_at            DateTime @default(now())
+
+  booking          SiteVisitBooking @relation(fields: [site_visit_booking_id], references: [id], onDelete: Cascade)
+  reassigned_by_pm Employee         @relation("ReassignedByPM", fields: [reassigned_by_pm_id], references: [id])
+  reassigned_to_pm Employee         @relation("ReassignedToPM", fields: [reassigned_to_pm_id], references: [id])
+}
+
+model SiteVisitEscalation {
+  id                             Int       @id @default(autoincrement())
+  site_visit_booking_id          Int       @unique
+  marketing_director_notified_at DateTime?
+  managing_director_notified_at  DateTime?
+
+  booking SiteVisitBooking @relation(fields: [site_visit_booking_id], references: [id], onDelete: Cascade)
+}
+
+model Demo {
+  id           Int      @id @default(autoincrement())
+  lead_id      Int
+  handler_id   Int
+  scheduled_at DateTime
+  summary      String   @db.Text
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  lead                  Lead                     @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  handler               Employee                 @relation("DemoHandler", fields: [handler_id], references: [id])
+  interested_properties DemoInterestedProperty[]
+}
+
+model DemoInterestedProperty {
+  id          Int      @id @default(autoincrement())
+  demo_id     Int
+  property_id Int
+  created_at  DateTime @default(now())
+
+  demo     Demo     @relation(fields: [demo_id], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [property_id], references: [id], onDelete: Cascade)
+
+  @@unique([demo_id, property_id])
 }

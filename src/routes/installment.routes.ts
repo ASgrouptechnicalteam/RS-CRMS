@@ -2,11 +2,18 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
-import { Permissions, InstallmentCreateSchema } from '../shared';
+import { Permissions } from '../shared';
 import { InstallmentService } from '../services/installment.service';
-import { validateRequestBody } from '../middleware/validate';
 
 const router = Router();
+
+const CreateInstallmentSchema = z.object({
+  booking_id: z.number().int().positive(),
+  installment_number: z.number().int().positive(),
+  expected_amount: z.number().positive(),
+  due_date: z.string().datetime(),
+  remarks: z.string().optional(),
+});
 
 router.use(authenticateToken);
 
@@ -30,12 +37,11 @@ router.get(
 router.post(
   '/',
   requireAuthz(Permissions.PAYMENTS_CREATE as any), // Only those who can create payments can create a schedule
-  validateRequestBody(InstallmentCreateSchema),
   async (req: any, res, next) => {
     try {
-      const dto = req.body;
-      const installments = await InstallmentService.createInstallments(req.user, dto);
-      res.status(201).json(installments);
+      const dto = CreateInstallmentSchema.parse(req.body);
+      const installment = await InstallmentService.createInstallment(req.user, dto.booking_id, dto);
+      res.status(201).json(installment);
     } catch (error) {
       next(error);
     }

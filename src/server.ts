@@ -389,7 +389,9 @@ if (process.env.NODE_ENV === 'production') {
 
 import { initJobs } from './jobs/scheduler';
 
-if (process.env.NODE_ENV !== 'test') {
+// In a Serverless environment (like Vercel), we must not call app.listen() or start background cron jobs
+// because Vercel handles the port binding and crons keep the event loop alive, causing timeouts/crashes.
+if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
   app.listen(port, () => {
     logger.info(`[server]: API running at http://localhost:${port}`);
 

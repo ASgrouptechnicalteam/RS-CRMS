@@ -587,11 +587,12 @@ export class LeadService {
     const entityContext: any = {
       ...lead,
       exit_reason: guardFields?.exit_reason ?? lead.exit_reason,
-      demo_scheduled_at: guardFields?.demo_scheduled_at ?? (lead as any).demo_scheduled_at,
-      demo_handler_id: guardFields?.demo_handler_id ?? (lead as any).demo_handler_id,
     };
     if (guardFields?.demo_scheduled_at) {
-      entityContext.demo_scheduled_at = new Date(guardFields.demo_scheduled_at);
+      entityContext.pending_demo = {
+        scheduled_at: guardFields.demo_scheduled_at,
+        handler_id: guardFields.demo_handler_id
+      };
     }
     if (guardFields?.qualification) {
       const q = guardFields.qualification;
@@ -600,6 +601,11 @@ export class LeadService {
       if (q.property_type_preference !== undefined) entityContext.property_type_preference = q.property_type_preference;
       if (q.preferred_location !== undefined) entityContext.preferred_location = q.preferred_location;
     }
+    
+    if (newStatus === 'DEMO_SCHEDULED' || newStatus === 'DEMO_COMPLETED') {
+      entityContext.demos = await p.demo.findMany({ where: { lead_id: leadId } });
+    }
+    
     // Always pull activities — the CALL_LOGGED guard (§1 row 2) needs them
     entityContext.activities = await p.leadActivity.findMany({ where: { lead_id: leadId } });
     // SITE_VISIT_* guards need the linked visits AND their property outcomes
@@ -661,10 +667,16 @@ export class LeadService {
         updateData.exit_reason = guardFields?.exit_reason || null;
         updateData.exited_from_status = lead.status; // snapshot per §1
       }
-      // Persist demo fields when entering DEMO_SCHEDULED
-      if (newStatus === 'DEMO_SCHEDULED' && guardFields) {
-        if (guardFields.demo_scheduled_at) updateData.demo_scheduled_at = new Date(guardFields.demo_scheduled_at);
-        if (guardFields.demo_handler_id) updateData.demo_handler_id = guardFields.demo_handler_id;
+      // Create Demo record when entering DEMO_SCHEDULED instead of updating Lead fields
+      if (newStatus === 'DEMO_SCHEDULED' && guardFields?.demo_scheduled_at && guardFields?.demo_handler_id) {
+        await tx.demo.create({
+          data: {
+            lead_id: leadId,
+            handler_id: guardFields.demo_handler_id,
+            scheduled_at: new Date(guardFields.demo_scheduled_at),
+            summary: notes || 'Demo Scheduled',
+          }
+        });
       }
       // Persist qualification fields when entering QUALIFIED
       if (newStatus === 'QUALIFIED' && guardFields?.qualification) {

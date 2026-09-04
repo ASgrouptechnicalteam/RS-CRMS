@@ -25,10 +25,11 @@ router.get(
   requirePermission([Permissions.SITE_VISITS_READ]),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const { status, leadId } = req.query;
+      const { status, leadId, escalated } = req.query;
       const filters = {
         status: status as string,
         leadId: leadId as string,
+        escalated: escalated === 'true',
       };
 
       const visits = await SiteVisitService.listVisits(req.user!, filters);

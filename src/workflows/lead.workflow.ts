@@ -171,11 +171,14 @@ export class LeadWorkflow implements DomainWorkflow {
 
     // §1 row 5: DEMO_SCHEDULED requires a scheduled date and a handler.
     if (newStatus === LeadStatus.DEMO_SCHEDULED) {
-      if (!entity || !entity.demo_scheduled_at || !entity.demo_handler_id) {
+      const hasPendingDemo = entity && entity.pending_demo && entity.pending_demo.scheduled_at && entity.pending_demo.handler_id;
+      const hasExistingDemo = entity && entity.demos && entity.demos.length > 0;
+      
+      if (!hasPendingDemo && !hasExistingDemo) {
         return {
           allowed: false,
           reason:
-            'Transition to DEMO_SCHEDULED requires demo_scheduled_at and demo_handler_id',
+            'Transition to DEMO_SCHEDULED requires demo_scheduled_at and demo_handler_id payload, or an existing Demo record',
         };
       }
     }

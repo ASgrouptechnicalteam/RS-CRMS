@@ -60,12 +60,28 @@ export class SiteVisitService {
     return { projectId, pmId: project?.assigned_pm_id ?? null };
   }
 
-  static async listVisits(user: TokenPayload, filters: { status?: string; leadId?: string }) {
-    const whereCondition = SiteVisitPolicy.canList(user);
+  static async listVisits(user: TokenPayload, filters: { status?: string; leadId?: string; escalated?: boolean }) {
+    const whereCondition: any = SiteVisitPolicy.canList(user);
 
-    if (filters.status) {
+    if (filters.escalated) {
+      whereCondition.status = {
+        in: ['PENDING_ACCEPTANCE', 'ESCALATED_TO_MARKETING_DIRECTOR']
+      };
+      whereCondition.OR = [
+        { status: 'ESCALATED_TO_MARKETING_DIRECTOR' },
+        { 
+          escalation: {
+            OR: [
+              { marketing_director_notified_at: { not: null } },
+              { managing_director_notified_at: { not: null } }
+            ]
+          }
+        }
+      ];
+    } else if (filters.status) {
       whereCondition.status = filters.status;
     }
+
     if (filters.leadId) {
       whereCondition.lead_id = parseInt(filters.leadId, 10);
     }
@@ -88,6 +104,7 @@ export class SiteVisitService {
             to_employee: { select: { id: true, full_name: true } },
           },
         },
+        escalation: true,
       },
       orderBy: { scheduled_date: 'asc' },
     });
@@ -100,6 +117,16 @@ export class SiteVisitService {
       for (const v of visits) {
         for (const r of v.reassignments) {
           delete (r as any).reason;
+        }
+        
+        // Blind Approval: Omit PII for PENDING_ACCEPTANCE visits unless the user is the telecaller who booked it.
+        // MDs/Admins bypass this via canViewReassignmentReason.
+        if (v.status === 'PENDING_ACCEPTANCE' && v.telecaller?.id !== user.employeeId) {
+          if (v.lead) {
+            delete (v.lead as any).customer_name;
+            delete (v.lead as any).phone;
+            delete (v.lead as any).email;
+          }
         }
       }
     }
@@ -341,6 +368,17 @@ export class SiteVisitService {
     };
     if (!SiteVisitPolicy.canReassignTarget(user, target)) {
       throw { status: 403, message: 'Forbidden: only PROJECT_MANAGER or AGENT may be reassignment targets' };
+    }
+
+    // Ping-pong prevention: Cannot route to someone who has already routed it away.
+    const previousReassignment = await p.siteVisitReassignment.findFirst({
+      where: {
+        visit_id: visitId,
+        from_employee_id: toEmployeeId,
+      },
+    });
+    if (previousReassignment) {
+      throw { status: 409, message: 'Cannot route to this employee. They have already declined or routed this visit.' };
     }
 
     const transition = WorkflowEngine.canTransition({

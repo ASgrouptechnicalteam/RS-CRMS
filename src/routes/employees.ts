@@ -192,7 +192,28 @@ router.get(
       const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
       const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
-      const whereClause = await buildEmployeeScope(req.user!);
+      const whereClause: any = await buildEmployeeScope(req.user!);
+
+      const roleQuery = req.query.role as string;
+      if (roleQuery) {
+        const roleCondition = {
+          roles: {
+            some: {
+              role: {
+                name: {
+                  equals: roleQuery
+                }
+              }
+            }
+          }
+        };
+        
+        if (whereClause.AND) {
+          whereClause.AND.push(roleCondition);
+        } else {
+          whereClause.AND = [roleCondition];
+        }
+      }
 
       const employees = await prisma.employee.findMany({
         take: limit,

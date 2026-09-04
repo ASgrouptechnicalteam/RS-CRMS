@@ -17,7 +17,12 @@ import { KycPolicy } from '../policies/kyc.policy';
  * @returns boolean indicating if access is granted
  */
 export const can = (user: TokenPayload, action: Permission, resource?: any): boolean => {
-  // 1. Basic Permission Check
+  // 1. Super Admin Global Access Bypass
+  if (user.roles.includes(Roles.ADMIN)) {
+    return true;
+  }
+
+  // 2. Basic Permission Check
   const hasBasePermission = (user.permissions || []).includes(action);
 
   if (!hasBasePermission) {

@@ -18,7 +18,11 @@ const kyc_policy_1 = require("../policies/kyc.policy");
  * @returns boolean indicating if access is granted
  */
 const can = (user, action, resource) => {
-    // 1. Basic Permission Check
+    // 1. Super Admin Global Access Bypass
+    if (user.roles.includes(shared_1.Roles.ADMIN)) {
+        return true;
+    }
+    // 2. Basic Permission Check
     const hasBasePermission = (user.permissions || []).includes(action);
     if (!hasBasePermission) {
         return false;

@@ -682,7 +682,10 @@ export const ProjectCreateSchema = z.object({
   description: z.string().optional(),
   location: z.string().min(3),
   total_area: z.string().optional(),
+  total_units: z.number().int().positive().optional().nullable(),
   launch_date: z.string().optional(),
+  project_phase: z.string().optional(),
+  rera_number: z.string().optional(),
   amenities: z.any().optional(),
   assigned_pm_id: z.number().int().positive().optional().nullable(),
 });
@@ -694,7 +697,10 @@ export const ProjectUpdateSchema = z.object({
   description: z.string().optional(),
   location: z.string().min(3).optional(),
   total_area: z.string().optional(),
+  total_units: z.number().int().positive().optional().nullable(),
   launch_date: z.string().optional(),
+  project_phase: z.string().optional(),
+  rera_number: z.string().optional(),
   amenities: z.any().optional(),
   assigned_pm_id: z.number().int().positive().optional().nullable(),
   status: z.enum(['PLANNING', 'UNDER_CONSTRUCTION', 'COMPLETED', 'CANCELLED']).optional(),
@@ -751,7 +757,10 @@ export const PropertyCreateSchema = z.object({
   amenities: z.string().optional(),
   possession_status: z.enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION']).optional(),
   assigned_pm_id: z.number().int().optional().nullable(),
-  details: z.any().optional(),
+  details: z.any().optional(), // kept for backward compatibility if needed temporarily
+  pricing: z.any().optional(),
+  plot_details: z.any().optional(),
+  apartment_details: z.any().optional(),
   // WR-2: Structured location fields
   state: z.string().optional().nullable(),
   city: z.string().optional().nullable(),

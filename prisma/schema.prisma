@@ -591,8 +591,11 @@ model Project {
   description    String?   @db.Text
   location       String
   total_area     String?
+  total_units    Int?
   launch_date    DateTime?
   status         String    @default("PLANNING") // PLANNING, UNDER_CONSTRUCTION, COMPLETED, CANCELLED
+  project_phase  String?
+  rera_number    String?
   amenities      Json? // Array of amenities
   assigned_pm_id Int?
   slug           String    @default(uuid()) // WR-6: SEO-friendly public identifier (overridden by service layer)
@@ -632,7 +635,6 @@ model Property {
   bedrooms                       Int?
   bathrooms                      Int?
   facing                         String? // EAST, WEST, NORTH, SOUTH, NORTH_EAST, SOUTH_EAST
-  details                        Json? // Stores granular, property-type specific details (e.g., BHK config, plot dimensions, soil type)
   status                         String    @default("PENDING_VERIFICATION") // PENDING_VERIFICATION, PENDING_DM_POLISH, PENDING_MD_APPROVAL, LIVE, REJECTED, LOCKED, BOOKED, SOLD
   assigned_pm_id                 Int?
   digital_marketing_executive_id Int? // Set by DMH when choosing "Needs Polish"
@@ -662,6 +664,11 @@ model Property {
   assigned_pm                 Employee?                 @relation("AssignedPMProperties", fields: [assigned_pm_id], references: [id])
   digital_marketing_executive Employee?                 @relation("DMExecutiveProperties", fields: [digital_marketing_executive_id], references: [id])
   created_by                  Employee?                 @relation("CreatedProperties", fields: [created_by_id], references: [id])
+  
+  pricing                     PropertyPricing?
+  plot_details                PropertyPlotDetails?
+  apartment_details           PropertyApartmentDetails?
+
   images                      PropertyImage[]
   publications                PropertyPublication[]
   verification_logs           PropertyVerificationLog[]
@@ -1344,4 +1351,87 @@ model DemoInterestedProperty {
   property Property @relation(fields: [property_id], references: [id], onDelete: Cascade)
 
   @@unique([demo_id, property_id])
+}
+
+model PropertyPricing {
+  id                    Int      @id @default(autoincrement())
+  property_id           Int      @unique
+  base_price_per_unit   Float?
+  base_price            Float    @default(0)
+  facing_premium        Float?   @default(0)
+  corner_premium        Float?   @default(0)
+  park_facing_premium   Float?   @default(0)
+  road_facing_premium   Float?   @default(0)
+  floor_rise_charge     Float?   @default(0)
+  development_charges   Float?   @default(0)
+  maintenance_charges   Float?   @default(0)
+  documentation_charges Float?   @default(0)
+  registration_charges  Float?   @default(0)
+  other_charges         Float?   @default(0)
+  discount              Float?   @default(0)
+  final_price           Float    @default(0)
+
+  property Property @relation(fields: [property_id], references: [id], onDelete: Cascade)
+}
+
+model PropertyPlotDetails {
+  id                    Int      @id @default(autoincrement())
+  property_id           Int      @unique
+  plot_number           String?
+  phase                 String?
+  sector_block          String?
+  survey_number         String?
+  subdivision_number    String?
+  
+  length                Float?
+  width                 Float?
+  frontage              Float?
+  dimension_string      String?
+  
+  north_boundary        String?
+  south_boundary        String?
+  east_boundary         String?
+  west_boundary         String?
+  
+  road_width            Float?
+  number_of_roads       Int?
+  
+  is_corner             Boolean? @default(false)
+  is_park_facing        Boolean? @default(false)
+  is_main_road_facing   Boolean? @default(false)
+  near_entrance         Boolean? @default(false)
+  near_clubhouse        Boolean? @default(false)
+
+  property Property @relation(fields: [property_id], references: [id], onDelete: Cascade)
+}
+
+model PropertyApartmentDetails {
+  id                    Int      @id @default(autoincrement())
+  property_id           Int      @unique
+  tower                 String?
+  block                 String?
+  floor                 String?
+  unit_number           String?
+  flat_number           String?
+  
+  bhk                   String?
+  balcony_count         Int?
+  has_study_room        Boolean? @default(false)
+  has_servant_room      Boolean? @default(false)
+  
+  carpet_area           Float?
+  built_up_area         Float?
+  super_built_up_area   Float?
+  
+  parking_included      Boolean? @default(false)
+  parking_type          String?
+  parking_slots         Int?
+  
+  structure_type        String?
+  flooring              String?
+  kitchen_type          String?
+  windows               String?
+  doors                 String?
+  
+  property Property @relation(fields: [property_id], references: [id], onDelete: Cascade)
 }

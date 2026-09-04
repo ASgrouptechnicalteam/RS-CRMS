@@ -67,6 +67,9 @@ export class PropertyService {
         assigned_pm: { select: { id: true, employee_code: true, full_name: true, phone: true } },
         created_by: { select: { id: true, employee_code: true, full_name: true } },
         images: true,
+        pricing: true,
+        plot_details: true,
+        apartment_details: true,
         verification_logs: {
           orderBy: { created_at: 'desc' },
           include: { actor: { select: { id: true, employee_code: true, full_name: true } } },
@@ -182,7 +185,10 @@ export class PropertyService {
           facing: data.facing || null,
           amenities: data.amenities || null,
           possession_status: data.possession_status || null,
-          details: data.details || null,
+          details: data.details || null, // Keeping for backward compatibility
+          pricing: data.pricing ? { create: data.pricing } : undefined,
+          plot_details: data.plot_details ? { create: data.plot_details } : undefined,
+          apartment_details: data.apartment_details ? { create: data.apartment_details } : undefined,
           assigned_pm_id: finalPmId,
           status: 'PENDING_VERIFICATION',
           created_by_id: employeeId,
@@ -304,7 +310,18 @@ export class PropertyService {
 
     const updatedProperty = await p.property.update({
       where: { id: propertyId },
-      data: safeData,
+      data: {
+        ...safeData,
+        ...(data.pricing !== undefined && {
+          pricing: data.pricing ? { upsert: { create: data.pricing, update: data.pricing } } : { delete: true }
+        }),
+        ...(data.plot_details !== undefined && {
+          plot_details: data.plot_details ? { upsert: { create: data.plot_details, update: data.plot_details } } : { delete: true }
+        }),
+        ...(data.apartment_details !== undefined && {
+          apartment_details: data.apartment_details ? { upsert: { create: data.apartment_details, update: data.apartment_details } } : { delete: true }
+        }),
+      },
     });
 
     if (updatedProperty.status === 'LIVE') {

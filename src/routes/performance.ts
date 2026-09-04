@@ -232,4 +232,96 @@ router.get('/pm-metrics', authenticateToken, async (req: AuthenticatedRequest, r
   }
 });
 
+// --- Achievements Endpoint ---
+router.get('/achievements', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const isMDOrAdmin = req.user!.roles.includes('MD') || req.user!.roles.includes('ADMIN');
+    const targetEmployeeId = (isMDOrAdmin && req.query.employeeId && req.query.employeeId !== 'ALL') 
+      ? Number(req.query.employeeId) 
+      : (req.query.employeeId === 'ALL' ? 'ALL' : req.user!.employeeId);
+
+    const getStatsForEmployee = async (empId: number) => {
+      // 1. Leads Sourced
+      const leadsSourced = await p.lead.count({ where: { created_by_id: empId } });
+
+      // 2. Site Visits Scheduled (Telecaller)
+      const siteVisitsScheduled = await p.siteVisitBooking.count({ where: { telecaller_id: empId } });
+
+      // 3. Site Visits Executed (PM)
+      const siteVisitsExecuted = await p.siteVisitBooking.count({ where: { project_manager_id: empId, status: 'COMPLETED' } });
+
+      // 4. Deals Closed (Booking Assigned Employee)
+      const dealsClosed = await p.booking.count({ where: { assigned_employee_id: empId, status: { not: 'CANCELLED' } } });
+
+      // 5. Assisted Conversions
+      const assistedBookings = await p.booking.findMany({
+        where: {
+          assigned_employee_id: { not: empId },
+          status: { not: 'CANCELLED' },
+          customer: {
+            origin_lead: {
+              OR: [
+                { created_by_id: empId },
+                { assigned_to_id: empId },
+                {
+                  site_visits: {
+                    some: {
+                      OR: [
+                        { telecaller_id: empId },
+                        { project_manager_id: empId },
+                        { assigned_agent_id: empId }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        select: { id: true }
+      });
+      const assistedConversions = assistedBookings.length;
+
+      return {
+        employeeId: empId,
+        leadsSourced,
+        siteVisitsScheduled,
+        siteVisitsExecuted,
+        dealsClosed,
+        assistedConversions
+      };
+    };
+
+    if (targetEmployeeId === 'ALL') {
+      if (!isMDOrAdmin) return res.status(403).json({ error: 'Forbidden' });
+      
+      const allEmployees = await p.employee.findMany({
+        where: { status: 'ACTIVE' },
+        select: { id: true, full_name: true, employee_code: true, roles: true, profile_image_url: true }
+      });
+
+      const leaderboard = await Promise.all(
+        allEmployees.map(async (emp) => {
+          const stats = await getStatsForEmployee(emp.id);
+          return {
+            ...emp,
+            ...stats
+          };
+        })
+      );
+      
+      leaderboard.sort((a, b) => b.dealsClosed - a.dealsClosed || b.assistedConversions - a.assistedConversions || b.siteVisitsExecuted - a.siteVisitsExecuted);
+      
+      return res.status(200).json({ leaderboard });
+    } else {
+      const stats = await getStatsForEmployee(targetEmployeeId as number);
+      return res.status(200).json(stats);
+    }
+
+  } catch (error) {
+    logger.error('Achievements fetch error:', error);
+    return res.status(500).json({ error: 'Failed to fetch achievements' });
+  }
+});
+
 export default router;

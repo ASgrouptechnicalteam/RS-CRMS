@@ -102,5 +102,23 @@ class SiteVisitPolicy {
                 : [];
         return targetRoles.includes(shared_1.Roles.PROJECT_MANAGER) || targetRoles.includes(shared_1.Roles.AGENT);
     }
+    /**
+     * Phase D: Hold and Initiate Cancel are strictly restricted to the assigned telecaller.
+     */
+    static canHoldOrInitiateCancel(user, visit) {
+        if (!visit.telecaller_id)
+            return false;
+        return visit.telecaller_id === user.employeeId;
+    }
+    /**
+     * Phase D: Confirm Cancel is restricted to the assigned project manager (or management override).
+     */
+    static canConfirmCancel(user, visit) {
+        if (this.isManagement(user))
+            return true; // Optional management override if desired
+        if (!visit.project_manager_id)
+            return false;
+        return visit.project_manager_id === user.employeeId;
+    }
 }
 exports.SiteVisitPolicy = SiteVisitPolicy;

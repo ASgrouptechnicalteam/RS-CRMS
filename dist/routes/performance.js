@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const logger_1 = require("../utils/logger");
 const express_1 = require("express");
@@ -187,6 +210,38 @@ router.get('/team', auth_1.authenticateToken, async (req, res) => {
     catch (error) {
         logger_1.logger.error('Team performance error:', error);
         return res.status(500).json({ error: 'Failed to fetch team performance' });
+    }
+});
+router.get('/telecaller-metrics', auth_1.authenticateToken, async (req, res) => {
+    try {
+        const { telecallerId, startDate, endDate } = req.query;
+        const start = startDate ? new Date(startDate) : new Date(new Date().setDate(1)); // Default to start of month
+        const end = endDate ? new Date(endDate) : new Date();
+        const tId = telecallerId ? parseInt(telecallerId, 10) : undefined;
+        // In production, add authorization to verify they are allowed to check this user
+        const { PerformanceTrackingService } = await Promise.resolve().then(() => __importStar(require('../services/performanceTracking.service')));
+        const metrics = await PerformanceTrackingService.getTelecallerMetrics(req.user, start, end, tId);
+        return res.status(200).json({ metrics });
+    }
+    catch (error) {
+        logger_1.logger.error('Fetch telecaller metrics error:', error);
+        return res.status(500).json({ error: 'Failed to fetch telecaller metrics' });
+    }
+});
+router.get('/pm-metrics', auth_1.authenticateToken, async (req, res) => {
+    try {
+        const { pmId, startDate, endDate } = req.query;
+        const start = startDate ? new Date(startDate) : new Date(new Date().setDate(1));
+        const end = endDate ? new Date(endDate) : new Date();
+        const pId = pmId ? parseInt(pmId, 10) : undefined;
+        // In production, add authorization checks
+        const { PerformanceTrackingService } = await Promise.resolve().then(() => __importStar(require('../services/performanceTracking.service')));
+        const metrics = await PerformanceTrackingService.getPmMetrics(req.user, start, end, pId);
+        return res.status(200).json({ metrics });
+    }
+    catch (error) {
+        logger_1.logger.error('Fetch pm metrics error:', error);
+        return res.status(500).json({ error: 'Failed to fetch pm metrics' });
     }
 });
 exports.default = router;

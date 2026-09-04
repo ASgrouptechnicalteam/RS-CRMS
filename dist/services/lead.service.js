@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LeadService = exports.AppError = void 0;
 const prisma_1 = require("../lib/prisma");
@@ -40,6 +63,7 @@ class LeadService {
             include: {
                 assigned_to: { select: { id: true, employee_code: true, full_name: true, phone: true } },
                 created_by: { select: { id: true, employee_code: true, full_name: true } },
+                introduced_by: { select: { id: true, employee_code: true, full_name: true } },
                 activities: {
                     orderBy: { created_at: 'desc' },
                     take: 5,
@@ -48,20 +72,35 @@ class LeadService {
             },
             orderBy: { created_at: 'desc' },
         });
-        return leads.map(lead => ({
-            ...lead,
-            can_edit: lead_policy_1.LeadPolicy.canMutate(user, lead)
-        }));
+        return leads.map(lead => {
+            const canView = lead_policy_1.LeadPolicy.canView(user, lead);
+            return {
+                ...lead,
+                introduced_by: canView ? lead.introduced_by : null, // RBAC enforcement for introduced_by
+                can_edit: lead_policy_1.LeadPolicy.canMutate(user, lead)
+            };
+        });
     }
     static async getLeadById(user, leadId) {
         const lead = await p.lead.findFirst({
-            where: { id: leadId, company_id: user.companyId }
+            where: { id: leadId, company_id: user.companyId },
+            include: {
+                assigned_to: { select: { id: true, employee_code: true, full_name: true, phone: true } },
+                created_by: { select: { id: true, employee_code: true, full_name: true } },
+                introduced_by: { select: { id: true, employee_code: true, full_name: true } },
+                activities: {
+                    orderBy: { created_at: 'desc' },
+                    include: { actor: { select: { id: true, employee_code: true, full_name: true } } },
+                },
+            }
         });
         if (!lead || lead.company_id !== user.companyId) {
             return null;
         }
+        const canView = lead_policy_1.LeadPolicy.canView(user, lead);
         return {
             ...lead,
+            introduced_by: canView ? lead.introduced_by : null,
             can_edit: lead_policy_1.LeadPolicy.canMutate(user, lead)
         };
     }
@@ -82,7 +121,7 @@ class LeadService {
             where: {
                 company_id: companyId,
                 assigned_to_id: { in: telecallers.map((t) => t.id) },
-                status: { in: ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFICATION_PENDING', 'QUALIFIED', 'DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED'] },
+                status: { in: ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED'] },
             },
             _count: { _all: true },
         });
@@ -166,34 +205,116 @@ class LeadService {
                     { phone: dto.phone },
                     ...(dto.email ? [{ email: dto.email }] : [])
                 ]
+            },
+            include: {
+                assigned_to: { select: { id: true, full_name: true, employee_code: true } },
+                site_visits: {
+                    where: { status: { in: ['CANCELLED'] } },
+                    include: { property: { select: { title: true, status: true } } },
+                    orderBy: { created_at: 'desc' },
+                    take: 1
+                }
             }
         });
         if (existingLead) {
-            if (existingLead.status === 'DROPPED') {
-                // Recover it instead of throwing an error
-                return await LeadService.updateLeadStatus(user, existingLead.id, 'RECOVERED_TO_POOL');
+            const isDropped = existingLead.status === 'DROPPED' || existingLead.status === 'CANCELLED';
+            if (!isDropped) {
+                // Active lead duplicate check (Task 6)
+                // Append note and notify owner, return existing lead
+                const sourceName = dto.source || 'MANUAL_ENTRY';
+                await p.leadActivity.create({
+                    data: {
+                        lead_id: existingLead.id,
+                        actor_id: user.employeeId || existingLead.assigned_to_id || 1,
+                        activity_type: 'NOTE_ADDED',
+                        notes: `Duplicate entry attempt via ${sourceName}. Customer re-inquired.`
+                    }
+                });
+                if (existingLead.assigned_to_id) {
+                    await p.notification.create({
+                        data: {
+                            employee_id: existingLead.assigned_to_id,
+                            type: 'SYSTEM_ALERT',
+                            title: 'Active Lead Re-Inquiry',
+                            message: `Your active lead ${existingLead.lead_code} (${existingLead.customer_name}) submitted a new inquiry via ${sourceName}.`
+                        }
+                    });
+                }
+                return existingLead;
             }
-            throw new AppError(409, `Duplicate lead detected. Lead ${existingLead.lead_code} already exists with this phone or email.`);
+            else {
+                // Dropped/Cancelled lead duplicate check
+                const isAutomatedChannel = dto.source !== 'MANUAL_ENTRY' && dto.source !== 'REFERRAL';
+                if (isAutomatedChannel) {
+                    // Task 7: Automated channel -> auto-recover to POOL
+                    const recovered = await p.lead.update({
+                        where: { id: existingLead.id },
+                        data: {
+                            status: 'NEW',
+                            ownership_type: 'POOL',
+                            assigned_to_id: null,
+                            assigned_at: null,
+                            exit_reason: null,
+                            exited_from_status: null
+                        }
+                    });
+                    await p.leadActivity.create({
+                        data: {
+                            lead_id: existingLead.id,
+                            actor_id: user.employeeId || 1,
+                            activity_type: 'LEAD_RECOVERED',
+                            notes: `Lead automatically recovered to POOL due to new inquiry via ${dto.source}.`
+                        }
+                    });
+                    return recovered;
+                }
+                else {
+                    // Task 8: Manual intake -> throw 409 with history
+                    const historicalContext = {
+                        id: existingLead.id,
+                        lead_code: existingLead.lead_code,
+                        customer_name: existingLead.customer_name,
+                        exit_reason: existingLead.exit_reason,
+                        exited_from_status: existingLead.exited_from_status,
+                        budget_min: existingLead.budget_min,
+                        budget_max: existingLead.budget_max,
+                        preferred_location: existingLead.preferred_location,
+                        property_type_preference: existingLead.property_type_preference,
+                        previous_owner: existingLead.assigned_to?.full_name || 'Unassigned',
+                        previous_site_visit: existingLead.site_visits?.[0] ? {
+                            property_title: existingLead.site_visits[0].property?.title,
+                            property_status: existingLead.site_visits[0].property?.status
+                        } : null
+                    };
+                    // We stringify the JSON payload in the message so the frontend can parse it.
+                    // Or we can throw a custom object. AppError only takes string message.
+                    // In express error handler, if message is JSON parseable, it can be passed as JSON.
+                    throw new AppError(409, JSON.stringify({
+                        code: 'RECOVERABLE_LEAD',
+                        message: `Lead ${existingLead.lead_code} previously existed and was ${existingLead.status}.`,
+                        existingLead: historicalContext
+                    }));
+                }
+            }
         }
         const leadCode = await this.generateNextLeadCode();
-        // Channel Partners keep their own leads (bypass auto-distribution)
         const isChannelPartner = user.roles.includes(shared_1.Roles.CHANNEL_PARTNER_MANAGER);
-        let bestAssignee = null;
         let assignedToId = null;
         let assignmentType = null;
         let status = 'NEW';
-        if (isChannelPartner) {
+        let ownershipType = dto.ownership_type || 'POOL';
+        let bestAssignee = null;
+        if (ownershipType === 'DIRECT' || isChannelPartner) {
             assignedToId = user.employeeId;
             assignmentType = 'MANUAL_OVERRIDE';
             status = 'ASSIGNED';
+            ownershipType = 'DIRECT';
         }
         else {
-            bestAssignee = await (0, distributionService_1.findBestAssigneeForLead)(user.companyId);
-            if (bestAssignee) {
-                assignedToId = bestAssignee.employeeId;
-                assignmentType = 'PERFORMANCE_WEIGHTED';
-                status = 'ASSIGNED';
-            }
+            // POOL: "Add to Pool"
+            // The lead is created in the NEW state without an assigned_to_id.
+            // Distribution happens asynchronously or manually via reassignLead.
+            ownershipType = 'POOL';
         }
         // 2. DETERMINISTIC LEAD SCORING
         const leadScore = this.calculateLeadScore(dto);
@@ -230,6 +351,8 @@ class LeadService {
                     preferred_location: dto.preferred_location || null,
                     notes: dto.notes || null,
                     created_by_id: user.employeeId,
+                    ownership_type: ownershipType,
+                    introduced_by_id: dto.introduced_by_id || null,
                     campaign: dto.campaign || null,
                     utm_source: dto.utm_source || null,
                     utm_medium: dto.utm_medium || null,
@@ -433,11 +556,12 @@ class LeadService {
         const entityContext = {
             ...lead,
             exit_reason: guardFields?.exit_reason ?? lead.exit_reason,
-            demo_scheduled_at: guardFields?.demo_scheduled_at ?? lead.demo_scheduled_at,
-            demo_handler_id: guardFields?.demo_handler_id ?? lead.demo_handler_id,
         };
         if (guardFields?.demo_scheduled_at) {
-            entityContext.demo_scheduled_at = new Date(guardFields.demo_scheduled_at);
+            entityContext.pending_demo = {
+                scheduled_at: guardFields.demo_scheduled_at,
+                handler_id: guardFields.demo_handler_id
+            };
         }
         if (guardFields?.qualification) {
             const q = guardFields.qualification;
@@ -449,6 +573,9 @@ class LeadService {
                 entityContext.property_type_preference = q.property_type_preference;
             if (q.preferred_location !== undefined)
                 entityContext.preferred_location = q.preferred_location;
+        }
+        if (newStatus === 'DEMO_SCHEDULED' || newStatus === 'DEMO_COMPLETED') {
+            entityContext.demos = await p.demo.findMany({ where: { lead_id: leadId } });
         }
         // Always pull activities — the CALL_LOGGED guard (§1 row 2) needs them
         entityContext.activities = await p.leadActivity.findMany({ where: { lead_id: leadId } });
@@ -496,6 +623,19 @@ class LeadService {
             return 'STATUS_CHANGED';
         };
         const isDrop = newStatus === 'DROPPED';
+        const isRecover = newStatus === 'RECOVERED_TO_POOL';
+        // 5-Day Unreachable Cap Enforcement
+        if (isDrop && (lead.status === 'ASSIGNED' || lead.status === 'CONTACTED')) {
+            const exitReason = guardFields?.exit_reason;
+            const lowerNotes = (notes || '').toLowerCase();
+            if (exitReason === 'OTHER' && (lowerNotes.includes('unreachable') || lowerNotes.includes('not answering') || lowerNotes.includes('no response'))) {
+                const callLogs = (entityContext.activities || []).filter((a) => a.activity_type === 'CALL_LOGGED');
+                const distinctDays = new Set(callLogs.map((a) => new Date(a.created_at).toISOString().split('T')[0]));
+                if (distinctDays.size < 5) {
+                    throw new AppError(400, 'Cannot drop lead as unreachable without at least 5 days of CALL_LOGGED attempts.');
+                }
+            }
+        }
         return await p.$transaction(async (tx) => {
             const updateData = {
                 last_contacted_at: new Date(),
@@ -504,12 +644,16 @@ class LeadService {
                 updateData.exit_reason = guardFields?.exit_reason || null;
                 updateData.exited_from_status = lead.status; // snapshot per §1
             }
-            // Persist demo fields when entering DEMO_SCHEDULED
-            if (newStatus === 'DEMO_SCHEDULED' && guardFields) {
-                if (guardFields.demo_scheduled_at)
-                    updateData.demo_scheduled_at = new Date(guardFields.demo_scheduled_at);
-                if (guardFields.demo_handler_id)
-                    updateData.demo_handler_id = guardFields.demo_handler_id;
+            // Create Demo record when entering DEMO_SCHEDULED instead of updating Lead fields
+            if (newStatus === 'DEMO_SCHEDULED' && guardFields?.demo_scheduled_at && guardFields?.demo_handler_id) {
+                await tx.demo.create({
+                    data: {
+                        lead_id: leadId,
+                        handler_id: guardFields.demo_handler_id,
+                        scheduled_at: new Date(guardFields.demo_scheduled_at),
+                        summary: notes || 'Demo Scheduled',
+                    }
+                });
             }
             // Persist qualification fields when entering QUALIFIED
             if (newStatus === 'QUALIFIED' && guardFields?.qualification) {
@@ -563,8 +707,8 @@ class LeadService {
                     await opportunity_service_1.OpportunityService.createFromLeadTx(tx, lead, user.employeeId || 1);
                 }
             }
-            // §6: customer-portal provisioning stub on successful booking
-            if (newStatus === 'BOOKED') {
+            // §6: customer-portal provisioning stub on BOOKING_INITIATED
+            if (newStatus === 'BOOKING_INITIATED') {
                 await customerPortal_service_1.CustomerPortalService.provisionStub(tx, lead, user);
             }
             let finalUpdated = updated;
@@ -752,6 +896,48 @@ class LeadService {
         });
         return interests;
     }
+    /**
+     * Run the distribution algorithm for all unassigned POOL leads.
+     * Explicitly excludes DIRECT leads.
+     */
+    static async distributeUnassignedPoolLeads(companyId) {
+        const unassignedLeads = await p.lead.findMany({
+            where: {
+                company_id: companyId,
+                status: 'NEW',
+                assigned_to_id: null,
+                ownership_type: 'POOL',
+            },
+            orderBy: { created_at: 'asc' } // Oldest first
+        });
+        let assignedCount = 0;
+        for (const lead of unassignedLeads) {
+            const bestAssignee = await (0, distributionService_1.findBestAssigneeForLead)(companyId);
+            if (bestAssignee) {
+                await p.$transaction(async (tx) => {
+                    await tx.lead.update({
+                        where: { id: lead.id },
+                        data: {
+                            status: 'ASSIGNED',
+                            assigned_to_id: bestAssignee.employeeId,
+                            assigned_at: new Date(),
+                            assignment_type: 'PERFORMANCE_WEIGHTED',
+                        },
+                    });
+                    await tx.leadActivity.create({
+                        data: {
+                            lead_id: lead.id,
+                            actor_id: lead.created_by_id || 1,
+                            activity_type: 'ASSIGNED_TO_AGENT',
+                            notes: `Auto-distributed to ${bestAssignee.name} (${bestAssignee.employeeCode}) [Weight Score: ${bestAssignee.weight.toFixed(1)}]`,
+                        },
+                    });
+                });
+                assignedCount++;
+            }
+        }
+        return assignedCount;
+    }
     static async getLeadTasks(user, leadId) {
         const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
         if (!lead)
@@ -765,6 +951,135 @@ class LeadService {
             orderBy: [{ target_date: 'asc' }],
         });
         return tasks;
+    }
+    static async triggerLeadRecoveryForProperty(propertyId) {
+        const { matchDroppedLeadsToProperty } = await Promise.resolve().then(() => __importStar(require('../utils/matchingEngine')));
+        const matchedLeadIds = await matchDroppedLeadsToProperty(propertyId);
+        if (!matchedLeadIds.length)
+            return;
+        for (const leadId of matchedLeadIds) {
+            // Atomic guard: strictly require status = 'DROPPED' AND exit_reason = 'NO_MATCHING_INVENTORY'
+            const updated = await p.lead.updateMany({
+                where: {
+                    id: leadId,
+                    status: 'DROPPED',
+                    exit_reason: 'NO_MATCHING_INVENTORY'
+                },
+                data: {
+                    status: 'ASSIGNED',
+                    exit_reason: null,
+                    exited_from_status: null
+                }
+            });
+            if (updated.count > 0) {
+                // Fetch lead to get assigned_to_id for notification
+                const recoveredLead = await p.lead.findUnique({
+                    where: { id: leadId },
+                    select: { assigned_to_id: true, lead_code: true, customer_name: true }
+                });
+                if (recoveredLead && recoveredLead.assigned_to_id) {
+                    await p.notification.create({
+                        data: {
+                            employee_id: recoveredLead.assigned_to_id,
+                            type: 'SYSTEM_ALERT',
+                            title: 'Lead Recovered',
+                            message: `Lead ${recoveredLead.lead_code} (${recoveredLead.customer_name}) has been automatically recovered because new matching inventory became available.`,
+                        }
+                    });
+                    await p.leadActivity.create({
+                        data: {
+                            lead_id: leadId,
+                            actor_id: recoveredLead.assigned_to_id, // Attributing to the owner
+                            activity_type: 'LEAD_RECOVERED',
+                            notes: `Lead automatically recovered due to new matching inventory (Property ID: ${propertyId}). Status set to ASSIGNED.`,
+                        }
+                    });
+                }
+            }
+        }
+    }
+    static async recoverManualLead(user, leadId) {
+        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        if (!lead)
+            throw new AppError(404, 'Lead not found');
+        if (lead.status !== 'DROPPED' && lead.status !== 'CANCELLED') {
+            throw new AppError(400, 'Only dropped or cancelled leads can be manually recovered.');
+        }
+        return await p.$transaction(async (tx) => {
+            const recovered = await tx.lead.update({
+                where: { id: leadId },
+                data: {
+                    status: 'CONTACTED',
+                    assigned_to_id: user.employeeId, // Assign to whoever is handling it
+                    assigned_at: new Date(),
+                    assignment_type: 'MANUAL_OVERRIDE',
+                    exit_reason: null,
+                    exited_from_status: null,
+                }
+            });
+            await tx.leadActivity.create({
+                data: {
+                    lead_id: leadId,
+                    actor_id: user.employeeId || 1,
+                    activity_type: 'LEAD_RECOVERED',
+                    notes: 'Lead manually recovered from Dropped/Cancelled state to Contacted.'
+                }
+            });
+            await tx.leadActivity.create({
+                data: {
+                    lead_id: leadId,
+                    actor_id: user.employeeId || 1,
+                    activity_type: 'CALL_LOGGED',
+                    notes: 'Initial contact logged upon manual recovery.'
+                }
+            });
+            return recovered;
+        });
+    }
+    static async recoverFreshLead(user, leadId) {
+        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        if (!lead)
+            throw new AppError(404, 'Lead not found');
+        if (lead.status !== 'DROPPED' && lead.status !== 'CANCELLED') {
+            throw new AppError(400, 'Only dropped or cancelled leads can be used to start a fresh lead.');
+        }
+        const leadCode = await this.generateNextLeadCode();
+        return await p.$transaction(async (tx) => {
+            const freshLead = await tx.lead.create({
+                data: {
+                    lead_code: leadCode,
+                    company_id: lead.company_id,
+                    branch_id: lead.branch_id,
+                    customer_name: lead.customer_name,
+                    phone: lead.phone,
+                    email: lead.email,
+                    source: lead.source,
+                    status: 'CONTACTED',
+                    assigned_to_id: user.employeeId,
+                    assigned_at: new Date(),
+                    assignment_type: 'MANUAL_OVERRIDE',
+                    created_by_id: user.employeeId || 1,
+                    previous_lead_id: lead.id,
+                }
+            });
+            await tx.leadActivity.create({
+                data: {
+                    lead_id: freshLead.id,
+                    actor_id: user.employeeId || 1,
+                    activity_type: 'LEAD_RECOVERED',
+                    notes: `Started fresh lead from previous record (Lead ID: ${lead.lead_code}).`
+                }
+            });
+            await tx.leadActivity.create({
+                data: {
+                    lead_id: freshLead.id,
+                    actor_id: user.employeeId || 1,
+                    activity_type: 'CALL_LOGGED',
+                    notes: 'Initial contact logged for fresh start.'
+                }
+            });
+            return freshLead;
+        });
     }
 }
 exports.LeadService = LeadService;

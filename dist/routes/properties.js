@@ -219,7 +219,9 @@ router.post('/:id/publications', auth_1.authenticateToken, (0, authz_1.requireAu
             return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
         const { company_id, is_published } = req.body;
         if (!company_id || typeof is_published !== 'boolean') {
-            return res.status(400).json({ error: 'company_id and is_published (boolean) are required' });
+            return res
+                .status(400)
+                .json({ error: 'company_id and is_published (boolean) are required' });
         }
         const publication = await property_service_1.PropertyService.togglePublication(req.user, propertyId, company_id, is_published);
         return res.status(200).json({
@@ -475,7 +477,7 @@ router.post('/:id/images/:imageId/approve', auth_1.authenticateToken, (0, authz_
             where: {
                 id: imageId,
                 property_id: propertyId,
-                property: { company_id: companyId }
+                property: { company_id: companyId },
             },
         });
         if (!image) {
@@ -521,7 +523,7 @@ router.post('/:id/images/:imageId/reject', auth_1.authenticateToken, (0, authz_1
             where: {
                 id: imageId,
                 property_id: propertyId,
-                property: { company_id: companyId }
+                property: { company_id: companyId },
             },
         });
         if (!image) {

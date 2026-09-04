@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DocumentArchiveSchema = exports.DocumentVerifySchema = exports.DocumentUploadSchema = exports.DOCUMENT_TYPE_ENTITY_REQUIREMENTS = exports.DocumentVerificationStatus = exports.DocumentStatus = exports.DocumentType = exports.CustomerUpdateSchema = exports.CustomerCreateSchema = exports.ExpenseRefundMarkRefundedSchema = exports.ExpenseRefundMDReviewSchema = exports.ExpenseRefundAccountantReviewSchema = exports.ExpenseRefundCreateSchema = exports.ExpenseRefundStatus = exports.PropertyPublicationSchema = exports.PropertyUpdateSchema = exports.PropertyMDApprovalSchema = exports.PropertyDMVerifyAsIsSchema = exports.PropertyDMUpdateSchema = exports.PropertyVerificationSchema = exports.PropertyCreateSchema = exports.PropertyBrand = exports.PropertyAvailability = exports.PropertyStatus = exports.AddPropertyInterestSchema = exports.ProjectUpdateSchema = exports.ProjectCreateSchema = exports.LeadReassignSchema = exports.LeadStatusUpdateSchema = exports.PublicLeadCreateSchema = exports.LeadCreateSchema = exports.LeadSource = exports.LeadStatus = exports.TaskUpdateStatusSchema = exports.TaskCreateSchema = exports.DailyTargetSetSchema = exports.DailyReportSchema = exports.TaskStatus = exports.TaskPriority = exports.LeaveProposalSchema = exports.LateProposalSchema = exports.ChangePasswordSchema = exports.AttendanceStatus = exports.LoginSchema = exports.EMPLOYEE_CODE_REGEX = exports.RolePermissionsMatrix = exports.Permissions = exports.DepartmentCodes = exports.Roles = exports.CompanySchema = void 0;
-exports.EmployeeRolesUpdateSchema = exports.EmployeeUpdateSchema = exports.EmployeeCreateSchema = exports.EmployeeSelfUpdateSchema = exports.AttendanceHolidaySchema = exports.AttendanceQRPayloadSchema = exports.EmptyBodySchema = exports.PropertyImageMetadataSchema = exports.PropertyTogglePublicationBodySchema = exports.MessageTemplateKey = exports.MessageTemplateSchema = exports.SiteVisitUpdateSchema = exports.SiteVisitCompleteSchema = exports.SiteVisitOutcomeSchema = exports.SiteVisitReconfirmSchema = exports.SiteVisitRescheduleSchema = exports.SiteVisitEscalateSchema = exports.SiteVisitReassignSchema = exports.SiteVisitAcceptSchema = exports.SiteVisitCreateSchema = exports.SiteVisitOutcome = exports.SiteVisitStatus = exports.OpportunityUpdateSchema = exports.OpportunityCreateSchema = exports.IntegrationMetricsResponseSchema = exports.IntegrationMetricsQuerySchema = exports.CustomerNotificationResponseSchema = exports.CustomerNotificationReadSchema = exports.CustomerNotificationType = exports.InstallmentStatusChangedSchema = exports.INSTALLMENT_EVENT_TYPE = exports.PaymentCallbackSchema = exports.PaymentStatusChangedSchema = exports.PAYMENT_EVENT_TYPE = exports.KycCallbackSchema = exports.KycStatusChangedSchema = exports.CustomerKycWriteSchema = exports.KYC_STATUSES = exports.KycStatus = exports.PortalCallbackSchema = exports.PortalCallbackStatus = void 0;
+exports.AttendanceHolidaySchema = exports.AttendanceQRPayloadSchema = exports.EmployeeRolesUpdateSchema = exports.EmployeeUpdateSchema = exports.EmployeeCreateSchema = exports.EmployeeSelfUpdateSchema = exports.EmptyBodySchema = exports.PropertyImageMetadataSchema = exports.PropertyTogglePublicationBodySchema = exports.MessageTemplateKey = exports.MessageTemplateSchema = exports.SiteVisitUpdateSchema = exports.SiteVisitCancelConfirmSchema = exports.SiteVisitCompleteSchema = exports.SiteVisitOutcomeSchema = exports.SiteVisitReconfirmSchema = exports.SiteVisitRescheduleSchema = exports.SiteVisitEscalateSchema = exports.SiteVisitReassignSchema = exports.SiteVisitAcceptSchema = exports.SiteVisitCreateSchema = exports.SiteVisitOutcome = exports.SiteVisitStatus = exports.OpportunityUpdateSchema = exports.OpportunityCreateSchema = exports.IntegrationMetricsResponseSchema = exports.IntegrationMetricsQuerySchema = exports.CustomerNotificationResponseSchema = exports.CustomerNotificationReadSchema = exports.CustomerNotificationType = exports.InstallmentStatusChangedSchema = exports.INSTALLMENT_EVENT_TYPE = exports.PaymentCallbackSchema = exports.PaymentStatusChangedSchema = exports.PAYMENT_EVENT_TYPE = exports.KycCallbackSchema = exports.KycStatusChangedSchema = exports.CustomerKycWriteSchema = exports.KYC_STATUSES = exports.KycStatus = exports.PortalCallbackSchema = exports.PortalCallbackStatus = void 0;
 const zod_1 = require("zod");
 exports.CompanySchema = zod_1.z.object({
     id: zod_1.z.number().int(),
@@ -135,7 +135,52 @@ const ALL_PERMISSIONS = Object.values(exports.Permissions);
 // Role -> Permission Matrix (Phase 1 - Stage 2 Blueprint Section 8)
 exports.RolePermissionsMatrix = {
     [exports.Roles.MD]: ALL_PERMISSIONS, // MD gets all permissions
-    [exports.Roles.ADMIN]: ALL_PERMISSIONS,
+    [exports.Roles.ADMIN]: [
+        exports.Permissions.ADMIN_SYSTEM_METRICS,
+        exports.Permissions.ADMIN_AUDIT_LOGS,
+        exports.Permissions.ADMIN_SECURITY_ALERTS,
+        exports.Permissions.ADMIN_EMERGENCY_LOCKDOWN,
+        exports.Permissions.EMPLOYEES_CREATE,
+        exports.Permissions.EMPLOYEES_READ,
+        exports.Permissions.EMPLOYEES_UPDATE,
+        exports.Permissions.EMPLOYEES_RESET_PASSWORD,
+        exports.Permissions.CUSTOMERS_CREATE,
+        exports.Permissions.CUSTOMERS_READ,
+        exports.Permissions.CUSTOMERS_UPDATE,
+        exports.Permissions.CUSTOMERS_DELETE,
+        exports.Permissions.CUSTOMERS_CONVERT,
+        exports.Permissions.CUSTOMERS_KYC_WRITE,
+        exports.Permissions.PROJECTS_CREATE,
+        exports.Permissions.PROJECTS_READ,
+        exports.Permissions.PROJECTS_UPDATE,
+        exports.Permissions.PROJECTS_DELETE,
+        exports.Permissions.BOOKINGS_CREATE,
+        exports.Permissions.BOOKINGS_READ,
+        exports.Permissions.BOOKINGS_UPDATE,
+        exports.Permissions.PAYMENTS_CREATE,
+        exports.Permissions.PAYMENTS_READ,
+        exports.Permissions.PAYMENTS_UPDATE,
+        exports.Permissions.PAYMENTS_CANCEL,
+        exports.Permissions.DOCUMENTS_CREATE,
+        exports.Permissions.DOCUMENTS_READ,
+        exports.Permissions.DOCUMENTS_VERIFY,
+        exports.Permissions.DOCUMENTS_DELETE,
+        exports.Permissions.COMPLAINTS_CREATE,
+        exports.Permissions.COMPLAINTS_READ,
+        exports.Permissions.COMPLAINTS_UPDATE,
+        exports.Permissions.COMPLAINTS_ASSIGN,
+        exports.Permissions.COMPLAINTS_RESOLVE,
+        exports.Permissions.COMPLAINTS_CLOSE,
+        exports.Permissions.PROPERTIES_CREATE,
+        exports.Permissions.PROPERTIES_READ,
+        exports.Permissions.PROPERTIES_UPDATE,
+        exports.Permissions.PROPERTIES_DELETE,
+        exports.Permissions.PROPERTIES_VERIFY,
+        exports.Permissions.PROPERTIES_DM_POLISH,
+        exports.Permissions.PROPERTIES_MD_APPROVE,
+        exports.Permissions.AI_SEARCH,
+        // Explicitly NO EMPLOYEES_VIEW_SENSITIVE for ADMIN
+    ],
     [exports.Roles.HR_MANAGER]: [
         exports.Permissions.EMPLOYEES_CREATE,
         exports.Permissions.EMPLOYEES_READ,
@@ -338,27 +383,19 @@ exports.RolePermissionsMatrix = {
         exports.Permissions.LEADS_CREATE,
         exports.Permissions.LEADS_READ,
         exports.Permissions.LEADS_UPDATE,
-        exports.Permissions.LEADS_WHATSAPP_PROPOSAL,
+        exports.Permissions.CUSTOMERS_READ,
+        exports.Permissions.CUSTOMERS_UPDATE,
+        exports.Permissions.SITE_VISITS_CREATE,
+        exports.Permissions.SITE_VISITS_READ,
+        exports.Permissions.SITE_VISITS_COMPLETE,
         exports.Permissions.PROJECTS_READ,
         exports.Permissions.PROPERTIES_READ,
+        exports.Permissions.REPORTS_READ_OWN,
         exports.Permissions.ATTENDANCE_READ_OWN,
         exports.Permissions.ATTENDANCE_SCAN,
-        exports.Permissions.ATTENDANCE_LATE_PROPOSAL,
-        exports.Permissions.ATTENDANCE_LEAVE_PROPOSAL,
-        exports.Permissions.REPORTS_CREATE,
-        exports.Permissions.REPORTS_READ_OWN,
         exports.Permissions.PERFORMANCE_READ_OWN,
         exports.Permissions.TASKS_READ,
         exports.Permissions.TASKS_UPDATE,
-        exports.Permissions.TASKS_CREATE,
-        exports.Permissions.BOOKINGS_READ,
-        exports.Permissions.PAYMENTS_READ,
-        exports.Permissions.DOCUMENTS_READ,
-        exports.Permissions.SITE_VISITS_CREATE,
-        exports.Permissions.SITE_VISITS_READ,
-        exports.Permissions.CUSTOMERS_READ,
-        exports.Permissions.CUSTOMERS_UPDATE,
-        exports.Permissions.CUSTOMERS_CONVERT,
     ]
 };
 // Employee Code Regex: e.g. RRH-EX-001 (MD), RRH-EX-002 (Admin), RRH-HR-001 (HR), RRH-SL-001 (Sales/Telecaller), DEV-SM-001
@@ -459,7 +496,6 @@ exports.LeadStatus = {
     NEW: 'NEW',
     ASSIGNED: 'ASSIGNED',
     CONTACTED: 'CONTACTED',
-    QUALIFICATION_PENDING: 'QUALIFICATION_PENDING',
     QUALIFIED: 'QUALIFIED',
     DEMO_SCHEDULED: 'DEMO_SCHEDULED',
     DEMO_COMPLETED: 'DEMO_COMPLETED',
@@ -483,6 +519,8 @@ exports.LeadSource = {
 };
 exports.LeadCreateSchema = zod_1.z.object({
     customer_name: zod_1.z.string().min(2, 'Customer name is required'),
+    ownership_type: zod_1.z.enum(['POOL', 'DIRECT']).default('POOL'),
+    introduced_by_id: zod_1.z.number().int().optional().nullable(),
     phone: zod_1.z.string().min(10, 'Valid phone number is required'),
     email: zod_1.z.string().email('Invalid email address').optional().or(zod_1.z.literal('')),
     source: zod_1.z.string().default('MANUAL_ENTRY'),
@@ -519,7 +557,6 @@ exports.LeadStatusUpdateSchema = zod_1.z.object({
         'NEW',
         'ASSIGNED',
         'CONTACTED',
-        'QUALIFICATION_PENDING',
         'QUALIFIED',
         'DEMO_SCHEDULED',
         'DEMO_COMPLETED',
@@ -1081,6 +1118,9 @@ exports.SiteVisitCompleteSchema = zod_1.z.object({
     feedback_notes: zod_1.z.string().optional(),
     proof_photo_url: zod_1.z.string().optional(),
 });
+exports.SiteVisitCancelConfirmSchema = zod_1.z.object({
+    reason: zod_1.z.string().min(1, "A cancellation reason is required"),
+});
 // Generic update (used by older/aux endpoints; status is free-form here but
 // routed through the §2 workflow engine in the service layer).
 exports.SiteVisitUpdateSchema = zod_1.z.object({
@@ -1131,19 +1171,11 @@ exports.PropertyImageMetadataSchema = zod_1.z.object({
     ]).optional(),
 });
 exports.EmptyBodySchema = zod_1.z.object({}).strict();
-exports.AttendanceQRPayloadSchema = zod_1.z.object({
-    qrPayload: zod_1.z.string().min(10, 'QR payload is required')
-});
-exports.AttendanceHolidaySchema = zod_1.z.object({
-    name: zod_1.z.string().min(2, 'Holiday name is required'),
-    date: zod_1.z.string().min(10, 'Holiday date is required')
-});
 exports.EmployeeSelfUpdateSchema = zod_1.z.object({
     full_name: zod_1.z.string().min(1).optional(),
     phone: zod_1.z.string().min(10).optional(),
     secondary_phone: zod_1.z.string().optional().nullable(),
     whatsapp_number: zod_1.z.string().optional().nullable(),
-    email: zod_1.z.string().optional().nullable(),
     current_address: zod_1.z.string().optional().nullable(),
     permanent_address: zod_1.z.string().optional().nullable(),
     emergency_contact_name: zod_1.z.string().optional().nullable(),
@@ -1151,11 +1183,11 @@ exports.EmployeeSelfUpdateSchema = zod_1.z.object({
     emergency_contact_phone: zod_1.z.string().optional().nullable(),
     blood_group: zod_1.z.string().optional().nullable(),
     social_links: zod_1.z.string().optional().nullable(),
-    pan_number: zod_1.z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format').or(zod_1.z.literal('')).optional().nullable(),
-    aadhaar_number: zod_1.z.string().regex(/^\d{12}$/, 'Aadhaar must be 12 digits').or(zod_1.z.literal('')).optional().nullable(),
+    pan_number: zod_1.z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format').optional().nullable(),
+    aadhaar_number: zod_1.z.string().regex(/^\d{12}$/, 'Aadhaar must be 12 digits').optional().nullable(),
     bank_name: zod_1.z.string().optional().nullable(),
     bank_account_number: zod_1.z.string().optional().nullable(),
-    bank_ifsc: zod_1.z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC format').or(zod_1.z.literal('')).optional().nullable(),
+    bank_ifsc: zod_1.z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC format').optional().nullable(),
     bank_branch: zod_1.z.string().optional().nullable(),
 });
 exports.EmployeeCreateSchema = zod_1.z.object({
@@ -1173,11 +1205,11 @@ exports.EmployeeCreateSchema = zod_1.z.object({
     emergency_contact_name: zod_1.z.string().optional().nullable(),
     emergency_contact_relation: zod_1.z.string().optional().nullable(),
     emergency_contact_phone: zod_1.z.string().optional().nullable(),
-    pan_number: zod_1.z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format').or(zod_1.z.literal('')).optional().nullable(),
-    aadhaar_number: zod_1.z.string().regex(/^\d{12}$/, 'Aadhaar must be 12 digits').or(zod_1.z.literal('')).optional().nullable(),
+    pan_number: zod_1.z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format').optional().nullable(),
+    aadhaar_number: zod_1.z.string().regex(/^\d{12}$/, 'Aadhaar must be 12 digits').optional().nullable(),
     bank_name: zod_1.z.string().optional().nullable(),
     bank_account_number: zod_1.z.string().optional().nullable(),
-    bank_ifsc: zod_1.z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC format').or(zod_1.z.literal('')).optional().nullable(),
+    bank_ifsc: zod_1.z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC format').optional().nullable(),
     bank_branch: zod_1.z.string().optional().nullable(),
     job_title: zod_1.z.string().optional().nullable(),
     department: zod_1.z.string().optional().nullable(),
@@ -1213,4 +1245,14 @@ exports.EmployeeUpdateSchema = exports.EmployeeSelfUpdateSchema.extend({
 });
 exports.EmployeeRolesUpdateSchema = zod_1.z.object({
     role_names: zod_1.z.array(zod_1.z.string()).min(1, 'At least one role is required')
+});
+exports.AttendanceQRPayloadSchema = zod_1.z.object({
+    qrPayload: zod_1.z.string().optional(),
+    qr_token: zod_1.z.string().optional(),
+    payload: zod_1.z.string().optional()
+});
+exports.AttendanceHolidaySchema = zod_1.z.object({
+    date: zod_1.z.string(),
+    name: zod_1.z.string(),
+    description: zod_1.z.string().optional()
 });

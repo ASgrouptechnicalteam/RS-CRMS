@@ -23,10 +23,10 @@ const profileUpload = storage_service_1.memoryUpload;
 router.patch('/me', auth_1.authenticateToken, (0, validate_1.validateRequestBody)(shared_1.EmployeeSelfUpdateSchema), async (req, res) => {
     try {
         const employeeId = req.user.employeeId;
-        const { full_name, phone, secondary_phone, whatsapp_number, email, current_address, permanent_address, emergency_contact_name, emergency_contact_relation, emergency_contact_phone, blood_group, social_links, pan_number, aadhaar_number, bank_name, bank_account_number, bank_ifsc, bank_branch } = req.body;
+        const { full_name, phone, secondary_phone, whatsapp_number, email, current_address, permanent_address, emergency_contact_name, emergency_contact_relation, emergency_contact_phone, blood_group, social_links, pan_number, aadhaar_number, bank_name, bank_account_number, bank_ifsc, bank_branch, } = req.body;
         const currentEmp = await prisma_1.prisma.employee.findUnique({
             where: { id: employeeId },
-            select: { bank_account_number: true }
+            select: { bank_account_number: true },
         });
         if (!currentEmp) {
             return res.status(404).json({ error: 'Employee not found' });
@@ -94,7 +94,7 @@ router.patch('/me', auth_1.authenticateToken, (0, validate_1.validateRequestBody
                 bank_ifsc: true,
                 bank_branch: true,
                 profile_image_url: true,
-            }
+            },
         });
         return res.status(200).json({
             message: 'Profile updated successfully',
@@ -119,7 +119,10 @@ router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
                 return res.status(400).json({ error: 'No image file provided.' });
             }
             const employeeId = req.user.employeeId;
-            const emp = await prisma_1.prisma.employee.findUnique({ where: { id: employeeId }, select: { profile_image_url: true } });
+            const emp = await prisma_1.prisma.employee.findUnique({
+                where: { id: employeeId },
+                select: { profile_image_url: true },
+            });
             const storageService = (0, storage_service_1.getStorageService)('profiles');
             const newImageUrl = await storageService.upload(file.buffer, file.originalname, file.mimetype);
             await prisma_1.prisma.employee.update({
@@ -127,7 +130,9 @@ router.post('/me/photo', auth_1.authenticateToken, async (req, res) => {
                 data: { profile_image_url: newImageUrl },
             });
             if (emp?.profile_image_url) {
-                await storageService.delete(emp.profile_image_url).catch(e => logger_1.logger.warn('Could not delete old profile photo:', e));
+                await storageService
+                    .delete(emp.profile_image_url)
+                    .catch((e) => logger_1.logger.warn('Could not delete old profile photo:', e));
             }
             return res.status(200).json({
                 message: 'Profile photo updated successfully',
@@ -193,7 +198,9 @@ router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Per
             backgroundEducation: emp.background_education || '',
         }));
         // SENSITIVE DATA FILTERING (Stage 2)
-        const canViewSensitive = (0, authorization_1.can)(req.user, shared_1.Permissions.EMPLOYEES_VIEW_SENSITIVE, { company_id: req.user.companyId });
+        const canViewSensitive = (0, authorization_1.can)(req.user, shared_1.Permissions.EMPLOYEES_VIEW_SENSITIVE, {
+            company_id: req.user.companyId,
+        });
         if (!canViewSensitive) {
             formatted.forEach((emp) => {
                 delete emp.panNumber;
@@ -233,7 +240,15 @@ router.get('/managers', auth_1.authenticateToken, async (req, res) => {
                 roles: {
                     some: {
                         role: {
-                            name: { in: [shared_1.Roles.MD, shared_1.Roles.HR_MANAGER, shared_1.Roles.PROJECT_MANAGER, shared_1.Roles.MARKETING_DIRECTOR, shared_1.Roles.DIGITAL_MARKETING_HEAD] },
+                            name: {
+                                in: [
+                                    shared_1.Roles.MD,
+                                    shared_1.Roles.HR_MANAGER,
+                                    shared_1.Roles.PROJECT_MANAGER,
+                                    shared_1.Roles.MARKETING_DIRECTOR,
+                                    shared_1.Roles.DIGITAL_MARKETING_HEAD,
+                                ],
+                            },
                         },
                     },
                 },
@@ -260,7 +275,9 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
     try {
         const { full_name, phone, secondary_phone, whatsapp_number, email, blood_group, social_links, current_address, permanent_address, emergency_contact_name, emergency_contact_relation, emergency_contact_phone, pan_number, aadhaar_number, bank_name, bank_account_number, bank_ifsc, bank_branch, job_title, department, employment_type, reporting_manager_id, date_of_joining, salary_ctc, background_education, role_name, branch_id, additional_branch_ids, initial_password, } = req.body;
         if (!role_name || !branch_id || !full_name || !phone) {
-            return res.status(400).json({ error: 'Full Name, Primary Phone, Role, and Branch are required fields' });
+            return res
+                .status(400)
+                .json({ error: 'Full Name, Primary Phone, Role, and Branch are required fields' });
         }
         const userRoles = req.user.roles;
         const isUserAdmin = userRoles.includes(shared_1.Roles.ADMIN);
@@ -269,7 +286,9 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
             return res.status(403).json({ error: 'Forbidden: Only ADMIN can create ADMIN accounts' });
         }
         if (role_name === shared_1.Roles.MD && !isUserAdmin && !isUserMD) {
-            return res.status(403).json({ error: 'Forbidden: Only ADMIN or MD can create MD accounts' });
+            return res
+                .status(403)
+                .json({ error: 'Forbidden: Only ADMIN or MD can create MD accounts' });
         }
         const parsedBranchId = parseInt(branch_id, 10);
         const branch = await prisma_1.prisma.branch.findUnique({ where: { id: parsedBranchId } });
@@ -277,15 +296,19 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
             return res.status(404).json({ error: 'Branch not found' });
         }
         if (!isUserAdmin && branch.company_id !== req.user.companyId) {
-            return res.status(403).json({ error: 'Forbidden: Cannot create employee in another company\'s branch' });
+            return res
+                .status(403)
+                .json({ error: "Forbidden: Cannot create employee in another company's branch" });
         }
         const validAdditionalBranchIds = [];
         if (Array.isArray(additional_branch_ids)) {
             const additionalBranches = await prisma_1.prisma.branch.findMany({
                 where: {
                     id: { in: additional_branch_ids.map((id) => parseInt(id, 10)) },
-                    company_id: isUserAdmin && req.body.company_id ? parseInt(req.body.company_id, 10) : req.user.companyId
-                }
+                    company_id: isUserAdmin && req.body.company_id
+                        ? parseInt(req.body.company_id, 10)
+                        : req.user.companyId,
+                },
             });
             for (const b of additionalBranches) {
                 if (b.id !== parsedBranchId)
@@ -293,14 +316,18 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
             }
         }
         // Resolve target company ID (Admin can specify, otherwise forced to actor's company)
-        const targetCompanyId = (isUserAdmin && req.body.company_id) ? parseInt(req.body.company_id, 10) : req.user.companyId;
+        const targetCompanyId = isUserAdmin && req.body.company_id
+            ? parseInt(req.body.company_id, 10)
+            : req.user.companyId;
         const deptCode = shared_1.DepartmentCodes[role_name] || 'EX';
         let employeeCode = '';
         let isUnique = false;
         while (!isUnique) {
             const randomNum = Math.floor(1000 + Math.random() * 9000); // 4-digit random number
             employeeCode = `RRH-${deptCode}-${randomNum}`;
-            const existing = await prisma_1.prisma.employee.findFirst({ where: { employee_code: employeeCode } });
+            const existing = await prisma_1.prisma.employee.findFirst({
+                where: { employee_code: employeeCode },
+            });
             if (!existing) {
                 isUnique = true;
             }
@@ -354,8 +381,8 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
                     },
                 },
                 branches: {
-                    create: validAdditionalBranchIds.map(id => ({ branch_id: id }))
-                }
+                    create: validAdditionalBranchIds.map((id) => ({ branch_id: id })),
+                },
             },
             include: {
                 branch: true,
@@ -370,7 +397,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
                 employeeCode: newEmp.employee_code,
                 fullName: newEmp.full_name,
                 branch: newEmp.branch?.name || 'All Branches',
-                additionalBranches: newEmp.branches.map(b => b.branch.name),
+                additionalBranches: newEmp.branches.map((b) => b.branch.name),
                 status: newEmp.status,
                 attendanceRequired: newEmp.attendance_required,
                 roles: newEmp.roles.map((r) => r.role.name),
@@ -393,19 +420,25 @@ router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_
         }
         // Phase 4: Record-level and company-level authorization
         if (!(0, authorization_1.can)(req.user, shared_1.Permissions.EMPLOYEES_UPDATE, targetEmployee)) {
-            return res.status(403).json({ error: 'Forbidden: Cannot update an employee outside your company' });
+            return res
+                .status(403)
+                .json({ error: 'Forbidden: Cannot update an employee outside your company' });
         }
         const canViewSensitive = (0, authorization_1.can)(req.user, shared_1.Permissions.EMPLOYEES_VIEW_SENSITIVE, targetEmployee);
         const body = req.body;
         // Privilege Escalation Check: Prevent self-promotion or assigning Admin/MD roles unless authorized
         if (body.role_name) {
             if (employeeId === req.user.employeeId && body.role_name !== targetEmployee.job_title) {
-                return res.status(403).json({ error: 'Forbidden: Cannot self-promote or change own role' });
+                return res
+                    .status(403)
+                    .json({ error: 'Forbidden: Cannot self-promote or change own role' });
             }
             if (body.role_name === shared_1.Roles.ADMIN && !req.user.roles.includes(shared_1.Roles.ADMIN)) {
                 return res.status(403).json({ error: 'Forbidden: Only Admin can assign Admin role' });
             }
-            if (body.role_name === shared_1.Roles.MD && !req.user.roles.includes(shared_1.Roles.ADMIN) && !req.user.roles.includes(shared_1.Roles.MD)) {
+            if (body.role_name === shared_1.Roles.MD &&
+                !req.user.roles.includes(shared_1.Roles.ADMIN) &&
+                !req.user.roles.includes(shared_1.Roles.MD)) {
                 return res.status(403).json({ error: 'Forbidden: Only MD or Admin can assign MD role' });
             }
         }
@@ -471,7 +504,9 @@ router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_
         if (body.report_required !== undefined)
             updateData.report_required = Boolean(body.report_required);
         if (body.reporting_manager_id !== undefined)
-            updateData.reporting_manager_id = body.reporting_manager_id ? parseInt(body.reporting_manager_id, 10) : null;
+            updateData.reporting_manager_id = body.reporting_manager_id
+                ? parseInt(body.reporting_manager_id, 10)
+                : null;
         if (body.date_of_joining !== undefined)
             updateData.date_of_joining = new Date(body.date_of_joining);
         if (body.background_education !== undefined)
@@ -490,7 +525,10 @@ router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_
             if (body.role_name) {
                 const targetRole = await tx.role.findUnique({ where: { name: body.role_name } });
                 if (targetRole) {
-                    const currentRoles = await tx.employeeRole.findMany({ where: { employee_id: employeeId }, include: { role: true } });
+                    const currentRoles = await tx.employeeRole.findMany({
+                        where: { employee_id: employeeId },
+                        include: { role: true },
+                    });
                     const hasDifferentRole = !currentRoles.some((r) => r.role.name === body.role_name);
                     if (hasDifferentRole) {
                         shouldRevokeSessions = true;
@@ -518,7 +556,7 @@ router.patch('/:id', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_
             if (shouldRevokeSessions) {
                 await tx.authSession.updateMany({
                     where: { employee_id: employeeId, revoked: false },
-                    data: { revoked: true, revocation_reason: 'AUTHORIZATION_CHANGED' }
+                    data: { revoked: true, revocation_reason: 'AUTHORIZATION_CHANGED' },
                 });
             }
             return emp;
@@ -587,7 +625,9 @@ router.post('/:id/reset-password', auth_1.authenticateToken, (0, authz_1.require
             return res.status(404).json({ error: 'Employee not found' });
         }
         if (!(0, authorization_1.can)(req.user, shared_1.Permissions.EMPLOYEES_RESET_PASSWORD, targetEmployee)) {
-            return res.status(403).json({ error: 'Forbidden: Cannot reset password for employee outside your company' });
+            return res
+                .status(403)
+                .json({ error: 'Forbidden: Cannot reset password for employee outside your company' });
         }
         const newHash = await bcryptjs_1.default.hash('Radhareal@123', 12);
         await prisma_1.prisma.$transaction(async (tx) => {
@@ -596,12 +636,12 @@ router.post('/:id/reset-password', auth_1.authenticateToken, (0, authz_1.require
                 data: {
                     password_hash: newHash,
                     first_login_done: false,
-                    token_version: { increment: 1 }
+                    token_version: { increment: 1 },
                 },
             });
             await tx.authSession.updateMany({
                 where: { employee_id: employeeId, revoked: false },
-                data: { revoked: true, revocation_reason: 'ADMIN_PASSWORD_RESET' }
+                data: { revoked: true, revocation_reason: 'ADMIN_PASSWORD_RESET' },
             });
         });
         // Notify employee their password was reset by admin
@@ -634,14 +674,16 @@ router.put('/:id/roles', auth_1.authenticateToken, (0, validate_1.validateReques
         }
         const targetEmployee = await prisma_1.prisma.employee.findUnique({
             where: { id: employeeId },
-            include: { branch: true }
+            include: { branch: true },
         });
         if (!targetEmployee) {
             return res.status(404).json({ error: 'Employee not found' });
         }
         // Tenant check: target employee must be in same company_id
         if (targetEmployee.branch?.company_id !== req.user.companyId && !isUserAdmin) {
-            return res.status(403).json({ error: 'Forbidden: Cannot manage roles for an employee outside your company' });
+            return res
+                .status(403)
+                .json({ error: 'Forbidden: Cannot manage roles for an employee outside your company' });
         }
         // Check if roles are valid according to shared constants
         const validRolesSet = new Set(Object.values(shared_1.Roles));
@@ -657,7 +699,7 @@ router.put('/:id/roles', auth_1.authenticateToken, (0, validate_1.validateReques
         // Check if removing the last MD in the company
         const currentRoles = await prisma_1.prisma.employeeRole.findMany({
             where: { employee_id: employeeId },
-            include: { role: true }
+            include: { role: true },
         });
         const wasMD = currentRoles.some((r) => r.role.name === shared_1.Roles.MD);
         const willBeMD = role_names.includes(shared_1.Roles.MD);
@@ -668,17 +710,19 @@ router.put('/:id/roles', auth_1.authenticateToken, (0, validate_1.validateReques
                     where: {
                         role: { name: shared_1.Roles.MD },
                         employee_id: { not: employeeId },
-                        employee: { branch: { company_id: companyId } }
-                    }
+                        employee: { branch: { company_id: companyId } },
+                    },
                 });
                 if (otherMDs === 0) {
-                    return res.status(400).json({ error: 'Cannot remove the last Managing Director from the company' });
+                    return res
+                        .status(400)
+                        .json({ error: 'Cannot remove the last Managing Director from the company' });
                 }
             }
         }
         // Fetch role DB IDs
         const targetRoles = await prisma_1.prisma.role.findMany({
-            where: { name: { in: role_names } }
+            where: { name: { in: role_names } },
         });
         if (targetRoles.length !== role_names.length) {
             return res.status(400).json({ error: 'One or more roles do not exist in the database' });
@@ -690,17 +734,17 @@ router.put('/:id/roles', auth_1.authenticateToken, (0, validate_1.validateReques
             await tx.employeeRole.createMany({
                 data: targetRoles.map((r) => ({
                     employee_id: employeeId,
-                    role_id: r.id
-                }))
+                    role_id: r.id,
+                })),
             });
             // Invalidate sessions
             await tx.employee.update({
                 where: { id: employeeId },
-                data: { token_version: { increment: 1 } }
+                data: { token_version: { increment: 1 } },
             });
             await tx.authSession.updateMany({
                 where: { employee_id: employeeId, revoked: false },
-                data: { revoked: true, revocation_reason: 'AUTHORIZATION_CHANGED' }
+                data: { revoked: true, revocation_reason: 'AUTHORIZATION_CHANGED' },
             });
         });
         await (0, notifyEmployee_1.notifyEmployee)(employeeId, {

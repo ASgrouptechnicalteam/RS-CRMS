@@ -246,4 +246,33 @@ router.get('/:id/tasks', auth_1.authenticateToken, (0, authz_1.requireAuthz)(sha
         return handleServiceError(error, res);
     }
 });
+// POST /api/v1/leads/:id/recover-manual - Manually recover a dropped/cancelled lead (Same ID)
+router.post('/:id/recover-manual', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.LEADS_UPDATE), async (req, res) => {
+    try {
+        const leadId = parseInt(req.params.id, 10);
+        const recovered = await lead_service_1.LeadService.recoverManualLead(req.user, leadId);
+        return res.status(200).json({
+            message: 'Lead manually recovered successfully',
+            lead: recovered
+        });
+    }
+    catch (error) {
+        return handleServiceError(error, res);
+    }
+});
+// POST /api/v1/leads/:id/recover-fresh - Start a fresh lead from a dropped/cancelled one (New ID)
+router.post('/:id/recover-fresh', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Permissions.LEADS_UPDATE), // Or LEADS_CREATE, but practically they need access to the old lead
+async (req, res) => {
+    try {
+        const leadId = parseInt(req.params.id, 10);
+        const freshLead = await lead_service_1.LeadService.recoverFreshLead(req.user, leadId);
+        return res.status(201).json({
+            message: 'Fresh lead created successfully from history',
+            lead: freshLead
+        });
+    }
+    catch (error) {
+        return handleServiceError(error, res);
+    }
+});
 exports.default = router;

@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PropertyService = exports.deriveAvailability = void 0;
 const prisma_1 = require("../lib/prisma");
@@ -9,6 +32,7 @@ const workflowEngine_1 = require("../workflows/workflowEngine");
 const types_1 = require("../workflows/types");
 const dataScope_1 = require("../authz/dataScope");
 const slugify_1 = require("../utils/slugify");
+const logger_1 = require("../utils/logger");
 const p = prisma_1.prisma;
 /**
  * Derives the public-facing availability status from internal property state.
@@ -279,10 +303,16 @@ class PropertyService {
                 }
             }
         }
-        return await p.property.update({
+        const updatedProperty = await p.property.update({
             where: { id: propertyId },
             data: safeData,
         });
+        if (updatedProperty.status === 'LIVE') {
+            Promise.resolve().then(() => __importStar(require('./lead.service'))).then(({ LeadService }) => {
+                LeadService.triggerLeadRecoveryForProperty(updatedProperty.id).catch(err => logger_1.logger.error(`Error triggering lead recovery for property ${updatedProperty.id}:`, err));
+            });
+        }
+        return updatedProperty;
     }
     static async verifyProperty(user, propertyId, data) {
         const property = await p.property.findFirst({
@@ -471,7 +501,7 @@ class PropertyService {
             throw { status: 409, message: transition.reason || 'Invalid state transition' };
         }
         const nextStatus = data.approved ? 'LIVE' : 'REJECTED';
-        return await p.$transaction(async (tx) => {
+        const result = await p.$transaction(async (tx) => {
             const updated = await tx.property.update({
                 where: { id: propertyId },
                 data: {
@@ -501,6 +531,12 @@ class PropertyService {
             });
             return updated;
         });
+        if (result.status === 'LIVE') {
+            Promise.resolve().then(() => __importStar(require('./lead.service'))).then(({ LeadService }) => {
+                LeadService.triggerLeadRecoveryForProperty(result.id).catch(err => logger_1.logger.error(`Error triggering lead recovery for property ${result.id}:`, err));
+            });
+        }
+        return result;
     }
     static async togglePublication(user, propertyId, companyId, isPublished) {
         if (!(0, authorization_1.can)(user, shared_2.Permissions.PROPERTIES_UPDATE)) {

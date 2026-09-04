@@ -127,7 +127,8 @@ router.post('/scan', auth_1.authenticateKioskToken, (0, validate_1.validateReque
     const targetCompanyId = req.kiosk.companyId;
     const branchId = req.kiosk.branchId; // physical scan location
     try {
-        const payload = parseAndVerifyQR(req, req.body.qrPayload);
+        const rawPayload = req.body.qrPayload || req.body.qr_token || req.body.payload;
+        const payload = parseAndVerifyQR(req, rawPayload);
         if (!payload)
             return res.status(400).json({ error: 'Invalid or forged QR Code token' });
         const targetEmployeeId = payload.employeeId;
@@ -235,7 +236,8 @@ router.post('/checkout', auth_1.authenticateKioskToken, (0, validate_1.validateR
     const targetCompanyId = req.kiosk.companyId;
     const branchId = req.kiosk.branchId;
     try {
-        const payload = parseAndVerifyQR(req, req.body.qrPayload);
+        const rawPayload = req.body.qrPayload || req.body.qr_token || req.body.payload;
+        const payload = parseAndVerifyQR(req, rawPayload);
         if (!payload)
             return res.status(400).json({ error: 'Invalid or forged QR Code token' });
         const targetEmployeeId = payload.employeeId;
@@ -497,6 +499,30 @@ router.post('/proposals/:id/approve', auth_1.authenticateToken, (0, auth_1.requi
                 reviewed_at: new Date(),
             },
         });
+        if (updated.type === 'LATE_CHECKIN') {
+            const targetDate = new Date(updated.target_date);
+            const { dateString } = (0, time_1.getISTComponents)(targetDate);
+            const istTodayStart = new Date(`${dateString}T00:00:00+05:30`);
+            const istTodayEnd = new Date(`${dateString}T23:59:59+05:30`);
+            const existingLog = await p.attendanceLog.findFirst({
+                where: {
+                    employee_id: updated.employee_id,
+                    check_in_at: { gte: istTodayStart, lte: istTodayEnd },
+                },
+            });
+            if (existingLog) {
+                const emp = await p.employee.findUnique({ where: { id: updated.employee_id } });
+                if (emp) {
+                    const newStatus = (0, time_1.calculateAttendanceStatus)(existingLog.check_in_at, true, emp.employment_type || 'FULL_TIME');
+                    if (newStatus !== existingLog.status) {
+                        await p.attendanceLog.update({
+                            where: { id: existingLog.id },
+                            data: { status: newStatus },
+                        });
+                    }
+                }
+            }
+        }
         (0, notifyEmployee_1.notifyEmployee)(proposal.employee_id, {
             title: 'Proposal Approved',
             message: `Your ${proposal.type === 'LEAVE' ? 'leave' : 'late'} request for ${new Date(proposal.target_date).toLocaleDateString()} has been approved.`,

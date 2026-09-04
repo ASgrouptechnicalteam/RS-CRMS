@@ -69,34 +69,24 @@ class LeadWorkflow {
                 };
             }
         }
-        // §1 row 3: CONTACTED → QUALIFICATION_PENDING is auto only when all
-        // qualification fields are still null.
-        if (newStatus === shared_1.LeadStatus.QUALIFICATION_PENDING &&
-            LeadWorkflow.AUTO_TO_QUALIFICATION_PENDING_FROM.has(currentState)) {
-            if (!LeadWorkflow.isQualificationEmpty(entity)) {
-                return {
-                    allowed: false,
-                    reason: 'Transition to QUALIFICATION_PENDING is only auto-valid when all qualification fields (budget_min, budget_max, property_type_preference, preferred_location) are null. When fields are present, use QUALIFIED directly.',
-                };
-            }
-        }
-        // §1 row 4: CONTACTED → QUALIFIED direct is only valid when all
-        // qualification fields are already present (skip QUALIFICATION_PENDING).
-        if (newStatus === shared_1.LeadStatus.QUALIFIED &&
-            LeadWorkflow.CAN_SKIP_TO_QUALIFIED_FROM.has(currentState)) {
+        // §1 row 4: CONTACTED → QUALIFIED is only valid when all
+        // qualification fields are present.
+        if (newStatus === shared_1.LeadStatus.QUALIFIED) {
             if (!LeadWorkflow.isFullyQualified(entity)) {
                 return {
                     allowed: false,
-                    reason: 'Transition to QUALIFIED requires all qualification fields (budget_min, budget_max, property_type_preference, preferred_location) to be present. Use QUALIFICATION_PENDING first to capture them.',
+                    reason: 'Transition to QUALIFIED requires all qualification fields (budget_min, budget_max, property_type_preference, preferred_location) to be present.',
                 };
             }
         }
         // §1 row 5: DEMO_SCHEDULED requires a scheduled date and a handler.
         if (newStatus === shared_1.LeadStatus.DEMO_SCHEDULED) {
-            if (!entity || !entity.demo_scheduled_at || !entity.demo_handler_id) {
+            const hasPendingDemo = entity && entity.pending_demo && entity.pending_demo.scheduled_at && entity.pending_demo.handler_id;
+            const hasExistingDemo = entity && entity.demos && entity.demos.length > 0;
+            if (!hasPendingDemo && !hasExistingDemo) {
                 return {
                     allowed: false,
-                    reason: 'Transition to DEMO_SCHEDULED requires demo_scheduled_at and demo_handler_id',
+                    reason: 'Transition to DEMO_SCHEDULED requires demo_scheduled_at and demo_handler_id payload, or an existing Demo record',
                 };
             }
         }
@@ -217,7 +207,6 @@ exports.LeadWorkflow = LeadWorkflow;
 LeadWorkflow.DROPPABLE_FROM = new Set([
     shared_1.LeadStatus.ASSIGNED,
     shared_1.LeadStatus.CONTACTED,
-    shared_1.LeadStatus.QUALIFICATION_PENDING,
     shared_1.LeadStatus.QUALIFIED,
     shared_1.LeadStatus.DEMO_SCHEDULED,
     shared_1.LeadStatus.DEMO_COMPLETED,
@@ -231,17 +220,6 @@ LeadWorkflow.DROPPABLE_FROM = new Set([
 LeadWorkflow.REQUIRES_CALL_LOGGED = new Set([
     shared_1.LeadStatus.ASSIGNED,
 ]);
-/** Statuses that can auto-advance to QUALIFICATION_PENDING when all qualification
- * fields (budget_min, budget_max, property_type_preference, preferred_location)
- * are still null. Spec §1 row 3. */
-LeadWorkflow.AUTO_TO_QUALIFICATION_PENDING_FROM = new Set([
-    shared_1.LeadStatus.CONTACTED,
-]);
-/** Statuses that can directly go to QUALIFIED when all qualification fields are
- * already present, skipping QUALIFICATION_PENDING. Spec §1 row 4. */
-LeadWorkflow.CAN_SKIP_TO_QUALIFIED_FROM = new Set([
-    shared_1.LeadStatus.CONTACTED,
-]);
 /** Strict Transition Matrix for Leads (spec §1 transition table).
  * Key: Current Status → allowed next statuses.
  */
@@ -249,11 +227,6 @@ LeadWorkflow.transitionMatrix = {
     [shared_1.LeadStatus.NEW]: [shared_1.LeadStatus.ASSIGNED],
     [shared_1.LeadStatus.ASSIGNED]: [shared_1.LeadStatus.CONTACTED, shared_1.LeadStatus.DROPPED],
     [shared_1.LeadStatus.CONTACTED]: [
-        shared_1.LeadStatus.QUALIFICATION_PENDING,
-        shared_1.LeadStatus.QUALIFIED,
-        shared_1.LeadStatus.DROPPED,
-    ],
-    [shared_1.LeadStatus.QUALIFICATION_PENDING]: [
         shared_1.LeadStatus.QUALIFIED,
         shared_1.LeadStatus.DROPPED,
     ],

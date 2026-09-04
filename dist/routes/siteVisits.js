@@ -11,10 +11,11 @@ const router = (0, express_1.Router)();
 // GET /api/v1/site-visits - List site visits (role and company-aware)
 router.get('/', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_READ]), async (req, res, next) => {
     try {
-        const { status, leadId } = req.query;
+        const { status, leadId, escalated } = req.query;
         const filters = {
             status: status,
             leadId: leadId,
+            escalated: escalated === 'true',
         };
         const visits = await siteVisit_service_1.SiteVisitService.listVisits(req.user, filters);
         return res.status(200).json({ visits });
@@ -213,6 +214,78 @@ router.post('/:id/cancel', auth_1.authenticateToken, (0, auth_1.requirePermissio
     }
     catch (error) {
         logger_1.logger.error('Cancel site visit error:', error);
+        next(error);
+    }
+});
+// ==========================================
+// Phase D: Hold/Cancel Flow Endpoints
+// ==========================================
+// POST /api/v1/site-visits/:id/hold - Reconfirmation fails → ON_HOLD
+router.post('/:id/hold', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_VERIFY]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
+    try {
+        const visitId = parseInt(req.params.id, 10);
+        if (isNaN(visitId))
+            return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+        const visit = await siteVisit_service_1.SiteVisitService.holdVisit(req.user, visitId);
+        return res.status(200).json({
+            message: `Site visit ${visit.booking_code} placed on hold.`,
+            visit,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Hold site visit error:', error);
+        next(error);
+    }
+});
+// POST /api/v1/site-visits/:id/initiate-cancel - Telecaller requests PM cross-check
+router.post('/:id/initiate-cancel', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_VERIFY]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
+    try {
+        const visitId = parseInt(req.params.id, 10);
+        if (isNaN(visitId))
+            return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+        const visit = await siteVisit_service_1.SiteVisitService.initiateCancellation(req.user, visitId);
+        return res.status(200).json({
+            message: `Cancellation cross-check initiated for ${visit.booking_code}.`,
+            visit,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Initiate cancel site visit error:', error);
+        next(error);
+    }
+});
+// POST /api/v1/site-visits/:id/reject-cancel - PM indicates customer responded
+router.post('/:id/reject-cancel', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_ASSIGN_AGENT]), (0, validate_1.validateRequestBody)(shared_2.EmptyBodySchema), async (req, res, next) => {
+    try {
+        const visitId = parseInt(req.params.id, 10);
+        if (isNaN(visitId))
+            return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+        const visit = await siteVisit_service_1.SiteVisitService.rejectCancellation(req.user, visitId);
+        return res.status(200).json({
+            message: `Cancellation rejected for ${visit.booking_code}. Reverted to active reconfirmation.`,
+            visit,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Reject cancel site visit error:', error);
+        next(error);
+    }
+});
+// POST /api/v1/site-visits/:id/confirm-cancel - PM explicitly confirms cancellation
+router.post('/:id/confirm-cancel', auth_1.authenticateToken, (0, auth_1.requirePermission)([shared_1.Permissions.SITE_VISITS_ASSIGN_AGENT]), (0, validate_1.validateRequestBody)(shared_2.SiteVisitCancelConfirmSchema), async (req, res, next) => {
+    try {
+        const visitId = parseInt(req.params.id, 10);
+        if (isNaN(visitId))
+            return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+        const { reason } = req.body;
+        const visit = await siteVisit_service_1.SiteVisitService.confirmCancellation(req.user, visitId, reason);
+        return res.status(200).json({
+            message: `Site visit ${visit.booking_code} cancellation confirmed.`,
+            visit,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Confirm cancel site visit error:', error);
         next(error);
     }
 });

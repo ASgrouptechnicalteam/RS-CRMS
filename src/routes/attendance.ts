@@ -591,6 +591,33 @@ router.post(
         },
       });
 
+      if (updated.type === 'LATE_CHECKIN') {
+        const targetDate = new Date(updated.target_date);
+        const { dateString } = getISTComponents(targetDate);
+        const istTodayStart = new Date(`${dateString}T00:00:00+05:30`);
+        const istTodayEnd   = new Date(`${dateString}T23:59:59+05:30`);
+        
+        const existingLog = await p.attendanceLog.findFirst({
+          where: {
+            employee_id: updated.employee_id,
+            check_in_at: { gte: istTodayStart, lte: istTodayEnd },
+          },
+        });
+
+        if (existingLog) {
+          const emp = await p.employee.findUnique({ where: { id: updated.employee_id } });
+          if (emp) {
+            const newStatus = calculateAttendanceStatus(existingLog.check_in_at, true, emp.employment_type || 'FULL_TIME');
+            if (newStatus !== existingLog.status) {
+              await p.attendanceLog.update({
+                where: { id: existingLog.id },
+                data: { status: newStatus },
+              });
+            }
+          }
+        }
+      }
+
       notifyEmployee(proposal.employee_id, {
         title: 'Proposal Approved',
         message: `Your ${proposal.type === 'LEAVE' ? 'leave' : 'late'} request for ${new Date(proposal.target_date).toLocaleDateString()} has been approved.`,

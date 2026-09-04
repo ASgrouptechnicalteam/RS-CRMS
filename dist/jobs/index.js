@@ -23,8 +23,10 @@ class JobManager {
             node_cron_1.default.schedule(job.schedule, async () => {
                 try {
                     logger_1.logger.info(`[Jobs] Starting ${job.name}...`);
+                    const start = performance.now();
                     await job.handler();
-                    logger_1.logger.info(`[Jobs] Completed ${job.name} successfully.`);
+                    const duration = Math.round(performance.now() - start);
+                    logger_1.logger.info(`[Jobs] Completed ${job.name} successfully in ${duration}ms.`);
                 }
                 catch (error) {
                     logger_1.logger.error({ err: error }, `[Jobs] FAILURE in ${job.name}: Alerting system!`);
@@ -39,8 +41,10 @@ class JobManager {
             throw new Error(`Job ${name} not found`);
         logger_1.logger.info(`[Jobs] Manually triggering ${job.name}...`);
         try {
+            const start = performance.now();
             await job.handler();
-            logger_1.logger.info(`[Jobs] Manual execution of ${job.name} completed successfully.`);
+            const duration = Math.round(performance.now() - start);
+            logger_1.logger.info(`[Jobs] Manual execution of ${job.name} completed successfully in ${duration}ms.`);
         }
         catch (error) {
             logger_1.logger.error({ err: error }, `[Jobs] FAILURE in manual execution of ${job.name}: Alerting system!`);

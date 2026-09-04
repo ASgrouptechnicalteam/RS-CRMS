@@ -235,7 +235,10 @@ router.get('/pm-metrics', authenticateToken, async (req: AuthenticatedRequest, r
 // --- Achievements Endpoint ---
 router.get('/achievements', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const isMDOrAdmin = req.user!.roles.includes('MD') || req.user!.roles.includes('ADMIN');
+    const isMDOrAdmin = req.user!.roles.includes(Roles.MD) || 
+                        req.user!.roles.includes(Roles.ADMIN) || 
+                        req.user!.roles.includes(Roles.MARKETING_DIRECTOR);
+
     const targetEmployeeId = (isMDOrAdmin && req.query.employeeId && req.query.employeeId !== 'ALL') 
       ? Number(req.query.employeeId) 
       : (req.query.employeeId === 'ALL' ? 'ALL' : req.user!.employeeId);

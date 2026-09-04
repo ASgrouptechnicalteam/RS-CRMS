@@ -17,10 +17,8 @@ const MANAGEMENT_ROLES = [
  * Ensures company isolation for all scopes, except for System Admins.
  */
 function getBaseScope(user: TokenPayload): any {
-  if (user.roles.includes(Roles.ADMIN)) {
-    return {};
-  }
-  return { company_id: user.companyId };
+  // Global visibility across all companies by default (except Properties)
+  return {};
 }
 
 /**
@@ -38,7 +36,7 @@ export async function buildLeadScope(user: TokenPayload): Promise<Prisma.LeadWhe
   // 3. MANAGEMENT
   const isManagement = user.roles.some((r) => MANAGEMENT_ROLES.includes(r as any));
   if (isManagement) {
-    return baseScope; // Entire company leads
+    return baseScope; // Entire company leads (which is now global)
   }
 
   // 4. MANAGERS & TELECALLERS (TEAM / OWN scope)
@@ -91,18 +89,19 @@ export async function buildEmployeeScope(user: TokenPayload): Promise<Prisma.Emp
  * Builds the read-visibility scope for Properties.
  */
 export async function buildPropertyScope(user: TokenPayload): Promise<Prisma.PropertyWhereInput> {
-  const baseScope = getBaseScope(user);
+  // Properties strictly retain company_id segregation
+  const propertyBaseScope = user.roles.includes(Roles.ADMIN) ? {} : { company_id: user.companyId };
 
   // 1. ADMIN & MANAGEMENT
   const isManagement = user.roles.some((r) => MANAGEMENT_ROLES.includes(r as any));
   if (user.roles.includes(Roles.ADMIN) || isManagement) {
-    return baseScope;
+    return propertyBaseScope;
   }
 
   // 2. PROJECT MANAGER
   if (user.roles.includes(Roles.PROJECT_MANAGER)) {
     return {
-      ...baseScope,
+      ...propertyBaseScope,
       OR: [
         { assigned_pm_id: user.employeeId },
         { status: 'LIVE' },
@@ -113,7 +112,7 @@ export async function buildPropertyScope(user: TokenPayload): Promise<Prisma.Pro
   // 3. TELECALLER, AGENT
   // Default to LIVE properties only within their company.
   return {
-    ...baseScope,
+    ...propertyBaseScope,
     status: 'LIVE',
   };
 }

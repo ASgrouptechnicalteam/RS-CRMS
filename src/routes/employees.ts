@@ -271,7 +271,7 @@ router.get(
 router.get('/branches', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const branches = await prisma.branch.findMany({
-      where: { company_id: req.user!.companyId },
+      where: { },
     });
     return res.status(200).json({ branches });
   } catch (error) {

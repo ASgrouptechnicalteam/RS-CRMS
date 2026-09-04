@@ -25,7 +25,7 @@ router.get('/all-team-tasks', authenticateToken, requireAuthz(Permissions.REPORT
       where: {
         status: { in: ['PENDING', 'IN_PROGRESS'] },
         target_date: { lt: now },
-        assignee: { company_id: req.user!.companyId }
+        
       },
       include: { assignee: true },
     });
@@ -40,7 +40,7 @@ router.get('/all-team-tasks', authenticateToken, requireAuthz(Permissions.REPORT
       const mdEmp = await p.employee.findFirst({
         where: { 
           roles: { some: { role: { name: Roles.MD } } },
-          company_id: req.user!.companyId 
+          
         },
       });
 
@@ -57,7 +57,7 @@ router.get('/all-team-tasks', authenticateToken, requireAuthz(Permissions.REPORT
     }
 
     const allTasks = await p.task.findMany({
-      where: { assignee: { company_id: req.user!.companyId } },
+      where: { },
       include: { assignee: true },
       orderBy: [{ target_date: 'asc' }],
     });
@@ -104,14 +104,14 @@ router.post('/', authenticateToken, requireAuthz(Permissions.TASKS_CREATE), vali
     const creatorId = req.user!.employeeId;
 
     // Validate Assignee Company Isolation
-    const assignee = await p.employee.findFirst({ where: { id: assignee_id, company_id: req.user!.companyId } });
+    const assignee = await p.employee.findFirst({ where: { id: assignee_id, } });
     if (!assignee) {
       return res.status(400).json({ error: 'Assignee not found or outside your company.' });
     }
 
     // Validate Lead Access if lead_id is provided
     if (lead_id) {
-      const existingLead = await p.lead.findFirst({ where: { id: lead_id, company_id: req.user!.companyId } });
+      const existingLead = await p.lead.findFirst({ where: { id: lead_id, } });
       if (!existingLead) {
         return res.status(404).json({ error: 'Lead not found.' });
       }
@@ -122,7 +122,7 @@ router.post('/', authenticateToken, requireAuthz(Permissions.TASKS_CREATE), vali
 
     // Validate Opportunity Access if opportunity_id is provided
     if (opportunity_id) {
-      const existingOpp = await p.opportunity.findFirst({ where: { id: opportunity_id, company_id: req.user!.companyId } });
+      const existingOpp = await p.opportunity.findFirst({ where: { id: opportunity_id, } });
       if (!existingOpp) {
         return res.status(404).json({ error: 'Opportunity not found.' });
       }
@@ -170,7 +170,7 @@ router.get('/:id/sla', authenticateToken, async (req: AuthenticatedRequest, res:
 
     // Locate the Task within the user's company scope
     const task = await p.task.findFirst({
-      where: { id: taskId, assignee: { company_id: req.user!.companyId } },
+      where: { id: taskId, },
       include: { assignee: { select: { company_id: true } } },
     });
 
@@ -210,7 +210,7 @@ router.patch('/:id/status', authenticateToken, requireAuthz(Permissions.TASKS_UP
     const employeeId = req.user!.employeeId;
 
     const existingTask = await p.task.findFirst({
-      where: { id: taskId, assignee: { company_id: req.user!.companyId } },
+      where: { id: taskId, },
       include: { assignee: { select: { company_id: true } } }
     });
 

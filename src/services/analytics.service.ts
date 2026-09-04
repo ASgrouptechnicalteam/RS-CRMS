@@ -103,25 +103,47 @@ export interface ExecutiveMetricsResponse {
   totalEmployeesCount: number;
   attendanceExceptionsCount: number;
   pendingLeaveRequestsCount: number;
+  
+  // Pipeline metrics
+  newLeadsCount: number;
+  contactedLeadsCount: number;
+  qualifiedLeadsCount: number;
+  siteVisitsCompletedCount: number;
+  bookingInitiatedCount: number;
+  activeCustomersCount: number;
 }
 
 export class AnalyticsService {
   // ---- shared low-level company-scoped counters ----
 
-  /** COUNT(*) WHERE company_id (KPI 1) - equivalent to md.ts. */
+  /** COUNT(*) (KPI 1) - globally counting leads. */
   private static async countLeads(companyId: number): Promise<number> {
-    return await p.lead.count({ where: { company_id: companyId } });
+    return await p.lead.count();
   }
 
-  /** COUNT(*) WHERE company_id AND status='BOOKED' (KPI 2). */
+  /** COUNT(*) WHERE status='BOOKED' (KPI 2). */
   private static async countWonLeads(companyId: number): Promise<number> {
-    return await p.lead.count({ where: { company_id: companyId, status: 'BOOKED' } });
+    return await p.lead.count({ where: { status: 'BOOKED' } });
   }
 
-  /** COUNT(*) WHERE company_id AND status='SITE_VISIT_SCHEDULED' (KPI 3). */
+  /** COUNT(*) WHERE status='SITE_VISIT_SCHEDULED' (KPI 3). */
   private static async countSiteVisitsScheduled(companyId: number): Promise<number> {
     return await p.lead.count({
-      where: { company_id: companyId, status: 'SITE_VISIT_SCHEDULED' },
+      where: { status: 'SITE_VISIT_SCHEDULED' },
+    });
+  }
+
+  /** Generalized lead counter by status */
+  private static async countLeadsByStatus(companyId: number, status: string): Promise<number> {
+    return await p.lead.count({
+      where: { status },
+    });
+  }
+
+  /** Count ACTIVE customers */
+  private static async countActiveCustomers(companyId: number): Promise<number> {
+    return await p.customer.count({
+      where: { status: 'ACTIVE' },
     });
   }
 
@@ -149,19 +171,19 @@ export class AnalyticsService {
     };
   }
 
-  /** COUNT(*) WHERE company_id AND status='ACTIVE' (KPI 6). Preserves md.ts (no deleted_at filter). */
+  /** COUNT(*) WHERE status='ACTIVE' (KPI 6). Preserves md.ts (no deleted_at filter). */
   private static async countActiveEmployees(companyId: number): Promise<number> {
     const res: any =
-      await p.$queryRaw`SELECT COUNT(*) as count FROM Employee WHERE company_id = ${companyId} AND status = 'ACTIVE'`;
+      await p.$queryRaw`SELECT COUNT(*) as count FROM Employee WHERE status = 'ACTIVE'`;
     return Number(res[0]?.count || 0);
   }
 
   /**
-   * Total bookings (KPI 5). Approved definition = COUNT(*) WHERE company_id.
+   * Total bookings (KPI 5).
    * No status filtering is applied (the KPI is a total booking count).
    */
   private static async countBookings(companyId: number): Promise<number> {
-    return await p.booking.count({ where: { company_id: companyId } });
+    return await p.booking.count();
   }
 
   /**
@@ -180,8 +202,7 @@ export class AnalyticsService {
       SELECT COUNT(DISTINCT e.id) as count
       FROM Employee e
       LEFT JOIN AttendanceLog a ON a.employee_id = e.id AND a.check_in_at >= ${startOfDay}
-      WHERE e.company_id = ${companyId}
-        AND e.status = 'ACTIVE'
+      WHERE e.status = 'ACTIVE'
         AND (e.attendance_required = false OR a.id IS NOT NULL)
     `;
     const totalExemptOrStamped = Number(res[0]?.count || 0);
@@ -200,7 +221,6 @@ export class AnalyticsService {
     const gte = new Date(`${dateString}T00:00:00.000+05:30`);
     const lte = new Date(`${dateString}T23:59:59.999+05:30`);
     const where: any = {
-      employee: { company_id: companyId },
       submitted_at: { gte, lte },
     };
     const [total, met] = await Promise.all([
@@ -219,7 +239,6 @@ export class AnalyticsService {
   private static async teamPerformance(companyId: number): Promise<TeamPerformanceKpis> {
     const employees = await p.employee.findMany({
       where: {
-        company_id: companyId,
         deleted_at: null,
         status: 'ACTIVE',
         roles: { none: { role: { is_invisible: true } } },
@@ -275,7 +294,6 @@ export class AnalyticsService {
 
   private static async countPendingProposals(companyId: number): Promise<number> {
     const employees = await p.employee.findMany({
-      where: { company_id: companyId },
       select: { id: true },
     });
     
@@ -290,14 +308,22 @@ export class AnalyticsService {
 
   // ---- public: md.ts executive-metrics (delegated, contract-preserving) ----
   static async getExecutiveMetrics(companyId: number): Promise<ExecutiveMetricsResponse> {
-    const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance, pendingProposals] =
-      await Promise.all([
+    const [
+      totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance, pendingProposals,
+      newLeadsCount, contactedLeadsCount, qualifiedLeadsCount, siteVisitsCompletedCount, bookingInitiatedCount, activeCustomersCount
+    ] = await Promise.all([
         this.countLeads(companyId),
         this.countWonLeads(companyId),
         this.countSiteVisitsScheduled(companyId),
         this.propertyDistribution(companyId),
         this.attendanceExceptionsToday(companyId),
         this.countPendingProposals(companyId),
+        this.countLeadsByStatus(companyId, 'NEW'),
+        this.countLeadsByStatus(companyId, 'CONTACTED'),
+        this.countLeadsByStatus(companyId, 'QUALIFIED'),
+        this.countLeadsByStatus(companyId, 'SITE_VISIT_COMPLETED'),
+        this.countLeadsByStatus(companyId, 'BOOKING_INITIATED'),
+        this.countActiveCustomers(companyId),
       ]);
 
     return {
@@ -311,6 +337,12 @@ export class AnalyticsService {
       totalEmployeesCount: attendance.active,
       attendanceExceptionsCount: attendance.exceptions,
       pendingLeaveRequestsCount: pendingProposals,
+      newLeadsCount,
+      contactedLeadsCount,
+      qualifiedLeadsCount,
+      siteVisitsCompletedCount,
+      bookingInitiatedCount,
+      activeCustomersCount,
     };
   }
 
@@ -365,7 +397,6 @@ export class AnalyticsService {
     const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     const allLeads = await p.lead.findMany({
-      where: { company_id: companyId },
       select: {
         id: true,
         status: true,
@@ -400,7 +431,6 @@ export class AnalyticsService {
 
     const stalledLeadsQuery = await p.lead.findMany({
       where: {
-        company_id: companyId,
         status: { notIn: ['BOOKED', 'DROPPED'] },
         OR: [
           { last_contacted_at: { lt: sevenDaysAgo } },
@@ -416,7 +446,6 @@ export class AnalyticsService {
 
     const recoveredUnassignedLeadsQuery = await p.lead.findMany({
       where: {
-        company_id: companyId,
         status: 'RECOVERED_TO_POOL',
         assigned_to_id: null
       },
@@ -430,8 +459,7 @@ export class AnalyticsService {
     const overdueTasksQuery = await p.task.findMany({
       where: {
         status: 'PENDING',
-        target_date: { lt: today },
-        assignee: { company_id: companyId }
+        target_date: { lt: today }
       },
       include: {
         assignee: { select: { id: true, full_name: true, employee_code: true } },
@@ -444,7 +472,6 @@ export class AnalyticsService {
 
     const siteVisitsQuery = await p.siteVisitBooking.groupBy({
       by: ['status'],
-      where: { lead: { company_id: companyId } },
       _count: { id: true }
     });
     

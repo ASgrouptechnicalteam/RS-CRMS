@@ -11,6 +11,18 @@ const router = Router();
 
 const p = prisma;
 
+router.get('/companies', async (req, res) => {
+  try {
+    const companies = await p.company.findMany({
+      select: { id: true, name: true, company_code: true },
+    });
+    res.json(companies);
+  } catch (error) {
+    logger.error('Failed to fetch companies', error);
+    res.status(500).json({ error: 'Failed to fetch companies' });
+  }
+});
+
 // Public-safe property allowlist (WR-1/WR-2/WR-3/WR-6)
 const PUBLIC_PROPERTY_SELECT: Prisma.PropertySelect = {
   id: true,

@@ -62,7 +62,7 @@ export class CustomerService {
     // Soft duplicate check
     if (dto.phone) {
       const existing = await p.customer.findFirst({
-        where: { company_id: user.companyId, phone: dto.phone },
+        where: { phone: dto.phone },
       });
       if (existing) {
         throw new AppError(409, 'A customer with this phone number already exists in your company.');
@@ -70,7 +70,7 @@ export class CustomerService {
     }
 
     if (dto.assigned_to_id) {
-      const emp = await p.employee.findFirst({ where: { id: dto.assigned_to_id, company_id: user.companyId } });
+      const emp = await p.employee.findFirst({ where: { id: dto.assigned_to_id, } });
       if (!emp) {
         throw new AppError(400, 'Assigned employee not found or cross-company assignment');
       }
@@ -113,7 +113,7 @@ export class CustomerService {
 
   static async convertFromLead(user: TokenPayload, leadId: number) {
     const lead = await p.lead.findFirst({
-      where: { id: leadId, company_id: user.companyId },
+      where: { id: leadId, },
       include: { converted_customer: true },
     });
 
@@ -175,7 +175,7 @@ export class CustomerService {
   }
 
   static async upsertFromLead(user: TokenPayload, leadId: number, tx: any) {
-    const lead = await tx.lead.findUnique({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await tx.lead.findUnique({ where: { id: leadId, } });
     if (!lead) {
       throw new AppError(404, 'Lead not found or access denied');
     }

@@ -65,7 +65,7 @@ export class LeadService {
 
   static async getLeadById(user: TokenPayload, leadId: number) {
     const lead = await p.lead.findFirst({
-      where: { id: leadId, company_id: user.companyId },
+      where: { id: leadId, },
       include: {
         assigned_to: { select: { id: true, employee_code: true, full_name: true, phone: true } },
         created_by: { select: { id: true, employee_code: true, full_name: true } },
@@ -76,8 +76,8 @@ export class LeadService {
         },
       }
     });
-    if (!lead || lead.company_id !== user.companyId) {
-      return null;
+    if (!lead) {
+      throw new Error('Lead not found');
     }
 
     const canView = LeadPolicy.canView(user, lead);
@@ -105,7 +105,6 @@ export class LeadService {
     const activeLeadCounts = await p.lead.groupBy({
       by: ['assigned_to_id'],
       where: {
-        company_id: companyId,
         assigned_to_id: { in: telecallers.map((t: any) => t.id) },
         status: { in: ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED'] },
       },
@@ -114,13 +113,13 @@ export class LeadService {
 
     const totalAssignedCounts = await p.lead.groupBy({
       by: ['assigned_to_id'],
-      where: { company_id: companyId, assigned_to_id: { in: telecallers.map((t: any) => t.id) } },
+      where: { assigned_to_id: { in: telecallers.map((t: any) => t.id) } },
       _count: { _all: true },
     });
 
     const totalWonCounts = await p.lead.groupBy({
       by: ['assigned_to_id'],
-      where: { company_id: companyId, status: 'BOOKED', assigned_to_id: { in: telecallers.map((t: any) => t.id) } },
+      where: { status: 'BOOKED', assigned_to_id: { in: telecallers.map((t: any) => t.id) } },
       _count: { _all: true },
     });
 
@@ -144,9 +143,9 @@ export class LeadService {
       };
     });
 
-    const totalLeadsCount = await p.lead.count({ where: { company_id: companyId } });
+    const totalLeadsCount = await p.lead.count();
     const unassignedCount = await p.lead.count({
-      where: { company_id: companyId, assigned_to_id: null },
+      where: { assigned_to_id: null },
     });
 
     return { totalLeadsCount, unassignedCount, telecallers: monitorData };
@@ -326,7 +325,7 @@ export class LeadService {
     let validReferralEmployeeId = null;
     if (dto.source === 'REFERRAL' && dto.referral_employee_id) {
       const refEmp = await p.employee.findFirst({
-        where: { id: dto.referral_employee_id, company_id: user.companyId }
+        where: { id: dto.referral_employee_id, }
       });
       if (!refEmp) {
         throw new AppError(400, 'Invalid or cross-company referral employee.');
@@ -415,7 +414,7 @@ export class LeadService {
 
     const existingLeads = await p.lead.findMany({
       where: { 
-        company_id: user.companyId, 
+        
         OR: [
           ...(phones.length > 0 ? [{ phone: { in: phones } }] : []),
           ...(emails.length > 0 ? [{ email: { in: emails } }] : []),
@@ -526,14 +525,14 @@ export class LeadService {
   }
 
   static async reassignLead(user: TokenPayload, leadId: number, assigneeId: number, reason: string) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_ASSIGN, lead)) {
       throw new AppError(403, 'Forbidden: Insufficient privileges or cross-company reassignment');
     }
 
-    const assignee = await p.employee.findFirst({ where: { id: assigneeId, company_id: user.companyId } });
+    const assignee = await p.employee.findFirst({ where: { id: assigneeId, } });
     if (!assignee) throw new AppError(404, 'Assignee employee not found');
 
     return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
@@ -575,7 +574,7 @@ export class LeadService {
   }
 
   static async updateLeadStatus(user: TokenPayload, leadId: number, newStatus: string, notes?: string, guardFields?: { exit_reason?: string; demo_scheduled_at?: string; demo_handler_id?: number; qualification?: any }) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_UPDATE, lead)) {
@@ -770,7 +769,7 @@ export class LeadService {
   }
 
   static async getMatches(user: TokenPayload, leadId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_READ, lead)) {
@@ -787,7 +786,7 @@ export class LeadService {
 
   static async sendWhatsAppProposal(user: TokenPayload, leadId: number, propertyId: number) {
     const lead = await p.lead.findFirst({
-      where: { id: leadId, company_id: user.companyId },
+      where: { id: leadId, },
       include: { assigned_to: true },
     });
     if (!lead) throw new AppError(404, 'Lead not found');
@@ -796,7 +795,7 @@ export class LeadService {
       throw new AppError(403, 'Forbidden: You do not have permission to propose properties to this lead');
     }
 
-    const property = await p.property.findFirst({ where: { id: propertyId, company_id: user.companyId } });
+    const property = await p.property.findFirst({ where: { id: propertyId, } });
     if (!property) throw new AppError(404, 'Property not found');
 
     const company = await p.company.findFirst({ where: { id: user.companyId } });
@@ -848,18 +847,16 @@ export class LeadService {
   }
 
   static async addPropertyInterest(user: TokenPayload, leadId: number, propertyId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_UPDATE, lead)) {
       throw new AppError(403, 'Forbidden: You do not have permission to modify this lead');
     }
 
-    const property = await p.property.findFirst({ where: { id: propertyId, company_id: user.companyId } });
-    if (!property) throw new AppError(404, 'Property not found');
-
-    if (lead.company_id !== property.company_id) {
-      throw new AppError(400, 'Invalid relation: Lead and Property belong to different companies');
+    const property = await p.property.findFirst({ where: { id: propertyId, } });
+    if (!property) {
+      throw new Error('Property not found');
     }
 
     return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
@@ -892,7 +889,7 @@ export class LeadService {
   }
 
   static async removePropertyInterest(user: TokenPayload, leadId: number, propertyId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_UPDATE, lead)) {
@@ -928,7 +925,7 @@ export class LeadService {
   }
 
   static async getPropertyInterests(user: TokenPayload, leadId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_READ, lead)) {
@@ -1002,7 +999,7 @@ export class LeadService {
   }
 
   static async getLeadTasks(user: TokenPayload, leadId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (!can(user, Permissions.LEADS_READ, lead)) {
@@ -1069,7 +1066,7 @@ export class LeadService {
   }
 
   static async recoverManualLead(user: TokenPayload, leadId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (lead.status !== 'DROPPED' && lead.status !== 'CANCELLED') {
@@ -1112,7 +1109,7 @@ export class LeadService {
   }
 
   static async recoverFreshLead(user: TokenPayload, leadId: number) {
-    const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+    const lead = await p.lead.findFirst({ where: { id: leadId, } });
     if (!lead) throw new AppError(404, 'Lead not found');
 
     if (lead.status !== 'DROPPED' && lead.status !== 'CANCELLED') {

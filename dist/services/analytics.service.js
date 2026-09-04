@@ -53,6 +53,18 @@ class AnalyticsService {
             where: { company_id: companyId, status: 'SITE_VISIT_SCHEDULED' },
         });
     }
+    /** Generalized lead counter by status */
+    static async countLeadsByStatus(companyId, status) {
+        return await p.lead.count({
+            where: { company_id: companyId, status },
+        });
+    }
+    /** Count ACTIVE customers */
+    static async countActiveCustomers(companyId) {
+        return await p.customer.count({
+            where: { company_id: companyId, status: 'ACTIVE' },
+        });
+    }
     /**
      * Property status distribution (KPI 4). Preserves md.ts categories exactly:
      * Live, Pending MD, Pending PM. Uses the same CASE/SUM SQL as md.ts so the
@@ -202,13 +214,19 @@ class AnalyticsService {
     }
     // ---- public: md.ts executive-metrics (delegated, contract-preserving) ----
     static async getExecutiveMetrics(companyId) {
-        const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance, pendingProposals] = await Promise.all([
+        const [totalLeadsCount, wonLeads, siteVisitsScheduled, property, attendance, pendingProposals, newLeadsCount, contactedLeadsCount, qualifiedLeadsCount, siteVisitsCompletedCount, bookingInitiatedCount, activeCustomersCount] = await Promise.all([
             this.countLeads(companyId),
             this.countWonLeads(companyId),
             this.countSiteVisitsScheduled(companyId),
             this.propertyDistribution(companyId),
             this.attendanceExceptionsToday(companyId),
             this.countPendingProposals(companyId),
+            this.countLeadsByStatus(companyId, 'NEW'),
+            this.countLeadsByStatus(companyId, 'CONTACTED'),
+            this.countLeadsByStatus(companyId, 'QUALIFIED'),
+            this.countLeadsByStatus(companyId, 'SITE_VISIT_COMPLETED'),
+            this.countLeadsByStatus(companyId, 'BOOKING_INITIATED'),
+            this.countActiveCustomers(companyId),
         ]);
         return {
             totalLeadsCount,
@@ -221,6 +239,12 @@ class AnalyticsService {
             totalEmployeesCount: attendance.active,
             attendanceExceptionsCount: attendance.exceptions,
             pendingLeaveRequestsCount: pendingProposals,
+            newLeadsCount,
+            contactedLeadsCount,
+            qualifiedLeadsCount,
+            siteVisitsCompletedCount,
+            bookingInitiatedCount,
+            activeCustomersCount,
         };
     }
     // ---- public: unified analytics KPI contract ----

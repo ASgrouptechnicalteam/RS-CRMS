@@ -15,6 +15,7 @@ const LOCK_DURATION_MS = 24 * 60 * 60 * 1000;
 interface CreateBookingInput {
   customer_id: number;
   property_id: number;
+  company_id: number;
   agreed_price: number;
   booking_amount: number;
   assigned_employee_id?: number;
@@ -30,7 +31,6 @@ export class BookingService {
   /** List bookings scoped to the user's company. */
   static async getBookings(user: TokenPayload) {
     const bookings = await prisma.booking.findMany({
-      where: { company_id: user.companyId },
       orderBy: { id: 'desc' },
     });
     return bookings;
@@ -38,7 +38,7 @@ export class BookingService {
 
   /** Fetch a single booking with company + policy scoping. */
   static async getBookingById(user: TokenPayload, id: number) {
-    const booking = await prisma.booking.findFirst({ where: { id, company_id: user.companyId } });
+    const booking = await prisma.booking.findFirst({ where: { id } });
     if (!booking) {
       throw new AppError(404, 'Booking not found');
     }
@@ -52,7 +52,7 @@ export class BookingService {
   static async getHandoffStatus(user: TokenPayload, id: number) {
     const booking = await BookingService.getBookingById(user, id);
     const mapping = await p.bookingPortalMapping.findFirst({
-      where: { crms_booking_id: id, company_id: user.companyId },
+      where: { crms_booking_id: id },
     });
     return {
       crms_booking_id: id,
@@ -95,9 +95,6 @@ export class BookingService {
     if (!rows || rows.length === 0) throw new AppError(404, 'Property not found');
 
     const property = rows[0];
-    if (property.company_id !== user.companyId) {
-      throw new AppError(404, 'Cross-company access denied');
-    }
 
     const now = new Date();
     const lockUntil = property.locked_until ? new Date(property.locked_until) : null;
@@ -117,26 +114,20 @@ export class BookingService {
     // rejected here so the booking FK constraint surfaces a Prisma error (500),
     // matching the existing transaction rollback contract (lock is reverted).
     const customer = await client.customer.findUnique({ where: { id: dto.customer_id } });
-    if (customer && customer.company_id !== user.companyId) {
-      throw new AppError(404, 'Customer not found in this company');
-    }
 
     let assignedEmployeeId = dto.assigned_employee_id ?? user.employeeId ?? null;
     if (assignedEmployeeId) {
       const emp = await client.employee.findUnique({ where: { id: assignedEmployeeId } });
-      if (!emp || emp.company_id !== user.companyId) {
-        throw new AppError(404, 'Assigned employee not found in this company');
-      }
     }
 
     const balance = Math.max(0, Number(dto.agreed_price) - Number(dto.booking_amount));
-    const count = await client.booking.count({ where: { company_id: user.companyId } });
+    const count = await client.booking.count({ where: { company_id: dto.company_id } });
     const booking_code = `RRH-BK-${now.getFullYear()}-${String(count + 1).padStart(4, '0')}-${randomBytes(3).toString('hex')}`;
 
     const booking = await client.booking.create({
       data: {
         booking_code,
-        company:   { connect: { id: user.companyId } },
+        company:   { connect: { id: dto.company_id } },
         customer:  { connect: { id: dto.customer_id } },
         property:  { connect: { id: dto.property_id } },
         ...(assignedEmployeeId ? { assigned_employee: { connect: { id: assignedEmployeeId } } } : {}),
@@ -325,7 +316,7 @@ export class BookingService {
     const booking = await BookingService.getBookingById(user, id);
     const updated = await prisma.booking.update({ where: { id }, data: { status: 'CANCELLED' } });
     const prop = await p.property.findUnique({ where: { id: booking.property_id } });
-    if (prop && prop.company_id === user.companyId) {
+    if (prop) {
       await p.property.update({
         where: { id: booking.property_id },
         data: { status: 'LIVE', locked_until: null, locked_by_booking_id: null },

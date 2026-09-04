@@ -11,6 +11,7 @@ const router = (0, express_1.Router)();
 const CreateBookingSchema = zod_1.z.object({
     customer_id: zod_1.z.number().int().positive(),
     property_id: zod_1.z.number().int().positive(),
+    company_id: zod_1.z.number().int().positive(),
     agreed_price: zod_1.z.number().positive(),
     booking_amount: zod_1.z.number().positive(),
     notes: zod_1.z.string().optional(),

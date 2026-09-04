@@ -16,10 +16,8 @@ const MANAGEMENT_ROLES = [
  * Ensures company isolation for all scopes, except for System Admins.
  */
 function getBaseScope(user) {
-    if (user.roles.includes(shared_1.Roles.ADMIN)) {
-        return {};
-    }
-    return { company_id: user.companyId };
+    // Global visibility across all companies by default (except Properties)
+    return {};
 }
 /**
  * Builds the read-visibility scope for Leads.
@@ -33,7 +31,7 @@ async function buildLeadScope(user) {
     // 3. MANAGEMENT
     const isManagement = user.roles.some((r) => MANAGEMENT_ROLES.includes(r));
     if (isManagement) {
-        return baseScope; // Entire company leads
+        return baseScope; // Entire company leads (which is now global)
     }
     // 4. MANAGERS & TELECALLERS (TEAM / OWN scope)
     const downstreamIds = await (0, hierarchy_1.getDownstreamEmployeeIds)(user.companyId, user.employeeId);
@@ -80,16 +78,17 @@ exports.buildEmployeeScope = buildEmployeeScope;
  * Builds the read-visibility scope for Properties.
  */
 async function buildPropertyScope(user) {
-    const baseScope = getBaseScope(user);
+    // Properties strictly retain company_id segregation
+    const propertyBaseScope = user.roles.includes(shared_1.Roles.ADMIN) ? {} : { company_id: user.companyId };
     // 1. ADMIN & MANAGEMENT
     const isManagement = user.roles.some((r) => MANAGEMENT_ROLES.includes(r));
     if (user.roles.includes(shared_1.Roles.ADMIN) || isManagement) {
-        return baseScope;
+        return propertyBaseScope;
     }
     // 2. PROJECT MANAGER
     if (user.roles.includes(shared_1.Roles.PROJECT_MANAGER)) {
         return {
-            ...baseScope,
+            ...propertyBaseScope,
             OR: [
                 { assigned_pm_id: user.employeeId },
                 { status: 'LIVE' },
@@ -99,7 +98,7 @@ async function buildPropertyScope(user) {
     // 3. TELECALLER, AGENT
     // Default to LIVE properties only within their company.
     return {
-        ...baseScope,
+        ...propertyBaseScope,
         status: 'LIVE',
     };
 }

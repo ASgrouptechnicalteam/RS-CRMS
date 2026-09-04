@@ -9,6 +9,18 @@ const rateLimiter_1 = require("../middleware/rateLimiter");
 const correlationId_1 = require("../middleware/correlationId");
 const router = (0, express_1.Router)();
 const p = prisma_1.prisma;
+router.get('/companies', async (req, res) => {
+    try {
+        const companies = await p.company.findMany({
+            select: { id: true, name: true, code: true },
+        });
+        res.json(companies);
+    }
+    catch (error) {
+        logger_1.logger.error('Failed to fetch companies', error);
+        res.status(500).json({ error: 'Failed to fetch companies' });
+    }
+});
 // Public-safe property allowlist (WR-1/WR-2/WR-3/WR-6)
 const PUBLIC_PROPERTY_SELECT = {
     id: true,

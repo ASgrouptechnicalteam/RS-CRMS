@@ -22,7 +22,6 @@ router.get('/all-team-tasks', auth_1.authenticateToken, (0, authz_1.requireAuthz
             where: {
                 status: { in: ['PENDING', 'IN_PROGRESS'] },
                 target_date: { lt: now },
-                assignee: { company_id: req.user.companyId }
             },
             include: { assignee: true },
         });
@@ -35,7 +34,6 @@ router.get('/all-team-tasks', auth_1.authenticateToken, (0, authz_1.requireAuthz
             const mdEmp = await p.employee.findFirst({
                 where: {
                     roles: { some: { role: { name: shared_1.Roles.MD } } },
-                    company_id: req.user.companyId
                 },
             });
             if (mdEmp) {
@@ -50,7 +48,7 @@ router.get('/all-team-tasks', auth_1.authenticateToken, (0, authz_1.requireAuthz
             }
         }
         const allTasks = await p.task.findMany({
-            where: { assignee: { company_id: req.user.companyId } },
+            where: {},
             include: { assignee: true },
             orderBy: [{ target_date: 'asc' }],
         });
@@ -92,13 +90,13 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         const { title, description, assignee_id, priority, deadline, lead_id, opportunity_id } = req.body;
         const creatorId = req.user.employeeId;
         // Validate Assignee Company Isolation
-        const assignee = await p.employee.findFirst({ where: { id: assignee_id, company_id: req.user.companyId } });
+        const assignee = await p.employee.findFirst({ where: { id: assignee_id, } });
         if (!assignee) {
             return res.status(400).json({ error: 'Assignee not found or outside your company.' });
         }
         // Validate Lead Access if lead_id is provided
         if (lead_id) {
-            const existingLead = await p.lead.findFirst({ where: { id: lead_id, company_id: req.user.companyId } });
+            const existingLead = await p.lead.findFirst({ where: { id: lead_id, } });
             if (!existingLead) {
                 return res.status(404).json({ error: 'Lead not found.' });
             }
@@ -108,7 +106,7 @@ router.post('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Pe
         }
         // Validate Opportunity Access if opportunity_id is provided
         if (opportunity_id) {
-            const existingOpp = await p.opportunity.findFirst({ where: { id: opportunity_id, company_id: req.user.companyId } });
+            const existingOpp = await p.opportunity.findFirst({ where: { id: opportunity_id, } });
             if (!existingOpp) {
                 return res.status(404).json({ error: 'Opportunity not found.' });
             }
@@ -156,7 +154,7 @@ router.get('/:id/sla', auth_1.authenticateToken, async (req, res, next) => {
             return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
         // Locate the Task within the user's company scope
         const task = await p.task.findFirst({
-            where: { id: taskId, assignee: { company_id: req.user.companyId } },
+            where: { id: taskId, },
             include: { assignee: { select: { company_id: true } } },
         });
         if (!task) {
@@ -196,7 +194,7 @@ router.patch('/:id/status', auth_1.authenticateToken, (0, authz_1.requireAuthz)(
         const { status } = req.body;
         const employeeId = req.user.employeeId;
         const existingTask = await p.task.findFirst({
-            where: { id: taskId, assignee: { company_id: req.user.companyId } },
+            where: { id: taskId, },
             include: { assignee: { select: { company_id: true } } }
         });
         if (!existingTask) {

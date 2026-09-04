@@ -151,6 +151,26 @@ router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Per
         const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
         const offset = Math.max(parseInt(req.query.offset) || 0, 0);
         const whereClause = await (0, dataScope_1.buildEmployeeScope)(req.user);
+        const roleQuery = req.query.role;
+        if (roleQuery) {
+            const roleCondition = {
+                roles: {
+                    some: {
+                        role: {
+                            name: {
+                                equals: roleQuery
+                            }
+                        }
+                    }
+                }
+            };
+            if (whereClause.AND) {
+                whereClause.AND.push(roleCondition);
+            }
+            else {
+                whereClause.AND = [roleCondition];
+            }
+        }
         const employees = await prisma_1.prisma.employee.findMany({
             take: limit,
             skip: offset,
@@ -223,7 +243,7 @@ router.get('/', auth_1.authenticateToken, (0, authz_1.requireAuthz)(shared_1.Per
 router.get('/branches', auth_1.authenticateToken, async (req, res) => {
     try {
         const branches = await prisma_1.prisma.branch.findMany({
-            where: { company_id: req.user.companyId },
+            where: {},
         });
         return res.status(200).json({ branches });
     }

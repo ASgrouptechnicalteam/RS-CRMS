@@ -123,7 +123,7 @@ class SiteVisitService {
     }
     /** bookVisit: create the booking (REQUESTED) + property links, auto-route to PENDING_ACCEPTANCE. */
     static async bookVisit(user, data) {
-        const lead = await p.lead.findFirst({ where: { id: data.lead_id, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: data.lead_id, } });
         if (!lead) {
             throw { status: 404, message: 'Lead not found' };
         }
@@ -131,7 +131,7 @@ class SiteVisitService {
             throw { status: 403, message: 'Forbidden: Missing site_visits.create permission or Lead is not in your company' };
         }
         if (data.opportunity_id) {
-            const opportunity = await p.opportunity.findFirst({ where: { id: data.opportunity_id, company_id: user.companyId } });
+            const opportunity = await p.opportunity.findFirst({ where: { id: data.opportunity_id, } });
             if (!opportunity) {
                 throw { status: 404, message: 'Opportunity not found' };
             }
@@ -146,7 +146,7 @@ class SiteVisitService {
             ? data.property_ids
             : (data.property_id ? [data.property_id] : []);
         if (propertyIds.length > 0) {
-            const props = await p.property.findMany({ where: { id: { in: propertyIds }, company_id: user.companyId } });
+            const props = await p.property.findMany({ where: { id: { in: propertyIds }, } });
             if (props.length !== propertyIds.length) {
                 throw { status: 404, message: 'One or more properties not found' };
             }
@@ -235,7 +235,7 @@ class SiteVisitService {
                     }
                 });
                 const marketingDirectors = await tx.employee.findMany({
-                    where: { roles: { some: { role: { name: shared_1.Roles.MARKETING_DIRECTOR } } }, company_id: user.companyId, status: 'ACTIVE' },
+                    where: { roles: { some: { role: { name: shared_1.Roles.MARKETING_DIRECTOR } } }, status: 'ACTIVE' },
                     select: { id: true }
                 });
                 if (marketingDirectors.length > 0) {
@@ -255,7 +255,7 @@ class SiteVisitService {
     /** Helper: run an action through the workflow engine and persist the next status. */
     static async applyTransition(user, visitId, action, extraData = {}, activityType, activityNotes) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit) {
@@ -290,7 +290,7 @@ class SiteVisitService {
     /** accept: PM/Agent accepts the routed visit. */
     static async acceptVisit(user, visitId, notes) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -306,13 +306,13 @@ class SiteVisitService {
     /** reassign: open chain during initial acceptance — logged to SiteVisitReassignment, resets to PENDING_ACCEPTANCE. */
     static async reassignVisit(user, visitId, toEmployeeId, reason) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
             throw { status: 404, message: 'Site visit booking not found' };
         const targetWithRoles = await p.employee.findFirst({
-            where: { id: toEmployeeId, company_id: user.companyId },
+            where: { id: toEmployeeId, },
             include: { roles: { include: { role: true } } },
         });
         if (!targetWithRoles)
@@ -371,7 +371,7 @@ class SiteVisitService {
     /** escalate: no PM/Agent available → Marketing Director for manual resolution. */
     static async escalateVisit(user, visitId, reason) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -384,7 +384,7 @@ class SiteVisitService {
         }
         return await p.$transaction(async (tx) => {
             const md = await tx.employee.findFirst({
-                where: { roles: { some: { role: { name: shared_1.Roles.MARKETING_DIRECTOR } } }, company_id: user.companyId },
+                where: { roles: { some: { role: { name: shared_1.Roles.MARKETING_DIRECTOR } } }, },
             });
             const updated = await tx.siteVisitBooking.update({
                 where: { id: visitId },
@@ -414,7 +414,7 @@ class SiteVisitService {
     /** Telecaller triggers day-before reconfirmation call. */
     static async reconfirmCustomer(user, visitId) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -427,7 +427,7 @@ class SiteVisitService {
     /** Customer requests reschedule (new date/property). */
     static async rescheduleVisit(user, visitId, data) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -463,7 +463,7 @@ class SiteVisitService {
     /** PM confirms or releases after a reschedule (PENDING_PM_RECONFIRMATION). */
     static async pmReconfirm(user, visitId, release) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -502,7 +502,7 @@ class SiteVisitService {
     /** confirm: PENDING_CUSTOMER_RECONFIRMATION / RESCHEDULE_REQUESTED → CONFIRMED. */
     static async confirmVisit(user, visitId) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -515,7 +515,7 @@ class SiteVisitService {
     /** start: CONFIRMED → ACTIVE (day-of). */
     static async startVisit(user, visitId) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -528,7 +528,7 @@ class SiteVisitService {
     /** complete: ACTIVE → COMPLETED, capturing per-property outcomes (multi-property §2). */
     static async completeVisit(user, visitId, outcomes, feedback_notes, proof_photo_url) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true, site_visit_properties: true },
         });
         if (!visit)
@@ -589,7 +589,7 @@ class SiteVisitService {
     /** cancel: any active state → CANCELLED. */
     static async cancelVisit(user, visitId, reason) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -605,7 +605,7 @@ class SiteVisitService {
     /** HOLD: Reconfirmation fails -> ON_HOLD. */
     static async holdVisit(user, visitId) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -629,7 +629,7 @@ class SiteVisitService {
     /** INITIATE_CANCEL: 1 hour before visit, Telecaller requests PM cross-check. */
     static async initiateCancellation(user, visitId) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -659,7 +659,7 @@ class SiteVisitService {
     /** PM_CANCEL_REJECT: PM indicates customer has responded, reverting to PENDING_CUSTOMER_RECONFIRMATION. */
     static async rejectCancellation(user, visitId) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)
@@ -683,7 +683,7 @@ class SiteVisitService {
     /** CONFIRM_CANCEL: PM explicitly confirms cancellation, providing a reason. */
     static async confirmCancellation(user, visitId, reason) {
         const visit = await p.siteVisitBooking.findFirst({
-            where: { id: visitId, lead: { company_id: user.companyId } },
+            where: { id: visitId, lead: {} },
             include: { lead: true },
         });
         if (!visit)

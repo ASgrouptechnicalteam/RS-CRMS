@@ -14,7 +14,7 @@ const p = prisma;
 router.get('/companies', async (req, res) => {
   try {
     const companies = await p.company.findMany({
-      select: { id: true, name: true, company_code: true },
+      select: { id: true, name: true, code: true },
     });
     res.json(companies);
   } catch (error) {

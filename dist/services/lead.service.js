@@ -83,7 +83,7 @@ class LeadService {
     }
     static async getLeadById(user, leadId) {
         const lead = await p.lead.findFirst({
-            where: { id: leadId, company_id: user.companyId },
+            where: { id: leadId, },
             include: {
                 assigned_to: { select: { id: true, employee_code: true, full_name: true, phone: true } },
                 created_by: { select: { id: true, employee_code: true, full_name: true } },
@@ -94,8 +94,8 @@ class LeadService {
                 },
             }
         });
-        if (!lead || lead.company_id !== user.companyId) {
-            return null;
+        if (!lead) {
+            throw new Error('Lead not found');
         }
         const canView = lead_policy_1.LeadPolicy.canView(user, lead);
         return {
@@ -119,7 +119,6 @@ class LeadService {
         const activeLeadCounts = await p.lead.groupBy({
             by: ['assigned_to_id'],
             where: {
-                company_id: companyId,
                 assigned_to_id: { in: telecallers.map((t) => t.id) },
                 status: { in: ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED'] },
             },
@@ -127,12 +126,12 @@ class LeadService {
         });
         const totalAssignedCounts = await p.lead.groupBy({
             by: ['assigned_to_id'],
-            where: { company_id: companyId, assigned_to_id: { in: telecallers.map((t) => t.id) } },
+            where: { assigned_to_id: { in: telecallers.map((t) => t.id) } },
             _count: { _all: true },
         });
         const totalWonCounts = await p.lead.groupBy({
             by: ['assigned_to_id'],
-            where: { company_id: companyId, status: 'BOOKED', assigned_to_id: { in: telecallers.map((t) => t.id) } },
+            where: { status: 'BOOKED', assigned_to_id: { in: telecallers.map((t) => t.id) } },
             _count: { _all: true },
         });
         const activeMap = new Map(activeLeadCounts.map((x) => [x.assigned_to_id, x._count._all]));
@@ -152,9 +151,9 @@ class LeadService {
                 closureRate: totalAssigned > 0 ? ((totalWon / totalAssigned) * 100).toFixed(1) + '%' : '0.0%',
             };
         });
-        const totalLeadsCount = await p.lead.count({ where: { company_id: companyId } });
+        const totalLeadsCount = await p.lead.count();
         const unassignedCount = await p.lead.count({
-            where: { company_id: companyId, assigned_to_id: null },
+            where: { assigned_to_id: null },
         });
         return { totalLeadsCount, unassignedCount, telecallers: monitorData };
     }
@@ -324,7 +323,7 @@ class LeadService {
         let validReferralEmployeeId = null;
         if (dto.source === 'REFERRAL' && dto.referral_employee_id) {
             const refEmp = await p.employee.findFirst({
-                where: { id: dto.referral_employee_id, company_id: user.companyId }
+                where: { id: dto.referral_employee_id, }
             });
             if (!refEmp) {
                 throw new AppError(400, 'Invalid or cross-company referral employee.');
@@ -405,7 +404,6 @@ class LeadService {
         const emails = rawLeads.map(l => l.email).filter(Boolean);
         const existingLeads = await p.lead.findMany({
             where: {
-                company_id: user.companyId,
                 OR: [
                     ...(phones.length > 0 ? [{ phone: { in: phones } }] : []),
                     ...(emails.length > 0 ? [{ email: { in: emails } }] : []),
@@ -507,13 +505,13 @@ class LeadService {
         return results;
     }
     static async reassignLead(user, leadId, assigneeId, reason) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_ASSIGN, lead)) {
             throw new AppError(403, 'Forbidden: Insufficient privileges or cross-company reassignment');
         }
-        const assignee = await p.employee.findFirst({ where: { id: assigneeId, company_id: user.companyId } });
+        const assignee = await p.employee.findFirst({ where: { id: assigneeId, } });
         if (!assignee)
             throw new AppError(404, 'Assignee employee not found');
         return await p.$transaction(async (tx) => {
@@ -545,7 +543,7 @@ class LeadService {
         });
     }
     static async updateLeadStatus(user, leadId, newStatus, notes, guardFields) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_UPDATE, lead)) {
@@ -735,7 +733,7 @@ class LeadService {
         });
     }
     static async getMatches(user, leadId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_READ, lead)) {
@@ -750,7 +748,7 @@ class LeadService {
     }
     static async sendWhatsAppProposal(user, leadId, propertyId) {
         const lead = await p.lead.findFirst({
-            where: { id: leadId, company_id: user.companyId },
+            where: { id: leadId, },
             include: { assigned_to: true },
         });
         if (!lead)
@@ -758,7 +756,7 @@ class LeadService {
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_UPDATE, lead)) {
             throw new AppError(403, 'Forbidden: You do not have permission to propose properties to this lead');
         }
-        const property = await p.property.findFirst({ where: { id: propertyId, company_id: user.companyId } });
+        const property = await p.property.findFirst({ where: { id: propertyId, } });
         if (!property)
             throw new AppError(404, 'Property not found');
         const company = await p.company.findFirst({ where: { id: user.companyId } });
@@ -801,17 +799,15 @@ class LeadService {
         return { whatsAppUrl, whatsAppText: text, templateKey };
     }
     static async addPropertyInterest(user, leadId, propertyId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_UPDATE, lead)) {
             throw new AppError(403, 'Forbidden: You do not have permission to modify this lead');
         }
-        const property = await p.property.findFirst({ where: { id: propertyId, company_id: user.companyId } });
-        if (!property)
-            throw new AppError(404, 'Property not found');
-        if (lead.company_id !== property.company_id) {
-            throw new AppError(400, 'Invalid relation: Lead and Property belong to different companies');
+        const property = await p.property.findFirst({ where: { id: propertyId, } });
+        if (!property) {
+            throw new Error('Property not found');
         }
         return await p.$transaction(async (tx) => {
             const interest = await tx.leadPropertyInterest.upsert({
@@ -840,7 +836,7 @@ class LeadService {
         });
     }
     static async removePropertyInterest(user, leadId, propertyId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_UPDATE, lead)) {
@@ -870,7 +866,7 @@ class LeadService {
         });
     }
     static async getPropertyInterests(user, leadId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_READ, lead)) {
@@ -939,7 +935,7 @@ class LeadService {
         return assignedCount;
     }
     static async getLeadTasks(user, leadId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (!(0, authorization_1.can)(user, shared_2.Permissions.LEADS_READ, lead)) {
@@ -999,7 +995,7 @@ class LeadService {
         }
     }
     static async recoverManualLead(user, leadId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (lead.status !== 'DROPPED' && lead.status !== 'CANCELLED') {
@@ -1037,7 +1033,7 @@ class LeadService {
         });
     }
     static async recoverFreshLead(user, leadId) {
-        const lead = await p.lead.findFirst({ where: { id: leadId, company_id: user.companyId } });
+        const lead = await p.lead.findFirst({ where: { id: leadId, } });
         if (!lead)
             throw new AppError(404, 'Lead not found');
         if (lead.status !== 'DROPPED' && lead.status !== 'CANCELLED') {

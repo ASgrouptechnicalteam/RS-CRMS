@@ -39,6 +39,7 @@ router.get('/employees', auth_1.authenticateToken, (0, authz_1.requireAuthz)(sha
         const formatted = employees.map((emp) => ({
             id: emp.id,
             employeeCode: emp.employee_code,
+            fullName: emp.full_name || emp.employee_code,
             company: emp.company.name,
             branch: emp.branch?.name || 'All Branches',
             roles: emp.roles.map((r) => r.role.name),

@@ -570,6 +570,43 @@ router.get(
   },
 );
 
+// GET /api/v1/attendance/proposals/history - HR Manager approval history
+router.get(
+  '/proposals/history',
+  authenticateToken,
+  requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const companyEmployees = await p.employee.findMany({
+        where: { company_id: req.user!.companyId },
+        select: { id: true, full_name: true, employee_code: true },
+      });
+
+      const proposals = await p.attendanceProposal.findMany({
+        where: {
+          employee_id: { in: companyEmployees.map((e: any) => e.id) },
+          status: { in: ['APPROVED', 'REJECTED'] },
+        },
+        orderBy: { reviewed_at: 'desc' },
+        take: 100, // Limit to recent 100 to avoid huge payloads
+      });
+
+      const mappedProposals = proposals.map((proposal: any) => {
+        const emp = companyEmployees.find((e: any) => e.id === proposal.employee_id);
+        return {
+          ...proposal,
+          employee: emp,
+        };
+      });
+
+      return res.status(200).json({ proposals: mappedProposals });
+    } catch (error) {
+      logger.error('Proposal history error:', error);
+      return res.status(500).json({ error: 'Failed to load HR proposal history' });
+    }
+  },
+);
+
 // POST /api/v1/attendance/proposals/:id/approve - Approve proposal
 router.post(
   '/proposals/:id/approve',

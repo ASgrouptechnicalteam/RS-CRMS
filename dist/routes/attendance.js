@@ -484,6 +484,35 @@ router.get('/proposals/queue', auth_1.authenticateToken, (0, auth_1.requireRole)
         return res.status(500).json({ error: 'Failed to load HR proposal queue' });
     }
 });
+// GET /api/v1/attendance/proposals/history - HR Manager approval history
+router.get('/proposals/history', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.HR_MANAGER, shared_1.Roles.MD, shared_1.Roles.ADMIN]), async (req, res) => {
+    try {
+        const companyEmployees = await p.employee.findMany({
+            where: { company_id: req.user.companyId },
+            select: { id: true, full_name: true, employee_code: true },
+        });
+        const proposals = await p.attendanceProposal.findMany({
+            where: {
+                employee_id: { in: companyEmployees.map((e) => e.id) },
+                status: { in: ['APPROVED', 'REJECTED'] },
+            },
+            orderBy: { reviewed_at: 'desc' },
+            take: 100, // Limit to recent 100 to avoid huge payloads
+        });
+        const mappedProposals = proposals.map((proposal) => {
+            const emp = companyEmployees.find((e) => e.id === proposal.employee_id);
+            return {
+                ...proposal,
+                employee: emp,
+            };
+        });
+        return res.status(200).json({ proposals: mappedProposals });
+    }
+    catch (error) {
+        logger_1.logger.error('Proposal history error:', error);
+        return res.status(500).json({ error: 'Failed to load HR proposal history' });
+    }
+});
 // POST /api/v1/attendance/proposals/:id/approve - Approve proposal
 router.post('/proposals/:id/approve', auth_1.authenticateToken, (0, auth_1.requireRole)([shared_1.Roles.HR_MANAGER, shared_1.Roles.MD, shared_1.Roles.ADMIN]), (0, validate_1.validateRequestBody)(shared_1.EmptyBodySchema), async (req, res) => {
     try {

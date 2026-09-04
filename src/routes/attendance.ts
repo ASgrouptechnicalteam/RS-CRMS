@@ -154,7 +154,8 @@ router.post('/scan', authenticateKioskToken, validateRequestBody(AttendanceQRPay
   const branchId = req.kiosk!.branchId; // physical scan location
 
   try {
-    const payload = parseAndVerifyQR(req, req.body.qrPayload);
+    const rawPayload = req.body.qrPayload || req.body.qr_token || req.body.payload;
+    const payload = parseAndVerifyQR(req, rawPayload);
     if (!payload) return res.status(400).json({ error: 'Invalid or forged QR Code token' });
 
     const targetEmployeeId = payload.employeeId;
@@ -274,7 +275,8 @@ router.post('/checkout', authenticateKioskToken, validateRequestBody(AttendanceQ
   const branchId = req.kiosk!.branchId;
 
   try {
-    const payload = parseAndVerifyQR(req, req.body.qrPayload);
+    const rawPayload = req.body.qrPayload || req.body.qr_token || req.body.payload;
+    const payload = parseAndVerifyQR(req, rawPayload);
     if (!payload) return res.status(400).json({ error: 'Invalid or forged QR Code token' });
 
     const targetEmployeeId = payload.employeeId;

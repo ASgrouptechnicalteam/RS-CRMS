@@ -1507,7 +1507,9 @@ export const EmployeeRolesUpdateSchema = z.object({
 });
 
 export const AttendanceQRPayloadSchema = z.object({
-  payload: z.string()
+  qrPayload: z.string().optional(),
+  qr_token: z.string().optional(),
+  payload: z.string().optional()
 });
 
 export const AttendanceHolidaySchema = z.object({

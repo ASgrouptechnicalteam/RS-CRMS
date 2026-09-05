@@ -86,7 +86,10 @@ class ProjectService {
                         description: data.description || null,
                         location: data.location,
                         total_area: data.total_area || null,
+                        total_units: data.total_units || null,
                         launch_date: data.launch_date ? new Date(data.launch_date) : null,
+                        project_phase: data.project_phase || null,
+                        rera_number: data.rera_number || null,
                         amenities: data.amenities || null,
                         assigned_pm_id: data.assigned_pm_id || null,
                         status: 'PLANNING',
@@ -136,8 +139,14 @@ class ProjectService {
             updateData.location = data.location;
         if (data.total_area !== undefined)
             updateData.total_area = data.total_area;
+        if (data.total_units !== undefined)
+            updateData.total_units = data.total_units;
         if (data.launch_date !== undefined)
             updateData.launch_date = data.launch_date ? new Date(data.launch_date) : null;
+        if (data.project_phase !== undefined)
+            updateData.project_phase = data.project_phase;
+        if (data.rera_number !== undefined)
+            updateData.rera_number = data.rera_number;
         if (data.status !== undefined)
             updateData.status = data.status;
         if (data.amenities !== undefined)

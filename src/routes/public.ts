@@ -39,7 +39,6 @@ const PUBLIC_PROPERTY_SELECT: Prisma.PropertySelect = {
   facing: true,
   amenities: true,
   possession_status: true,
-  details: true,
   pricing: true,
   plot_details: true,
   apartment_details: true,

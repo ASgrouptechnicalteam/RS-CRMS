@@ -590,7 +590,10 @@ exports.ProjectCreateSchema = zod_1.z.object({
     description: zod_1.z.string().optional(),
     location: zod_1.z.string().min(3),
     total_area: zod_1.z.string().optional(),
+    total_units: zod_1.z.number().int().positive().optional().nullable(),
     launch_date: zod_1.z.string().optional(),
+    project_phase: zod_1.z.string().optional(),
+    rera_number: zod_1.z.string().optional(),
     amenities: zod_1.z.any().optional(),
     assigned_pm_id: zod_1.z.number().int().positive().optional().nullable(),
 });
@@ -599,7 +602,10 @@ exports.ProjectUpdateSchema = zod_1.z.object({
     description: zod_1.z.string().optional(),
     location: zod_1.z.string().min(3).optional(),
     total_area: zod_1.z.string().optional(),
+    total_units: zod_1.z.number().int().positive().optional().nullable(),
     launch_date: zod_1.z.string().optional(),
+    project_phase: zod_1.z.string().optional(),
+    rera_number: zod_1.z.string().optional(),
     amenities: zod_1.z.any().optional(),
     assigned_pm_id: zod_1.z.number().int().positive().optional().nullable(),
     status: zod_1.z.enum(['PLANNING', 'UNDER_CONSTRUCTION', 'COMPLETED', 'CANCELLED']).optional(),
@@ -646,7 +652,10 @@ exports.PropertyCreateSchema = zod_1.z.object({
     amenities: zod_1.z.string().optional(),
     possession_status: zod_1.z.enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION']).optional(),
     assigned_pm_id: zod_1.z.number().int().optional().nullable(),
-    details: zod_1.z.any().optional(),
+    details: zod_1.z.any().optional(), // kept for backward compatibility if needed temporarily
+    pricing: zod_1.z.any().optional(),
+    plot_details: zod_1.z.any().optional(),
+    apartment_details: zod_1.z.any().optional(),
     // WR-2: Structured location fields
     state: zod_1.z.string().optional().nullable(),
     city: zod_1.z.string().optional().nullable(),

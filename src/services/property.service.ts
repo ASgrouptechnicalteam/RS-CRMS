@@ -185,7 +185,6 @@ export class PropertyService {
           facing: data.facing || null,
           amenities: data.amenities || null,
           possession_status: data.possession_status || null,
-          details: data.details || null, // Keeping for backward compatibility
           pricing: data.pricing ? { create: data.pricing } : undefined,
           plot_details: data.plot_details ? { create: data.plot_details } : undefined,
           apartment_details: data.apartment_details ? { create: data.apartment_details } : undefined,
@@ -291,7 +290,7 @@ export class PropertyService {
     const safeKeys = [
       'title', 'description', 'brand_type', 'category', 'price', 'area_sqft', 
       'location', 'address', 'bedrooms', 'bathrooms', 'facing', 'amenities', 
-      'possession_status', 'assigned_pm_id', 'project_id', 'details',
+      'possession_status', 'assigned_pm_id', 'project_id',
       // WR-2: Structured location fields
       'state', 'city', 'locality', 'pincode', 'latitude', 'longitude', 'listing_type'
     ];

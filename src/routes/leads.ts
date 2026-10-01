@@ -15,6 +15,8 @@ import { LeadService, AppError } from '../services/lead.service';
 import { syncLeadPreferredLocations } from '../services/lead/shared';
 import { OpportunityService } from '../services/opportunity.service';
 import prisma from '../lib/prisma';
+import { z } from 'zod';
+import { logCall } from '../services/lead/calls';
 
 const router = Router();
 
@@ -201,6 +203,38 @@ router.post(
   },
 );
 
+// POST /api/v1/leads/:id/calls - Log a call attempt and its outcome
+// (optionally with a dated call-back, which becomes a follow-up task).
+const LogCallSchema = z.object({
+  outcome: z.enum([
+    'CONNECTED_INTERESTED',
+    'CONNECTED_NOT_INTERESTED',
+    'CALL_BACK',
+    'NO_ANSWER',
+    'BUSY_OR_SWITCHED_OFF',
+    'WRONG_NUMBER',
+  ]),
+  notes: z.string().max(1000).optional(),
+  follow_up_at: z.string().optional(),
+});
+
+router.post(
+  '/:id/calls',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  validateRequestBody(LogCallSchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      const result = await logCall(req.user!, leadId, req.body);
+      return res.status(201).json({ message: 'Call logged', ...result });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
 // PATCH /api/v1/leads/:id/status - Update lead status (through the workflow engine)
 router.patch(
   '/:id/status',
@@ -238,6 +272,18 @@ router.patch(
   },
 );
 
+// Validated body for the generic lead edit -- it used to pass req.body straight
+// through (a string budget or a non-array preferred_locations reached Prisma
+// or produced a one-letter "location").
+const LeadGenericUpdateSchema = z.object({
+  budget_min: z.number().nonnegative().nullable().optional(),
+  budget_max: z.number().nonnegative().nullable().optional(),
+  property_type_preference: z.string().nullable().optional(),
+  preferred_location: z.string().nullable().optional(),
+  preferred_locations: z.array(z.string()).optional(),
+  notes: z.string().max(5000).nullable().optional(),
+});
+
 // PATCH /api/v1/leads/:id - Generic lead update (for qualification, budget, notes, etc.)
 router.patch(
   '/:id',
@@ -246,12 +292,24 @@ router.patch(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const leadId = parseInt(req.params.id, 10);
-      const updateData = req.body;
 
       const existingLead = await LeadService.getLeadById(req.user!, leadId);
       if (!existingLead) {
         return res.status(404).json({ error: 'Lead not found' });
       }
+      // Same rule as every other lead mutation: the assigned telecaller or
+      // management. Being able to SEE a lead (e.g. a team lead viewing a
+      // subordinate's) used to be enough to edit it here.
+      if (!existingLead.can_edit) {
+        return res.status(403).json({ error: 'Only the assigned telecaller can edit this lead' });
+      }
+      const parsed = LeadGenericUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join(', '),
+        });
+      }
+      const updateData = parsed.data;
 
       // Basic update using prisma
       const updated = await prisma.$transaction(

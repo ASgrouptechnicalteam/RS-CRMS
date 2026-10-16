@@ -1,7 +1,12 @@
 import { logger } from '../utils/logger';
 import { Router, Response, NextFunction } from 'express';
 import { authenticateToken, AuthenticatedRequest, requirePermission } from '../middleware/auth';
+import { z } from 'zod';
+import multer from 'multer';
 import { Permissions } from '../shared';
+import { can } from '../authz/authorization';
+import { SiteVisitPolicy } from '../policies/siteVisit.policy';
+import { processImageBuffer, getStorageService } from '../services/storage.service';
 import {
   SiteVisitCreateSchema,
   SiteVisitAcceptSchema,
@@ -96,6 +101,136 @@ router.post(
     } catch (error: any) {
       logger.error('Book site visit error:', error);
       next(error);
+    }
+  },
+);
+
+// POST /api/v1/site-visits/walk-in - record a visit the customer made on their own
+// (already completed): { lead_id | customer_name + phone, project_id, visit_date, rating, feedback_notes }
+const WalkInSchema = z
+  .object({
+    lead_id: z.number().int().positive().optional(),
+    customer_name: z.string().trim().max(120).optional(),
+    phone: z.string().trim().max(20).optional(),
+    project_id: z.number().int().positive(),
+    visit_date: z.string().min(1),
+    rating: z.string().min(1),
+    feedback_notes: z.string().trim().max(1000),
+  })
+  .refine((v) => v.lead_id || (v.customer_name && v.phone), {
+    message: 'Pick a lead, or enter the customer name and phone',
+  });
+
+router.post(
+  '/walk-in',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_CREATE]),
+  validateRequestBody(WalkInSchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const result = await SiteVisitService.recordWalkIn(req.user!, req.body);
+      return res.status(201).json({
+        message: `Walk-in ${result.visit.booking_code} recorded.`,
+        ...result,
+      });
+    } catch (error: any) {
+      logger.error('Record walk-in error:', error);
+      next(error);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Visit proof photo (F-5). Uploaded from the phone while the visit is running,
+// re-encoded (which also drops the location data in the photo's metadata),
+// stored outside the publicly served folders and shown only to people who can
+// see the visit.
+// ---------------------------------------------------------------------------
+const PROOF_PREFIX = '/uploads/visit-proofs/';
+const proofUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) cb(null, true);
+    else cb(Object.assign(new Error('Upload a JPG, PNG or WebP photo.'), { statusCode: 400 }));
+  },
+});
+
+// POST /api/v1/site-visits/:id/proof-photo - multipart field "photo"
+router.post(
+  '/:id/proof-photo',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_COMPLETE]),
+  proofUpload.single('photo'),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId)) return res.status(400).json({ error: 'Invalid ID format' });
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: 'Choose a photo to upload.' });
+
+      const visit = await prisma.siteVisitBooking.findFirst({
+        where: { id: visitId, lead: { company_id: req.user!.companyId } },
+        include: { lead: true },
+      });
+      if (!visit) return res.status(404).json({ error: 'Site visit booking not found' });
+      if (!can(req.user!, Permissions.SITE_VISITS_COMPLETE, visit)) {
+        return res
+          .status(403)
+          .json({ error: 'Only the person running this visit can add its photo.' });
+      }
+      if (!['ACTIVE', 'COMPLETED'].includes(visit.status)) {
+        return res.status(409).json({ error: 'Start the visit before adding its photo.' });
+      }
+
+      let processed;
+      try {
+        processed = await processImageBuffer(file.buffer);
+      } catch {
+        return res.status(400).json({ error: 'That file is not a valid photo.' });
+      }
+      const storage = getStorageService('visit-proofs');
+      const url = await storage.upload(processed.processedBuffer, processed.filename, 'image/webp');
+      await prisma.siteVisitBooking.update({
+        where: { id: visitId },
+        data: { proof_photo_url: url },
+      });
+      if (visit.proof_photo_url && visit.proof_photo_url.startsWith(PROOF_PREFIX)) {
+        await storage
+          .delete(visit.proof_photo_url)
+          .catch((e: unknown) => logger.warn('Could not delete the replaced visit photo:', e));
+      }
+      return res.status(201).json({ message: 'Photo saved', proof_photo_url: url });
+    } catch (error: any) {
+      logger.error('Upload visit photo error:', error);
+      next(error);
+    }
+  },
+);
+
+// GET /api/v1/site-visits/:id/proof-photo - the photo, for people who can see this visit
+router.get(
+  '/:id/proof-photo',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId)) return res.status(400).json({ error: 'Invalid ID format' });
+      const visit = await prisma.siteVisitBooking.findFirst({
+        where: { id: visitId, ...SiteVisitPolicy.canList(req.user!) },
+        select: { proof_photo_url: true },
+      });
+      if (!visit || !visit.proof_photo_url || !visit.proof_photo_url.startsWith(PROOF_PREFIX)) {
+        return res.status(404).json({ error: 'No photo for this visit.' });
+      }
+      const bytes = await getStorageService('visit-proofs').download(visit.proof_photo_url);
+      res.setHeader('Content-Type', 'image/webp');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.status(200).send(bytes);
+    } catch (error) {
+      logger.error('Fetch visit photo error:', error);
+      return res.status(404).json({ error: 'The photo could not be loaded.' });
     }
   },
 );
@@ -331,12 +466,15 @@ router.post(
       if (isNaN(visitId))
         return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const { outcomes, feedback_notes, proof_photo_url, rating } = req.body;
+      // The photo is uploaded separately (POST /:id/proof-photo); a URL typed into
+      // the request is ignored.
+      void proof_photo_url;
       const visit = await SiteVisitService.completeVisit(
         req.user!,
         visitId,
         outcomes,
         feedback_notes,
-        proof_photo_url,
+        undefined,
         rating,
       );
 
@@ -363,7 +501,21 @@ router.post(
       // swallowed, so a telecaller had no idea the lead was still stuck at
       // SITE_VISIT_COMPLETED after seeing a plain "completed" success toast.
       let cascadeNote: string | undefined;
-      if (outcomeBranch) {
+      // Other visits of this lead still to happen: the lead moves on when the
+      // last one is completed (the workflow needs every live visit completed),
+      // so this is not a failure and must not look like one.
+      const openSiblingVisits = outcomeBranch
+        ? await prisma.siteVisitBooking.count({
+            where: {
+              lead_id: visit.lead_id,
+              id: { not: visit.id },
+              status: { notIn: ['COMPLETED', 'CANCELLED'] },
+            },
+          })
+        : 0;
+      if (outcomeBranch && openSiblingVisits > 0) {
+        cascadeNote = `Visit recorded. This lead has ${openSiblingVisits} more site visit(s) to complete; it moves on after the last one.`;
+      } else if (outcomeBranch) {
         try {
           await LeadService.updateLeadStatus(
             req.user!,
@@ -381,9 +533,9 @@ router.post(
               ? 'Auto-dropped: every property outcome from the completed site visit was Not Interested.'
               : 'Auto-advanced to Negotiation: the completed site visit had at least one Interested property outcome.',
             // Any -> DROPPED requires a non-empty exit_reason (lead.workflow.ts
-            // §1 row 10) — NO_MATCHING_INVENTORY is the closest fit for "visited,
-            // but nothing shown matched what they wanted."
-            outcomeBranch === 'DROP' ? { exit_reason: 'NO_MATCHING_INVENTORY' } : undefined,
+            // §1 row 10). Taken from what the customer said (budget, location,
+            // ...), or OTHER with that text -- never a reason nobody gave.
+            outcomeBranch === 'DROP' ? (visit as any)._dropReason : undefined,
             { skipPermissionCheck: true },
           );
         } catch (cascadeError: any) {

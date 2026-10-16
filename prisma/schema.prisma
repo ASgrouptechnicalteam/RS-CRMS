@@ -311,6 +311,14 @@ model Employee {
   first_login_done    Boolean @default(false)
   report_required     Boolean @default(true) // derived from employment_type at create; overridable per employee
 
+  // Printed badge + PIN at the kiosk (F-12, decision D2): for staff with no phone or
+  // data. Off for everyone; HR turns it on one person at a time. Kiosk-only.
+  static_badge_enabled Boolean   @default(false)
+  badge_version        Int       @default(1) // raise it to kill a lost badge
+  badge_pin_hash       String?
+  badge_pin_failures   Int       @default(0)
+  badge_locked_until   DateTime?
+
   // 1. Personal Details
   full_name         String?
   phone             String?
@@ -466,7 +474,7 @@ model WebAuthnCredential {
 model SiteVisitFeedback {
   id                    Int       @id @default(autoincrement())
   site_visit_id         Int       @unique
-  rated_employee_id     Int // whoever actually ran the visit — snapshotted at creation so a later reassignment can't change who a submitted rating counts against
+  rated_employee_id     Int? // whoever actually ran the visit — snapshotted at creation so a later reassignment can't change who a submitted rating counts against. NULL for a walk-in visit (nobody to rate).
   token_hash            String    @unique
   expires_at            DateTime
   submitted_at          DateTime?
@@ -478,7 +486,7 @@ model SiteVisitFeedback {
   created_at            DateTime  @default(now())
 
   site_visit     SiteVisitBooking @relation(fields: [site_visit_id], references: [id], onDelete: Cascade)
-  rated_employee Employee         @relation("RatedInFeedback", fields: [rated_employee_id], references: [id])
+  rated_employee Employee?        @relation("RatedInFeedback", fields: [rated_employee_id], references: [id])
 
   @@index([rated_employee_id])
   @@index([expires_at])
@@ -760,6 +768,30 @@ model Notification {
   employee Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
   @@index([employee_id])
+}
+
+// A measured target (F-9): "N of <metric> per day / week / month" for a role or
+// one person. Progress is always counted from what the system recorded, never
+// typed. A person's target overrides their role's for the same metric+period.
+// DailyTarget (above) stays for the daily-report form only.
+model PerformanceTarget {
+  id            Int       @id @default(autoincrement())
+  company_id    Int
+  role_name     String? // applies to everyone holding this role...
+  employee_id   Int? // ...or to one person (wins over the role)
+  metric        String // CALLS | VISITS_BOOKED | VISITS_COMPLETED | BOOKINGS_CONFIRMED
+  period        String // DAY | WEEK | MONTH (IST; the week starts on Monday)
+  value         Int
+  valid_from    DateTime
+  valid_to      DateTime? // null = until changed
+  is_active     Boolean   @default(true)
+  created_by_id Int
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  @@index([company_id, is_active])
+  @@index([employee_id])
+  @@index([role_name])
 }
 
 model DailyTarget {
@@ -1885,6 +1917,7 @@ model SiteVisitBooking {
   rating                          String? // HOT_INTERESTED, WARM, COLD, NOT_INTERESTED
   proof_photo_url                 String?
   completed_at                    DateTime?
+  visit_type                      String          @default("SCHEDULED") // SCHEDULED | WALK_IN (customer came on their own; recorded afterwards by the telecaller)
   opportunity_id                  Int?
 
   lead                         Lead         @relation(fields: [lead_id], references: [id], onDelete: Cascade)

@@ -12,6 +12,8 @@ import { notifyEmployee } from '../utils/notifyEmployee';
 import { WorkflowEngine } from '../workflows/workflowEngine';
 import { WorkflowDomain } from '../workflows/types';
 import { FieldChange, isApproved, projectChanges, recordChanges } from './projectChangeLog';
+import { moveOpenVisitsToNewPm } from './siteVisit/moveToNewPm';
+import { ProjectPolicy } from '../policies/project.policy';
 const p = prisma;
 
 /** Key prefix of ProjectService.listProjects's per-user cache entries. */
@@ -221,6 +223,13 @@ export class ProjectService {
 
     if (filters.status) {
       whereCondition.status = filters.status;
+    } else {
+      // A cancelled project is a deleted one: hidden unless asked for
+      // (?status=CANCELLED). In AND so it cannot replace a status rule in the scope.
+      whereCondition.AND = [
+        ...(Array.isArray(whereCondition.AND) ? whereCondition.AND : []),
+        { status: { not: 'CANCELLED' } },
+      ];
     }
     if (filters.verification_status) {
       whereCondition.verification_status = filters.verification_status;
@@ -448,6 +457,16 @@ export class ProjectService {
       }
     }
 
+    // Naming a PM where there is none stays open to anyone who can edit; replacing
+    // one is only for MD/Admin/Technical Manager, the same as POST /:id/reassign.
+    if (
+      data.assigned_pm_id !== undefined &&
+      data.assigned_pm_id !== project.assigned_pm_id &&
+      project.assigned_pm_id != null &&
+      !ProjectPolicy.canChangePm(user)
+    ) {
+      throw { status: 403, message: 'Only the MD, Admin or Technical Manager can change the PM.' };
+    }
     if (data.assigned_pm_id && data.assigned_pm_id !== project.assigned_pm_id) {
       await this.assertValidPm(data.assigned_pm_id, project.company_id);
     }
@@ -537,6 +556,22 @@ export class ProjectService {
         changes,
         reason: data.change_reason,
       });
+      if (pmChanged) {
+        await tx.auditEvent.create({
+          data: {
+            actor_id: user.employeeId!,
+            action: 'REASSIGNMENT',
+            entity_type: 'PROJECT',
+            entity_id: projectId,
+            old_value: oldPmId ? oldPmId.toString() : 'UNASSIGNED',
+            new_value: newPmId ? newPmId.toString() : 'UNASSIGNED',
+            reason: data.change_reason || 'Changed from the edit form',
+          },
+        });
+        if (oldPmId && newPmId) {
+          await moveOpenVisitsToNewPm(tx, { project_id: projectId }, oldPmId, newPmId);
+        }
+      }
       return row;
     });
 
@@ -566,7 +601,7 @@ export class ProjectService {
     return updated;
   }
 
-  static async deleteProject(user: TokenPayload, projectId: number) {
+  static async deleteProject(user: TokenPayload, projectId: number, reason?: string) {
     const whereCondition = await buildProjectScope(user);
 
     const project = await p.project.findFirst({
@@ -622,7 +657,8 @@ export class ProjectService {
     return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       const updated = await tx.project.update({
         where: { id: projectId },
-        data: { status: transition.nextState },
+        // Off the public websites too.
+        data: { status: transition.nextState, is_published: false },
       });
       await tx.auditEvent.create({
         data: {
@@ -632,7 +668,7 @@ export class ProjectService {
           entity_id: projectId,
           old_value: project.status,
           new_value: transition.nextState,
-          reason: 'Project cancelled via DELETE /projects/:id',
+          reason: reason?.trim() || 'Project cancelled via DELETE /projects/:id',
         },
       });
       return updated;
@@ -664,8 +700,8 @@ export class ProjectService {
     const project = await p.project.findFirst({ where: { id: projectId, ...scope } });
     if (!project) throw { status: 404, message: 'Project not found or unauthorized' };
 
-    if (!can(user, Permissions.PROJECTS_UPDATE, project)) {
-      throw { status: 403, message: 'Forbidden: Missing permission to reassign this project' };
+    if (!can(user, Permissions.PROJECTS_UPDATE, project) || !ProjectPolicy.canChangePm(user)) {
+      throw { status: 403, message: 'Only the MD, Admin or Technical Manager can change the PM.' };
     }
 
     if (newPmId === project.assigned_pm_id) {
@@ -681,12 +717,38 @@ export class ProjectService {
     });
 
     const oldPmId = project.assigned_pm_id;
+    const oldPm = oldPmId
+      ? await p.employee.findUnique({ where: { id: oldPmId }, select: { full_name: true } })
+      : null;
 
     return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       const updated = await tx.project.update({
         where: { id: projectId },
         data: { assigned_pm_id: newPmId },
       });
+
+      // Requests waiting on the old PM would otherwise sit in the queue of someone
+      // no longer on this project.
+      const movedVisits = oldPmId
+        ? await moveOpenVisitsToNewPm(tx, { project_id: projectId }, oldPmId, newPmId)
+        : 0;
+      const movedNote = movedVisits ? ` ${movedVisits} open site visit(s) moved with it.` : '';
+
+      if (isApproved(project)) {
+        await recordChanges(tx, {
+          projectId,
+          actorId: user.employeeId!,
+          area: 'DETAILS',
+          changes: [
+            {
+              field: 'Project manager',
+              before: oldPm?.full_name || '—',
+              after: newPm.full_name || newPm.employee_code,
+            },
+          ],
+          reason,
+        });
+      }
 
       await tx.auditEvent.create({
         data: {
@@ -706,7 +768,7 @@ export class ProjectService {
           employee_id: newPmId,
           type: 'PROJECT_ASSIGNED',
           title: `Project Assigned to You: ${updated.project_code}`,
-          message: `Project "${updated.name}" (${updated.project_code}) has been assigned to you${reason ? `. Reason: ${reason}` : ''}.`,
+          message: `Project "${updated.name}" (${updated.project_code}) has been assigned to you${reason ? `. Reason: ${reason}` : ''}.${movedNote}`,
         },
       });
       // Web push to new PM (outside transaction)
@@ -727,7 +789,7 @@ export class ProjectService {
             employee_id: oldPmId,
             type: 'PROJECT_REASSIGNED',
             title: `Project Reassigned: ${updated.project_code}`,
-            message: `Project "${updated.name}" (${updated.project_code}) has been reassigned from you to ${newPm.full_name || newPm.employee_code} by ${user.employeeId}.`,
+            message: `Project "${updated.name}" (${updated.project_code}) has been reassigned from you to ${newPm.full_name || newPm.employee_code}.${movedNote}`,
           },
         });
         // Web push to old PM (outside transaction)
@@ -741,17 +803,6 @@ export class ProjectService {
           { skipDbNotification: true },
         ).catch((err) => logger.error('[WebPush] Project reassign old PM:', err));
       }
-
-      // Web push to new PM (outside transaction)
-      notifyEmployee(
-        newPmId,
-        {
-          type: 'PROJECT_ASSIGNED',
-          title: `Project Assigned to You: ${updated.project_code}`,
-          message: `Project "${updated.name}" (${updated.project_code}) has been assigned to you${reason ? `. Reason: ${reason}` : ''}.`,
-        },
-        { skipDbNotification: true },
-      ).catch((err) => logger.error('[WebPush] Project reassign new PM:', err));
 
       return updated;
     });

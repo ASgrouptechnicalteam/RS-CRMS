@@ -1,5 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { auditContext } from '../utils/requestContext';
+import { dbGuard } from './dbGuard';
+import { forgetAuthRows } from './authRowCache';
 
 /**
  * Singleton Prisma Client instance for the API.
@@ -8,19 +10,28 @@ import { auditContext } from '../utils/requestContext';
  */
 const dbUrl = process.env.DATABASE_URL || '';
 
-// Prisma's default pool is (CPU cores x 2 + 1) connections -- 3 on a 1-core
-// host. A page load fires ~8 API calls at once and the approvals inbox alone
-// runs 14 queries in parallel, so requests queued for a connection, each
-// wait costing a full round trip to the remote database. Set an explicit
-// pool unless the URL already chooses one (DB_CONNECTION_LIMIT overrides;
-// keep it under the MySQL user's max_user_connections).
-const withPoolSize = (url: string, size: number) =>
-  !url || url.includes('connection_limit=')
-    ? url
-    : `${url}${url.includes('?') ? '&' : '?'}connection_limit=${size}`;
+// Pool size is a trade-off on this host. MySQL closes idle connections after
+// 20 s (wait_timeout), so after any quiet spell the pool is empty and the next
+// page load (~8 API calls at once) opens up to `limit` new connections from
+// one address. Measured over 3 page loads: pool 10 = 31 new connections,
+// pool 5 = 16, pool 3 = 10. Hostinger's firewall blocked the server on 29 Oct
+// and 3 Nov, and a pool of 10 + 3 can look like a connection flood, so stay
+// small: a page's queries wait ~120 ms longer, which beats an outage.
+// DB_CONNECTION_LIMIT overrides the size. A connection_limit in the URL does
+// not: a forgotten value in a Render setting must not undo this.
+// connect_timeout: give up on an unreachable database quickly. pool_timeout:
+// with fewer connections a query may queue a little longer.
+const withPool = (url: string, size: number) => {
+  if (!url) return url;
+  const parsed = new URL(url);
+  parsed.searchParams.set('connection_limit', String(size));
+  if (!parsed.searchParams.has('connect_timeout')) parsed.searchParams.set('connect_timeout', '10');
+  if (!parsed.searchParams.has('pool_timeout')) parsed.searchParams.set('pool_timeout', '30');
+  return parsed.toString();
+};
 
-const poolSize = Number(process.env.DB_CONNECTION_LIMIT) || 10;
-const mainDbUrl = withPoolSize(dbUrl, poolSize);
+const poolSize = Number(process.env.DB_CONNECTION_LIMIT) || 5;
+const mainDbUrl = withPool(dbUrl, poolSize);
 
 // Prisma's default interactive-transaction limit is 5 s. With the database in
 // another region every query is a full network round trip, so ordinary
@@ -34,6 +45,22 @@ export const TRANSACTION_OPTIONS = { maxWait: 10000, timeout: 30000 };
 export const prisma = new PrismaClient({
   ...(mainDbUrl ? { datasources: { db: { url: mainDbUrl } } } : {}),
   transactionOptions: TRANSACTION_OPTIONS,
+});
+
+// Before anything else: refuse queries while the database is unreachable, and
+// retry a read that lost its connection (lib/dbGuard.ts).
+prisma.$use((params, next) =>
+  dbGuard.run({ action: params.action, runInTransaction: params.runInTransaction }, () =>
+    next(params),
+  ),
+);
+
+// A changed employee must take effect at once (lib/authRowCache.ts).
+const READ_ACTIONS = /^(find|count|aggregate|groupBy)/;
+prisma.$use(async (params, next) => {
+  const result = await next(params);
+  if (params.model === 'Employee' && !READ_ACTIONS.test(params.action)) forgetAuthRows();
+  return result;
 });
 
 // Every audit record written during a request gets the company, IP address
@@ -60,11 +87,7 @@ prisma.$use(async (params, next) => {
   return next(params);
 });
 
-const publicDbUrl = dbUrl.includes('connection_limit=')
-  ? dbUrl.replace(/connection_limit=\d+/, 'connection_limit=3')
-  : dbUrl.includes('?')
-    ? `${dbUrl}&connection_limit=3`
-    : `${dbUrl}?connection_limit=3`;
+const publicDbUrl = withPool(dbUrl, 2);
 
 export const publicPrisma = new PrismaClient({
   datasources: {
@@ -74,5 +97,10 @@ export const publicPrisma = new PrismaClient({
   },
   transactionOptions: TRANSACTION_OPTIONS,
 });
+publicPrisma.$use((params, next) =>
+  dbGuard.run({ action: params.action, runInTransaction: params.runInTransaction }, () =>
+    next(params),
+  ),
+);
 
 export default prisma;

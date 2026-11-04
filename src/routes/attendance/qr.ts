@@ -27,6 +27,8 @@ import { Roles, AttendanceQRPayloadSchema } from '../../shared';
 import { validateRequestBody } from '../../middleware/validate';
 import { getAccessibleCompanyIds } from '../../authz/dataScope';
 
+import { getLogoutBlockers } from '../../services/dayPlan.service';
+
 const router = Router();
 
 const p = prisma;
@@ -460,6 +462,9 @@ router.post(
           });
         }
       }
+
+      const blockers = await getLogoutBlockers(scannedEmployee);
+      if (blockers.blocked) return res.status(400).json({ error: blockers.message });
 
       const result = await p.$transaction(
         async (tx: import('@prisma/client').Prisma.TransactionClient) => {

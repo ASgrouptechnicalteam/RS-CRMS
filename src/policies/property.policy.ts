@@ -71,23 +71,19 @@ export class PropertyPolicy {
   }
 
   /**
-   * Determines whether a user may delete (archive) a specific Property.
-   * Same rules as canUpdate.
+   * Only Admin and Technical Manager (whose token carries the Admin role) may
+   * delete (archive) a Property (owner, 2026-11-04). See ProjectPolicy.canDelete.
    */
   static canDelete(user: TokenPayload, property: Property): boolean {
     if (!(user.permissions || []).includes(Permissions.PROPERTIES_DELETE)) {
       return false;
     }
-    if (!user.roles.includes(Roles.ADMIN) && property.company_id !== user.companyId) {
-      return false;
-    }
-    if (user.roles.includes(Roles.ADMIN) || this.isManagement(user)) {
-      return true;
-    }
-    if (user.roles.includes(Roles.PROJECT_MANAGER)) {
-      return this.isOwningPm(user, property);
-    }
-    return false;
+    return user.roles.includes(Roles.ADMIN);
+  }
+
+  /** Replacing a property's PM: MD, Admin and Technical Manager only. */
+  static canChangePm(user: TokenPayload): boolean {
+    return user.roles.includes(Roles.MD) || user.roles.includes(Roles.ADMIN);
   }
 
   static canVerify(user: TokenPayload, property: Property): boolean {

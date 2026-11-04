@@ -14,11 +14,13 @@ export const CRM_ACTION = 'CRM_ACTION';
 // Not someone's work: signing in, reading notifications, searches, previews,
 // and the work log, which records itself as WORK_LOG.
 const SKIP =
-  /^\/(auth|push|notifications|search|ai|analytics|health|kiosk-auth|kiosk-credentials|work-log|public|customer|integration|feedback)(\/|$)|\/(preview|preview-price|search|read|parse|refresh|logout|unlock-options|unlock-verify|register-options|register-verify)(\/|$)/;
+  /^\/(auth|push|notifications|search|ai|analytics|health|kiosk-auth|kiosk-credentials|work-log|public|customer|integration|feedback)(\/|$)|\/(preview|preview-price|search|read|parse|refresh|logout|unlock-options|unlock-verify|register-options|register-verify|rows|items)(\/|$)/;
 
 // What the record is, by the API path word (singular, lower case).
 const NOUNS: Record<string, string> = {
   leads: 'lead',
+  'master-leads': 'master data',
+  'day-plans': 'plan',
   'site-visits': 'site visit',
   tasks: 'task',
   customers: 'customer',

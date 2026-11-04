@@ -24,6 +24,8 @@ import authRoutes from './routes/auth';
 import attendanceRoutes from './routes/attendance';
 import mdRoutes from './routes/md';
 import workLogRoutes from './routes/workLog';
+import masterLeadRoutes from './routes/masterLeads';
+import dayPlanRoutes from './routes/dayPlans';
 import reportRoutes from './routes/reports';
 import taskRoutes from './routes/tasks';
 import performanceRoutes from './routes/performance';
@@ -71,6 +73,8 @@ import { forwardAll } from './utils/forwarder';
 import { clientIp } from './middleware/rateLimiter';
 import { auditWrites, projectSnapshot, propertySnapshot } from './middleware/auditWrites';
 import { recordCrmAction } from './middleware/recordCrmAction';
+import { dbGuard, DatabaseUnavailableError } from './lib/dbGuard';
+import { shareGets } from './middleware/shareGets';
 import { requestContext } from './utils/requestContext';
 
 const app = express();
@@ -82,12 +86,10 @@ app.set('trust proxy', 1);
 // Forward-everything mode: this server only passes requests on to the new
 // production server (see utils/forwarder.ts). Registered first, so nothing
 // below runs and no database connection is opened.
-// The old Render service (crm-backend) deploys from the same branch and kept
-// running every scheduled job against production a second time, so it
-// forwards by default -- Render sets RENDER_SERVICE_NAME on each service.
-const FORWARD_ALL_TO =
-  process.env.FORWARD_ALL_TO ||
-  (process.env.RENDER_SERVICE_NAME === 'crm-backend' ? 'https://api-rscrm.onrender.com' : '');
+// Only when FORWARD_ALL_TO is set on purpose: since 3 Nov the old server
+// (crm-backend) is the working one and api-rscrm the blocked one, so
+// forwarding by service name could have taken the whole CRM down.
+const FORWARD_ALL_TO = process.env.FORWARD_ALL_TO || '';
 if (FORWARD_ALL_TO) app.use(forwardAll(FORWARD_ALL_TO, clientIp));
 // Who / from where, for audit records written during this request.
 app.use(requestContext);
@@ -262,6 +264,20 @@ logger.info(
 // Every role needs a health check (deployment platforms poll this).
 app.use('/api/v1/health', healthRoutes);
 
+// Database unreachable: answer at once instead of adding failed connection
+// attempts (lib/dbGuard.ts). The web app treats 503 as "try again"; a refresh
+// refused here has not used up its token, and nobody is signed out.
+app.use('/api/v1', (req, res, next) => {
+  if (!dbGuard.isOpen()) return next();
+  res.set('Retry-After', String(dbGuard.retryAfterSeconds()));
+  return res
+    .status(503)
+    .json({ error: new DatabaseUnavailableError().message, code: 'DB_UNAVAILABLE' });
+});
+
+// A refresh or repeat tap joins the same read already running.
+app.use('/api/v1', shareGets);
+
 if (mountInternal) {
   // Every successful change by a signed-in person, for the daily work page.
   app.use('/api/v1', recordCrmAction);
@@ -274,6 +290,8 @@ if (mountInternal) {
   app.use('/api/v1/attendance', attendanceRoutes);
   app.use('/api/v1/md', mdRoutes);
   app.use('/api/v1/work-log', workLogRoutes);
+  app.use('/api/v1/master-leads', masterLeadRoutes);
+  app.use('/api/v1/day-plans', dayPlanRoutes);
   app.use('/api/v1/reports', reportRoutes);
   app.use('/api/v1/tasks', taskRoutes);
   app.use('/api/v1/performance', performanceRoutes);
@@ -420,12 +438,11 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
     // permission to a role in code has no effect until someone remembers to
     // run it manually (see syncRolePermissions.ts). Non-fatal: a transient
     // DB hiccup here shouldn't crash a server that's otherwise fine.
-    syncRolePermissions().catch((err) =>
-      logger.error('[authz] Role permission sync failed on startup:', err),
-    );
-
-    // Initialize background jobs
-    initJobs();
+    // Then the background jobs: one thing at a time, so waking up does not
+    // open every database connection at once.
+    syncRolePermissions()
+      .catch((err) => logger.error('[authz] Role permission sync failed on startup:', err))
+      .finally(() => initJobs());
     // Portal worker is DISABLED by default (PORTAL_WORKER_ENABLED=false).
     // Enable explicitly when the Customer Portal is available.
     PortalWorker.start();

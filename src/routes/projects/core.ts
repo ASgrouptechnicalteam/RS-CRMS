@@ -196,7 +196,8 @@ router.delete(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const projectId = parseInt(req.params.id, 10);
-      const project = await ProjectService.deleteProject(req.user!, projectId);
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
+      const project = await ProjectService.deleteProject(req.user!, projectId, reason);
       return res.status(200).json({
         message: 'Project deleted successfully',
         project,

@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { logger } from '../utils/logger';
+import { dbGuard } from '../lib/dbGuard';
 
 const JOB_FAILED_TYPE = 'JOB_FAILED';
 
@@ -68,6 +69,12 @@ export class JobManager {
       cron.schedule(
         job.schedule,
         async () => {
+          // Database unreachable: skip this run. The next one catches up, and
+          // a failure alert could not be saved anyway.
+          if (dbGuard.isOpen()) {
+            logger.warn(`[Jobs] Skipping ${job.name}: database unreachable.`);
+            return;
+          }
           try {
             logger.info(`[Jobs] Starting ${job.name}...`);
             const start = performance.now();

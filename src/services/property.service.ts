@@ -7,6 +7,7 @@ import { Permissions } from '../shared';
 import { WorkflowEngine } from '../workflows/workflowEngine';
 import { WorkflowDomain } from '../workflows/types';
 import { PropertyPolicy } from '../policies/property.policy';
+import { moveOpenVisitsToNewPm } from './siteVisit/moveToNewPm';
 import { buildPropertyScope, buildProjectScope } from '../authz/dataScope';
 import { slugify, generateUniqueSlug } from '../utils/slugify';
 import { logger } from '../utils/logger';
@@ -613,9 +614,19 @@ export class PropertyService {
       if (!project) throw { status: 400, message: 'Invalid or unauthorized project reference' };
     }
 
+    // Naming a PM where there is none stays open to anyone who can edit; replacing
+    // one is only for MD/Admin/Technical Manager, the same as POST /:id/reassign.
+    if (
+      data.assigned_pm_id !== undefined &&
+      data.assigned_pm_id !== property.assigned_pm_id &&
+      property.assigned_pm_id != null &&
+      !PropertyPolicy.canChangePm(user)
+    ) {
+      throw { status: 403, message: 'Only the MD, Admin or Technical Manager can change the PM.' };
+    }
     if (data.assigned_pm_id && data.assigned_pm_id !== property.assigned_pm_id) {
       const pm = await p.employee.findFirst({
-        where: { id: data.assigned_pm_id, company_id: companyId },
+        where: { id: data.assigned_pm_id, company_id: companyId, status: 'ACTIVE' },
       });
       if (!pm)
         throw { status: 400, message: 'Invalid assigned_pm_id or does not belong to your company' };
@@ -723,14 +734,33 @@ export class PropertyService {
       const newPmId = data.assigned_pm_id;
       const oldPmId = property.assigned_pm_id;
 
-      await p.notification.create({
-        data: {
-          employee_id: newPmId,
-          type: 'PROPERTY_ASSIGNED',
-          title: `Property Assigned to You: ${updatedProperty.property_code}`,
-          message: `Property "${updatedProperty.title}" (${updatedProperty.property_code}) has been assigned to you.`,
-        },
+      await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+        await tx.auditEvent.create({
+          data: {
+            actor_id: user.employeeId!,
+            action: 'REASSIGNMENT',
+            entity_type: 'PROPERTY',
+            entity_id: propertyId,
+            old_value: oldPmId ? oldPmId.toString() : 'UNASSIGNED',
+            new_value: newPmId ? newPmId.toString() : 'UNASSIGNED',
+            reason: 'Changed from the edit form',
+          },
+        });
+        if (oldPmId && newPmId) {
+          await moveOpenVisitsToNewPm(tx, { property_id: propertyId }, oldPmId, newPmId);
+        }
       });
+
+      if (newPmId) {
+        await p.notification.create({
+          data: {
+            employee_id: newPmId,
+            type: 'PROPERTY_ASSIGNED',
+            title: `Property Assigned to You: ${updatedProperty.property_code}`,
+            message: `Property "${updatedProperty.title}" (${updatedProperty.property_code}) has been assigned to you.`,
+          },
+        });
+      }
 
       if (oldPmId) {
         await p.notification.create({
@@ -1461,38 +1491,79 @@ export class PropertyService {
     const property = await p.property.findFirst({ where: { id: propertyId, ...whereCondition } });
     if (!property) throw { status: 404, message: 'Property not found or unauthorized' };
 
-    if (!can(user, Permissions.PROPERTIES_UPDATE, property)) {
-      throw { status: 403, message: 'Forbidden: Missing permission to reassign property' };
+    if (!can(user, Permissions.PROPERTIES_UPDATE, property) || !PropertyPolicy.canChangePm(user)) {
+      throw { status: 403, message: 'Only the MD, Admin or Technical Manager can change the PM.' };
+    }
+
+    if (newPmId === property.assigned_pm_id) {
+      throw { status: 400, message: 'Property is already assigned to this PM' };
     }
 
     // New PM must belong to the PROPERTY's own company, not necessarily the
     // acting user's — same reasoning as reassignProject.
     const newPm = await p.employee.findFirst({
-      where: { id: newPmId, company_id: property.company_id, status: 'ACTIVE' },
+      where: {
+        id: newPmId,
+        company_id: property.company_id,
+        status: 'ACTIVE',
+        roles: { some: { role: { name: Roles.PROJECT_MANAGER } } },
+      },
     });
-    if (!newPm) throw { status: 400, message: 'New assignee not found or unauthorized' };
+    if (!newPm) {
+      throw { status: 400, message: 'Choose an active Project Manager of this company as the PM.' };
+    }
 
     const oldPmId = property.assigned_pm_id;
 
-    return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
-      const updated = await tx.property.update({
-        where: { id: propertyId },
-        data: { assigned_pm_id: newPmId },
-      });
+    const { updated, movedVisits } = await p.$transaction(
+      async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+        const updated = await tx.property.update({
+          where: { id: propertyId },
+          data: { assigned_pm_id: newPmId },
+        });
 
-      await tx.auditEvent.create({
-        data: {
-          actor_id: user.employeeId!,
-          action: 'REASSIGNMENT',
-          entity_type: 'PROPERTY',
-          entity_id: propertyId,
-          old_value: oldPmId ? oldPmId.toString() : 'UNASSIGNED',
-          new_value: newPmId.toString(),
-          reason: reason,
-        },
-      });
+        // Requests waiting on the old PM would otherwise sit in the queue of someone
+        // no longer on this property.
+        const movedVisits = oldPmId
+          ? await moveOpenVisitsToNewPm(tx, { property_id: propertyId }, oldPmId, newPmId)
+          : 0;
 
-      return updated;
-    });
+        await tx.auditEvent.create({
+          data: {
+            actor_id: user.employeeId!,
+            action: 'REASSIGNMENT',
+            entity_type: 'PROPERTY',
+            entity_id: propertyId,
+            old_value: oldPmId ? oldPmId.toString() : 'UNASSIGNED',
+            new_value: newPmId.toString(),
+            reason: reason,
+          },
+        });
+
+        return { updated, movedVisits };
+      },
+    );
+
+    const movedNote = movedVisits ? ` ${movedVisits} open site visit(s) moved with it.` : '';
+    const tell = (id: number, type: string, title: string, message: string) =>
+      notifyEmployee(id, { type, title, message }).catch((err) =>
+        logger.error(`[Property] PM change notification (${type}) failed:`, err),
+      );
+    await tell(
+      newPmId,
+      'PROPERTY_ASSIGNED',
+      `Property Assigned to You: ${updated.property_code}`,
+      `Property "${updated.title}" (${updated.property_code}) has been assigned to you. Reason: ${reason}.${movedNote}`,
+    );
+    if (oldPmId) {
+      await tell(
+        oldPmId,
+        'PROPERTY_REASSIGNED',
+        `Property Reassigned: ${updated.property_code}`,
+        `Property "${updated.title}" (${updated.property_code}) has been reassigned from you to ${newPm.full_name || newPm.employee_code}.${movedNote}`,
+      );
+    }
+
+    return updated;
   }
 }

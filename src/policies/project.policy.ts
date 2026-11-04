@@ -130,8 +130,10 @@ export class ProjectPolicy {
   }
 
   /**
-   * Determines whether a user may delete (archive/cancel) a specific Project.
-   * Same rules as canUpdate.
+   * Only Admin and Technical Manager (whose token carries the Admin role) may
+   * delete (cancel) a Project (owner, 2026-11-04). Checked on the role, not only
+   * the permission: role permissions are also stored in the database, where the
+   * MD and PM rows can still hold it.
    */
   static canDelete(
     user: TokenPayload,
@@ -140,17 +142,11 @@ export class ProjectPolicy {
     if (!(user.permissions || []).includes(Permissions.PROJECTS_DELETE)) {
       return false;
     }
-    if (!user.roles.includes(Roles.ADMIN) && project.company_id !== user.companyId) {
-      return false;
-    }
-    if (user.roles.includes(Roles.ADMIN)) return true;
-    if (this.isManagement(user)) return true;
+    return user.roles.includes(Roles.ADMIN);
+  }
 
-    // Project Manager: assignment-based
-    if (user.roles.includes(Roles.PROJECT_MANAGER)) {
-      return this.isOwningPm(user, project);
-    }
-
-    return false;
+  /** Replacing a project's PM: MD, Admin and Technical Manager only. */
+  static canChangePm(user: TokenPayload): boolean {
+    return user.roles.includes(Roles.MD) || user.roles.includes(Roles.ADMIN);
   }
 }

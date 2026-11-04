@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger';
 import { Router, Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { dbGuard } from '../lib/dbGuard';
 
 const router = Router();
 
@@ -18,9 +19,13 @@ router.get('/', async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error('Database connection failed:', error);
-    res
-      .status(503)
-      .json({ status: 'ERROR', database: 'disconnected', timestamp: new Date().toISOString() });
+    res.status(503).json({
+      status: 'ERROR',
+      database: 'disconnected',
+      version: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || undefined,
+      retry_in_seconds: dbGuard.isOpen() ? dbGuard.retryAfterSeconds() : undefined,
+      timestamp: new Date().toISOString(),
+    });
   }
 });
 

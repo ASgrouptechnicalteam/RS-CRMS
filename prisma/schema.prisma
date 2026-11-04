@@ -2944,3 +2944,59 @@ model PerformanceAdjustment {
   @@index([employee_id])
   @@index([created_at])
 }
+
+/// One file uploaded as master data. The counters are kept here because counting
+/// a table of 1 crore rows on every page view would be slow.
+model MasterLeadBatch {
+  id             Int      @id @default(autoincrement())
+  company_id     Int
+  file_name      String   @db.VarChar(200)
+  file_size      BigInt   @default(0)
+  source         String   @default("BULK_UPLOAD") @db.VarChar(40)
+  source_detail  String?  @db.VarChar(80)
+  uploaded_by_id Int
+  rows_received  Int      @default(0)
+  added          Int      @default(0)
+  duplicates     Int      @default(0)
+  failed         Int      @default(0)
+  assigned_count Int      @default(0)
+  skipped_count  Int      @default(0) // already a lead in the CRM, or marked do not call
+  completed_at   DateTime?
+  created_at     DateTime @default(now())
+
+  @@index([company_id, created_at])
+}
+
+/// Numbers nobody has been given yet. Kept apart from Lead, on purpose, so a crore
+/// of rows never slows the lead screens: a row becomes a real Lead only when it is
+/// assigned to a telecaller, and only MD / Admin / Technical Manager see totals.
+model MasterLead {
+  id             Int       @id @default(autoincrement())
+  company_id     Int
+  batch_id       Int
+  phone          String    @db.VarChar(15)
+  name           String?   @db.VarChar(100)
+  email          String?   @db.VarChar(120)
+  location       String?   @db.VarChar(100)
+  notes          String?   @db.VarChar(255)
+  status         String    @default("NEW") @db.VarChar(12) // NEW, ASSIGNED, ALREADY_LEAD, DO_NOT_CALL
+  lead_id        Int?
+  assigned_to_id Int?
+  assigned_at    DateTime?
+
+  @@unique([company_id, phone])
+  @@index([company_id, status, id])
+  @@index([batch_id, status, id])
+}
+
+/// A person's plan for one working day, written before logging out the day before.
+model DayPlan {
+  id          Int      @id @default(autoincrement())
+  employee_id Int
+  plan_date   String   @db.VarChar(10) // IST date, YYYY-MM-DD
+  items       Json // [{ id, text, kind: NOTE | SITE_VISIT | TASK, ref_id?, time?, done? }]
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([employee_id, plan_date])
+}

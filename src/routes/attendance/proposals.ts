@@ -16,6 +16,8 @@ import { validateRequestBody } from '../../middleware/validate';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { getAccessibleCompanyIds } from '../../authz/dataScope';
 
+import { uncalledAssigned } from '../../services/lead/masterLeads';
+
 const router = Router();
 
 const p = prisma;
@@ -369,6 +371,7 @@ router.post(
         },
       });
       const autoApprove = usedThisMonth < 2;
+      const callsLeft = await p.lead.count({ where: uncalledAssigned(req.user!.employeeId) });
 
       // Record proposal in AttendanceProposal table
       const proposal = await p.attendanceProposal.create({
@@ -394,6 +397,7 @@ router.post(
             reason: req.body.reason,
             auto_approved: autoApprove,
             number_this_month: usedThisMonth + 1,
+            assigned_calls_left: callsLeft,
           }),
         },
       });

@@ -199,7 +199,11 @@ export const ALL_PERMISSIONS = Object.values(Permissions);
 
 // Role -> Permission Matrix (Phase 1 - Stage 2 Blueprint Section 8)
 export const RolePermissionsMatrix: Record<RoleName, string[]> = {
-  [Roles.MD]: ALL_PERMISSIONS, // MD gets all permissions
+  // MD gets every permission except deleting projects/properties, which is for
+  // Admin and Technical Manager only (owner, 2026-11-04).
+  [Roles.MD]: ALL_PERMISSIONS.filter(
+    (p) => p !== Permissions.PROJECTS_DELETE && p !== Permissions.PROPERTIES_DELETE,
+  ),
 
   [Roles.ADMIN]: ALL_PERMISSIONS, // Admin is a second fully-privileged account alongside MD (2026-09-07 -- previously a curated list that excluded EMPLOYEES_VIEW_SENSITIVE and all LEADS_* permissions, which blocked real Admin usage; product decision was to match MD instead of narrowing the gaps one by one).
 
@@ -319,7 +323,6 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
     Permissions.PROJECTS_CREATE,
     Permissions.PROJECTS_READ,
     Permissions.PROJECTS_UPDATE,
-    Permissions.PROJECTS_DELETE,
     Permissions.PROJECTS_SUBMIT_VERIFY,
     Permissions.PROPERTIES_CREATE,
     Permissions.PROPERTIES_VERIFY,

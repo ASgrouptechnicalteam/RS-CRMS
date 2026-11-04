@@ -7,8 +7,8 @@ const p = prisma;
  */
 export async function generateNextLeadCode(): Promise<string> {
   const currentYear = new Date().getFullYear();
-  const count = await p.lead.count();
-  const sequentialNum = (count + 1).toString().padStart(4, '0');
+  const last = await p.lead.findFirst({ orderBy: { id: 'desc' }, select: { id: true } });
+  const sequentialNum = ((last?.id || 0) + 1).toString().padStart(4, '0');
   return `RRH-LD-${currentYear}-${sequentialNum}`;
 }
 

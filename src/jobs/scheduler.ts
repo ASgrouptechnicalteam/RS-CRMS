@@ -164,33 +164,25 @@ jobManager.register({
 export const initJobs = () => {
   jobManager.startAll();
 
-  // The host sleeps at night, so also re-check on every start.
-  if (process.env.DISABLE_JOB_ABSENCE_RECHECK !== 'true') {
-    recheckAbsences({ days: 45 }).catch((err) =>
-      logger.error({ err }, '[Jobs] Absence re-check on start failed'),
-    );
-  }
-
-  // Same for the 3:00 session clean-up, which a sleeping host never runs.
-  if (process.env.DISABLE_JOB_SESSION_CLEANUP !== 'true') {
-    tasks
-      .expiredSessionCleanupJob()
-      .catch((err) => logger.error({ err }, '[Jobs] Session clean-up on start failed'));
-  }
-
-  if (process.env.DISABLE_JOB_OFFBOARD !== 'true') {
-    offboardDueLeavers().catch((err) =>
-      logger.error({ err }, '[Jobs] Offboard leavers on start failed'),
-    );
-  }
-
-  // The host sleeps when idle, so the 23:58 rollup is routinely missed --
-  // run it on wake-up instead if last night's run never happened.
-  if (process.env.DISABLE_JOB_ATTENDANCE_ROLLUP !== 'true') {
-    tasks
-      .runMissedDailyRollup()
-      .catch((err) =>
-        logger.error({ err }, '[Jobs] Missed Daily Attendance Rollup catch-up failed'),
-      );
-  }
+  // The host sleeps, so scheduled runs get missed: catch up on every start.
+  // One after another, not all at once -- a wake-up used to open every
+  // connection in the pool together. A failure does not stop the next one.
+  const catchUps: [string, string, () => Promise<unknown>][] = [
+    ['DISABLE_JOB_ABSENCE_RECHECK', 'Absence re-check', () => recheckAbsences({ days: 45 })],
+    // The 3:00 session clean-up.
+    ['DISABLE_JOB_SESSION_CLEANUP', 'Session clean-up', () => tasks.expiredSessionCleanupJob()],
+    ['DISABLE_JOB_OFFBOARD', 'Offboard leavers', () => offboardDueLeavers()],
+    // The 23:58 rollup, if last night's run never happened.
+    ['DISABLE_JOB_ATTENDANCE_ROLLUP', 'Attendance rollup', () => tasks.runMissedDailyRollup()],
+  ];
+  void (async () => {
+    for (const [disableKey, name, run] of catchUps) {
+      if (process.env[disableKey] === 'true') continue;
+      try {
+        await run();
+      } catch (err) {
+        logger.error({ err }, `[Jobs] ${name} on start failed`);
+      }
+    }
+  })();
 };

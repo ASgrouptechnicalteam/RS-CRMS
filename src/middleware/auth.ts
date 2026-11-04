@@ -1,3 +1,4 @@
+import { rememberedAuthRow, rememberAuthRow } from '../lib/authRowCache';
 import { logger } from '../utils/logger';
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
@@ -90,6 +91,28 @@ export const needsTwoStep = (roles: string[] = []) =>
   process.env.TWO_STEP_DISABLED !== 'true' &&
   twoStepRecommended(roles);
 
+const loadAuthRow = (employeeId: number) =>
+  prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: {
+      status: true,
+      token_version: true,
+      first_login_done: true,
+      last_working_day: true,
+      totp_enabled_at: true,
+    },
+  });
+type AuthRow = Awaited<ReturnType<typeof loadAuthRow>>;
+
+/** The person's status for this request; see lib/authRowCache.ts. */
+const authRow = async (employeeId: number) => {
+  const known = rememberedAuthRow<AuthRow>(employeeId);
+  if (known) return known;
+  const row = await loadAuthRow(employeeId);
+  if (row) rememberAuthRow(employeeId, row);
+  return row;
+};
+
 export const authenticateToken = async (
   req: AuthenticatedRequest,
   res: Response,
@@ -116,16 +139,7 @@ export const authenticateToken = async (
       });
     }
 
-    const employee = await prisma.employee.findUnique({
-      where: { id: payload.employeeId },
-      select: {
-        status: true,
-        token_version: true,
-        first_login_done: true,
-        last_working_day: true,
-        totp_enabled_at: true,
-      },
-    });
+    const employee = await authRow(payload.employeeId);
 
     if (!employee) {
       logger.error('AUTH_FAIL: User not found in DB');
@@ -178,7 +192,10 @@ export const authenticateToken = async (
     // TOKEN_EXPIRED (as on 2026-09-28, "Can't reach database server") makes
     // every open app burn a refresh-token rotation and can push users to the
     // login screen; tell the client to retry instead.
-    if (typeof err?.name === 'string' && err.name.startsWith('PrismaClient')) {
+    if (
+      err?.code === 'DB_UNAVAILABLE' ||
+      (typeof err?.name === 'string' && err.name.startsWith('PrismaClient'))
+    ) {
       logger.error('AUTH_DB_UNAVAILABLE:', err.message);
       return res.status(503).json({
         error: 'Service temporarily unavailable, please retry.',

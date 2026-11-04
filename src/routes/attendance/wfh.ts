@@ -24,6 +24,8 @@ import { notifyEmployee } from '../../utils/notifyEmployee';
 // leads worked), which is the real check on remote work.
 import { dayInfo } from '../../services/workCalendar';
 
+import { getLogoutBlockers } from '../../services/dayPlan.service';
+
 const router = Router();
 const p = prisma;
 
@@ -431,6 +433,9 @@ router.post(
             error: 'Send your end-of-day report first (CRM app → My Day), then check out.',
           });
       }
+
+      const blockers = await getLogoutBlockers(employee);
+      if (blockers.blocked) return res.status(400).json({ error: blockers.message });
 
       const minutes = Math.max(0, Math.round((now.getTime() - log.check_in_at.getTime()) / 60000));
       const updated = await p.attendanceLog.update({

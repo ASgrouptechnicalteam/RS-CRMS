@@ -19,6 +19,81 @@ const isMdOrAdmin = (user: TokenPayload) =>
 
 const p = prisma;
 
+const PROPERTY_FIELDS = {
+  select: { id: true, property_code: true, title: true, location: true, final_price: true },
+} as const;
+const UNIT_FIELDS = {
+  select: {
+    id: true,
+    unit_code: true,
+    unit_number: true,
+    unit_type: true,
+    bhk: true,
+    final_price: true,
+    project: { select: { id: true, name: true, location: true } },
+  },
+} as const;
+
+// Everything the person running a demo needs in one place.
+const DEMO_DETAILS = {
+  lead: {
+    select: {
+      id: true,
+      lead_code: true,
+      customer_name: true,
+      phone: true,
+      email: true,
+      status: true,
+      source: true,
+      enquiry_type: true,
+      preferred_contact_time: true,
+      preferred_location: true,
+      property_type_preference: true,
+      budget_min: true,
+      budget_max: true,
+      notes: true,
+      assigned_to_id: true,
+      assigned_to: { select: { id: true, full_name: true, employee_code: true } },
+      project: { select: { id: true, name: true, location: true } },
+      matching_requirement: {
+        select: { property_type: true, location: true, max_budget: true, min_bedrooms: true },
+      },
+      property_interests: {
+        where: { is_active: true },
+        select: { id: true, property: PROPERTY_FIELDS, project_unit: UNIT_FIELDS },
+      },
+      // What happened at the demo, as written when it was completed.
+      activities: {
+        where: { activity_type: 'DEMO_COMPLETED' },
+        orderBy: { created_at: 'desc' as const },
+        take: 1,
+        select: { notes: true, created_at: true },
+      },
+    },
+  },
+  handler: {
+    select: { id: true, full_name: true, employee_code: true, phone: true },
+  },
+  interested_properties: {
+    include: { property: PROPERTY_FIELDS, project_unit: UNIT_FIELDS },
+  },
+};
+
+/** The customer's contact details and private notes, for the people working with them. */
+function hideCustomerDetails(user: TokenPayload, demo: any) {
+  if (
+    !demo.lead ||
+    demo.handler_id === user.employeeId ||
+    demo.lead.assigned_to_id === user.employeeId ||
+    isMdOrAdmin(user)
+  ) {
+    return;
+  }
+  delete demo.lead.phone;
+  delete demo.lead.email;
+  delete demo.lead.notes;
+}
+
 export async function listDemos(
   user: TokenPayload,
   filters: { status?: string; handler_id?: string; leadId?: string },
@@ -38,7 +113,17 @@ export async function listDemos(
     whereCondition.accepted_at = { not: null };
     whereCondition.lead.status = 'DEMO_SCHEDULED';
   } else if (filters.status === 'COMPLETED') {
-    whereCondition.lead.status = 'DEMO_COMPLETED';
+    // A completed demo stays here after the lead moves on to a site visit or a booking.
+    whereCondition.status = { not: 'DECLINED' };
+    whereCondition.AND = [
+      {
+        OR: [
+          { status: 'COMPLETED' },
+          { lead: { status: 'DEMO_COMPLETED' } },
+          { lead: { activities: { some: { activity_type: 'DEMO_COMPLETED' } } } },
+        ],
+      },
+    ];
   }
 
   // Restrict visibility for non-management: PMs/Agents see their own handler assignments.
@@ -57,48 +142,11 @@ export async function listDemos(
 
   const demos = await p.demo.findMany({
     where: whereCondition,
-    include: {
-      lead: {
-        select: {
-          id: true,
-          lead_code: true,
-          customer_name: true,
-          phone: true,
-          email: true,
-          preferred_location: true,
-          property_type_preference: true,
-          budget_min: true,
-          budget_max: true,
-          assigned_to: { select: { id: true, full_name: true, employee_code: true } },
-        },
-      },
-      handler: {
-        select: { id: true, full_name: true, employee_code: true, phone: true },
-      },
-      interested_properties: {
-        include: {
-          property: {
-            select: {
-              id: true,
-              property_code: true,
-              title: true,
-              location: true,
-              final_price: true,
-            },
-          },
-        },
-      },
-    },
+    include: DEMO_DETAILS,
     orderBy: { scheduled_at: 'asc' },
   });
 
-  // Blind approval: Hide customer PII for PENDING demos unless the viewer is the handler
-  for (const demo of demos) {
-    if (demo.lead && demo.handler_id !== user.employeeId) {
-      delete (demo.lead as any).phone;
-      delete (demo.lead as any).email;
-    }
-  }
+  for (const demo of demos) hideCustomerDetails(user, demo);
 
   return demos;
 }
@@ -106,47 +154,12 @@ export async function listDemos(
 export async function getDemo(user: TokenPayload, demoId: number) {
   const demo = await p.demo.findFirst({
     where: { id: demoId, lead: { company_id: user.companyId } },
-    include: {
-      lead: {
-        select: {
-          id: true,
-          lead_code: true,
-          customer_name: true,
-          phone: true,
-          email: true,
-          preferred_location: true,
-          property_type_preference: true,
-          budget_min: true,
-          budget_max: true,
-          assigned_to: { select: { id: true, full_name: true, employee_code: true } },
-        },
-      },
-      handler: {
-        select: { id: true, full_name: true, employee_code: true, phone: true },
-      },
-      interested_properties: {
-        include: {
-          property: {
-            select: {
-              id: true,
-              property_code: true,
-              title: true,
-              location: true,
-              final_price: true,
-            },
-          },
-        },
-      },
-    },
+    include: DEMO_DETAILS,
   });
 
   if (!demo) throw { status: 404, message: 'Demo not found' };
 
-  // Blind approval: Hide PII if not yet accepted and viewer isn't handler
-  if (!demo.accepted_at && demo.handler_id !== user.employeeId) {
-    delete (demo.lead as any).phone;
-    delete (demo.lead as any).email;
-  }
+  hideCustomerDetails(user, demo);
 
   return demo;
 }

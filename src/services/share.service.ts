@@ -53,17 +53,19 @@ const parseList = (value: unknown): string[] => {
   }
 };
 
+type ReraResult = { blocked?: string; warning?: string; applied?: boolean };
+
 /** Whether a project may go out without a RERA number. */
 function reraCheck(project: {
   rera_number?: string | null;
   rera_status?: string | null;
   approval_authorities?: unknown;
-}): { blocked?: string; warning?: string } {
+}): ReraResult {
   if (project.rera_number?.trim() || project.rera_status === 'NOT_APPLICABLE') return {};
+  // Owner's decision 2026-11-05: an application in progress can go out, labelled as such.
+  if (project.rera_status === 'APPLIED') return { applied: true };
   const required =
-    project.rera_status === 'APPROVED' ||
-    project.rera_status === 'APPLIED' ||
-    parseList(project.approval_authorities).includes('RERA');
+    project.rera_status === 'APPROVED' || parseList(project.approval_authorities).includes('RERA');
   return required
     ? { blocked: 'This project needs a RERA number before it can be shared. Ask its PM to add it.' }
     : { warning: 'No RERA number is recorded for this project.' };
@@ -154,6 +156,7 @@ export interface ShareContent {
   location: string | null;
   address: string | null;
   rera_number: string | null;
+  rera_applied: boolean;
   cover: string | null;
   photos: string[];
   videos: string[];
@@ -265,6 +268,7 @@ export async function loadContent(
       location: project.location,
       address: joinAddress(project),
       rera_number: project.rera_number?.trim() || null,
+      rera_applied: !!base.rera.applied,
       ...base.media,
       cover: base.cover,
       blocked: base.blocked,
@@ -307,6 +311,7 @@ export async function loadContent(
       location: project.location,
       address: joinAddress(project),
       rera_number: project.rera_number?.trim() || null,
+      rera_applied: !!base.rera.applied,
       ...base.media,
       cover: unitPhotos[0] || base.cover,
       photos: [...unitPhotos, ...base.media.photos],
@@ -331,7 +336,7 @@ export async function loadContent(
   const parent = property.project_id
     ? await p.project.findFirst({ where: { id: property.project_id }, select: PROJECT_FIELDS })
     : null;
-  const rera = parent ? reraCheck(parent) : {};
+  const rera: ReraResult = parent ? reraCheck(parent) : {};
   const photos = property.images.map((i: any) => publicAssetUrl(i.image_url) as string);
   const facts = [
     { label: 'Type', value: humanise(property.category) },
@@ -354,6 +359,7 @@ export async function loadContent(
     location: property.location,
     address: joinAddress(property),
     rera_number: parent?.rera_number?.trim() || null,
+    rera_applied: !!rera.applied,
     cover: photos[0] || null,
     photos,
     videos: [],
@@ -388,6 +394,7 @@ const stripInternal = (content: ShareContent, sections: Sections) => ({
   address: sections.location ? content.address : null,
   // Always shown when there is one.
   rera_number: content.rera_number,
+  rera_applied: content.rera_applied,
   cover: sections.photos ? content.cover : null,
   photos: sections.photos ? content.photos : [],
   videos: sections.photos ? content.videos : [],
@@ -425,6 +432,7 @@ export async function getShareDetails(user: TokenPayload, kind: ShareKind, id: n
       price_label: content.price_label,
       location: content.location,
       rera_number: content.rera_number,
+      rera_applied: content.rera_applied,
       counts: {
         photos: content.photos.length + content.videos.length,
         brochures: content.brochures.length,
@@ -495,6 +503,7 @@ function buildDetailsText(content: ShareContent, sections: Sections) {
     lines.push(`💰 Starting from ${content.price_label} (exact cost sheet on request)`);
   }
   if (content.rera_number) lines.push(`RERA No: ${content.rera_number}`);
+  if (content.rera_applied) lines.push('RERA: Applied');
   if (sections.brochure) {
     // A stored path with no site address would not open on the customer's phone.
     for (const b of content.brochures) {

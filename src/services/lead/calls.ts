@@ -14,6 +14,8 @@ import {
 import { AppError } from './errors';
 import { updateLeadStatus } from './status';
 import { closeCallBackTasks } from './callBacks';
+import { notifyEmployee } from '../../utils/notifyEmployee';
+import { logger } from '../../utils/logger';
 
 const p = prisma;
 
@@ -56,9 +58,9 @@ export async function logCall(
   const scope = await buildLeadScope(user);
   const lead = await p.lead.findFirst({ where: { id: leadId, ...scope } });
   if (!lead) throw new AppError(404, 'Lead not found');
-  if (!can(user, Permissions.LEADS_UPDATE, lead)) {
-    throw new AppError(403, 'Only the telecaller this lead is assigned to can log calls on it');
-  }
+  // Anyone who can see the lead may record a call they made. Its status, and
+  // whether it is dropped, stay with whoever has the lead, who is told about the call.
+  const ownsLead = can(user, Permissions.LEADS_UPDATE, lead);
 
   // The reason is optional for the API (older apps do not send one) but must
   // fit the outcome when given. "Asked not to be called again" and "salesperson
@@ -73,10 +75,11 @@ export async function logCall(
   }
   const reason = input.reason as CallReasonType | undefined;
   const doNotCall = !!reason && DO_NOT_CALL_REASONS.includes(reason);
-  const wantsDrop =
+  const asksToDrop =
     !!reason &&
     DROPPABLE_CALL_OUTCOMES.includes(input.outcome) &&
     (input.drop_lead === true || doNotCall);
+  const wantsDrop = asksToDrop && ownsLead;
 
   const followUpAt = input.follow_up_at && !doNotCall ? new Date(input.follow_up_at) : null;
   if (followUpAt && Number.isNaN(followUpAt.getTime())) {
@@ -111,7 +114,7 @@ export async function logCall(
       // that was in fact made. A new date below then creates the next one.
       await closeCallBackTasks(tx, leadId, { outcome: 'COMPLETED', assigneeId: user.employeeId });
       // Do-not-call-again: no call-back may remain for ANYONE on this lead.
-      if (doNotCall) await closeCallBackTasks(tx, leadId, { outcome: 'CANCELLED' });
+      if (doNotCall && ownsLead) await closeCallBackTasks(tx, leadId, { outcome: 'CANCELLED' });
 
       const task = followUpAt
         ? await tx.task.create({
@@ -137,7 +140,7 @@ export async function logCall(
   // "contacted". Goes through the normal status path (workflow checks,
   // STATUS_CHANGED activity) rather than writing the status here.
   let updatedLead = null;
-  if (CONNECTED.includes(input.outcome) && lead.status === 'ASSIGNED') {
+  if (ownsLead && CONNECTED.includes(input.outcome) && lead.status === 'ASSIGNED') {
     updatedLead = await updateLeadStatus(
       user,
       leadId,
@@ -150,6 +153,10 @@ export async function logCall(
   // dropped) must not undo the logged call, so it is reported, not thrown.
   let dropped = false;
   let dropError: string | undefined;
+  if (asksToDrop && !ownsLead) {
+    dropError =
+      'Only the person who has this lead can drop it. They have been told about this call.';
+  }
   if (wantsDrop && reason) {
     const exit = CALL_REASON_EXIT_REASON[reason];
     try {
@@ -164,6 +171,18 @@ export async function logCall(
     } catch (e: any) {
       dropError = e?.message || 'The call was logged, but the lead could not be dropped';
     }
+  }
+
+  if (!ownsLead && lead.assigned_to_id && lead.assigned_to_id !== user.employeeId) {
+    const caller = await p.employee.findUnique({
+      where: { id: user.employeeId },
+      select: { full_name: true, employee_code: true },
+    });
+    const title = `${caller?.full_name || caller?.employee_code || 'A colleague'} called your lead`;
+    const message = `${lead.customer_name} (${lead.lead_code}): ${activityNotes}`;
+    notifyEmployee(lead.assigned_to_id, { type: 'STATUS_UPDATE', title, message }).catch((err) =>
+      logger.error('[WebPush] Call by a colleague:', err),
+    );
   }
 
   return { activity, task, lead: updatedLead, dropped, drop_error: dropError };

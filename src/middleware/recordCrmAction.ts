@@ -184,6 +184,7 @@ const FALLBACK_VERB: Record<string, string> = {
 const SPECIAL: Record<string, string> = {
   'POST /reports': 'Sent the daily report',
   'PUT /reports': 'Edited the daily report',
+  'POST /share/links': 'Shared details with a customer',
 };
 
 // Actions that read as a whole sentence without naming the record.

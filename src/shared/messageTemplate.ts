@@ -20,6 +20,7 @@ export type MessageTemplateInput = z.infer<typeof MessageTemplateSchema>;
 export const MessageTemplateKey = {
   LEAD_QUALIFIED_PROPERTIES: 'LEAD_QUALIFIED_PROPERTIES', // legacy/alias
   LEAD_PROPERTY_PROPOSAL: 'LEAD_PROPERTY_PROPOSAL', // matched property list + invite to discuss
+  DETAILS_SHARE: 'DETAILS_SHARE', // project/unit/property details with a link to the customer page
   DEMO_SCHEDULED: 'DEMO_SCHEDULED', // confirm demo date/time
   SITE_VISIT_SCHEDULED: 'SITE_VISIT_SCHEDULED', // schedule confirmation
   SITE_VISIT_ACCEPTED: 'SITE_VISIT_ACCEPTED', // attending PM/Agent name, phone, property, date/time

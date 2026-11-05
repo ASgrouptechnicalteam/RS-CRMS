@@ -1575,6 +1575,30 @@ model ProjectMedia {
   @@index([project_id, kind])
 }
 
+/// A link a staff member sends a customer to see a project, unit or property
+/// with no login. Only the hash of the token is stored, like SiteVisitFeedback.
+model ShareLink {
+  id              Int       @id @default(autoincrement())
+  token_hash      String    @unique @db.VarChar(64)
+  company_id      Int
+  kind            String    @db.VarChar(12) // PROJECT | UNIT | PROPERTY
+  target_id       Int
+  lead_id         Int?
+  created_by_id   Int
+  sections        Json // Which parts the customer sees: overview, price, location, brochure, plans, photos
+  expires_at      DateTime
+  revoked_at      DateTime?
+  open_count      Int       @default(0)
+  first_opened_at DateTime?
+  last_opened_at  DateTime?
+  interested_at   DateTime?
+  created_at      DateTime  @default(now())
+
+  @@index([created_by_id, created_at])
+  @@index([lead_id, created_at])
+  @@index([kind, target_id])
+}
+
 /// My Property: construction progress and announcements staff post for a
 /// project's buyers. Each post also notifies the buyers (CustomerNotification).
 model ProjectUpdate {

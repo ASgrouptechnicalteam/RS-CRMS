@@ -42,6 +42,7 @@ import inventoryRoutes from './routes/inventory';
 import kioskAuthRoutes from './routes/kiosk-auth';
 import webauthnRoutes from './routes/webauthn';
 import feedbackRoutes from './routes/feedback';
+import shareRoutes from './routes/share';
 
 import siteVisitRoutes from './routes/siteVisits';
 import demoRoutes from './routes/demos';
@@ -284,6 +285,7 @@ if (mountInternal) {
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/auth/app-lock', webauthnRoutes);
   app.use('/api/v1/feedback', feedbackRoutes);
+  app.use('/api/v1/share', shareRoutes);
   app.use('/api/v1/kiosk-auth', kioskAuthRoutes);
   app.use('/api/v1/kiosk-credentials', kioskAuthRoutes);
   app.use('/api/v1/attendance/holidays', auditWrites('HOLIDAY'));

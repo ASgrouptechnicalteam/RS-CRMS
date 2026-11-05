@@ -34,6 +34,8 @@ export interface TemplateContext {
   company_name?: string;
   project_name?: string;
   feedback_link?: string;
+  details_text?: string;
+  details_link?: string;
 }
 
 function substitute(body: string, ctx: TemplateContext): string {
@@ -54,7 +56,9 @@ function substitute(body: string, ctx: TemplateContext): string {
     .replace(/\{booking_code\}/g, ctx.booking_code ?? '')
     .replace(/\{company_name\}/g, ctx.company_name ?? '')
     .replace(/\{project_name\}/g, ctx.project_name ?? '')
-    .replace(/\{feedback_link\}/g, ctx.feedback_link ?? '');
+    .replace(/\{feedback_link\}/g, ctx.feedback_link ?? '')
+    .replace(/\{details_text\}/g, ctx.details_text ?? '')
+    .replace(/\{details_link\}/g, ctx.details_link ?? '');
 }
 
 /** Placeholders every template supports — shared by the substitute() logic
@@ -77,6 +81,8 @@ export const TEMPLATE_PLACEHOLDERS = [
   'company_name',
   'project_name',
   'feedback_link',
+  'details_text',
+  'details_link',
 ] as const;
 
 export class MessageTemplateService {
@@ -117,6 +123,9 @@ export class MessageTemplateService {
     switch (canonicalKey) {
       case 'LEAD_PROPERTY_PROPOSAL':
         fallbackText = `🏡 *EXCLUSIVE PROPERTY PROPOSAL*\n\nDear *{customer_name}*,\n\nWe found a premium property matching your requirements!\n\n📌 *Title*: {property_name} ({property_code})\n📍 *Location*: {property_location}\n💰 *Asking Price*: {property_price}\n🔗 *View Details*: {property_url}\n\nContact {pm_name} / {agent_name} to schedule a site visit.\nRef: {lead_code}`;
+        break;
+      case 'DETAILS_SHARE':
+        fallbackText = `Hello {customer_name},\n\nHere are the details of *{property_name}* from {company_name}.\n\n{details_text}\n\nSee everything here: {details_link}\n\n{agent_name}`;
         break;
       case 'DEMO_SCHEDULED':
         fallbackText = `Dear {customer_name}, your demo is scheduled for {visit_date} at {visit_time}. Please be available.`;

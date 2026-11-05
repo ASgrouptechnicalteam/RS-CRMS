@@ -86,7 +86,7 @@ export async function listUploadBatches(
   return [...batches.values()].sort((a, b) => b.day.localeCompare(a.day) || b.count - a.count);
 }
 
-/** Moves one upload batch's not-yet-called leads to another employee. */
+/** Moves one upload batch's not-yet-called leads to another employee: all, or the oldest `count`. */
 export async function moveUploadBatch(
   user: TokenPayload,
   input: {
@@ -97,6 +97,7 @@ export async function moveUploadBatch(
     source: string;
     day: string;
     reason: string;
+    count?: number;
   },
 ) {
   if (input.from_employee_id === input.to_employee_id) {
@@ -124,6 +125,8 @@ export async function moveUploadBatch(
       ...notCalled,
     },
     select: { id: true },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    ...(input.count ? { take: input.count } : {}),
   });
   if (leads.length === 0) throw new AppError(404, 'No uncalled leads left in this batch');
 

@@ -340,6 +340,8 @@ const MoveBatchSchema = z.object({
   source: z.string().min(1).max(100),
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().trim().min(3).max(300),
+  // Only this many, oldest first. Left out: the whole upload.
+  count: z.number().int().positive().optional(),
 });
 router.post(
   '/move-batch',

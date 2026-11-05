@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { logger } from '../utils/logger';
 import { Router, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
@@ -47,10 +48,8 @@ const workKind = (
 // actions, tasks, site visits), with their self-typed daily report next to
 // it. The MD's complaint was "employees are working but I don't know what
 // they did today; I can't trust the daily reports" — this is that answer.
-router.get(
-  '/team-today',
-  authenticateToken,
-  requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]),
+const dayOfPeople =
+  (who: (req: AuthenticatedRequest) => Promise<Prisma.EmployeeWhereInput>) =>
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const reqDate = typeof req.query.date === 'string' ? req.query.date.slice(0, 10) : '';
@@ -61,7 +60,7 @@ router.get(
       const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
       const inDay = { gte: start, lt: end };
 
-      const scope = await buildEmployeeScope(req.user!);
+      const scope = await who(req);
       const employees = await p.employee.findMany({
         where: { ...scope, status: 'ACTIVE' },
         select: {
@@ -410,7 +409,21 @@ router.get(
       logger.error('Team today error:', error);
       return res.status(500).json({ error: "Failed to load the team's day" });
     }
-  },
+  };
+
+router.get(
+  '/team-today',
+  authenticateToken,
+  requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]),
+  dayOfPeople((req) => buildEmployeeScope(req.user!)),
+);
+
+// GET /api/v1/md/my-work?date=YYYY-MM-DD - the same record, for the person's own
+// day only. Anyone signed in; it never returns anybody else.
+router.get(
+  '/my-work',
+  authenticateToken,
+  dayOfPeople(async (req) => ({ id: req.user!.employeeId })),
 );
 
 // GET /api/v1/md/approvals-inbox — everything waiting on the MD, in one place.

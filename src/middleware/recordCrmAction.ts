@@ -225,7 +225,7 @@ export function describeCrmAction(method: string, path: string) {
   const label = SPECIAL[`${method} /${parts.join('/')}`]
     ? SPECIAL[`${method} /${parts.join('/')}`]
     : !verb
-      ? `${FALLBACK_VERB[method] || 'Changed'} ${id ? what : `a ${noun}${parent ? ` to ${parent}` : ''}`}`
+      ? `${FALLBACK_VERB[method] || 'Changed'} ${id ? what : `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}${parent ? ` to ${parent}` : ''}`}`
       : NO_OBJECT.test(verb)
         ? verb
         : `${verb} ${what}`;

@@ -15,7 +15,8 @@ export type ExpenseRefundStatusType =
 
 export const ExpenseRefundCreateSchema = z.object({
   purpose: z.string().min(3, 'Purpose is required'),
-  amount: z.number().positive('Amount must be greater than 0'),
+  // Sent as form data (it can carry a photo), so the amount arrives as text.
+  amount: z.coerce.number().positive('Amount must be greater than 0'),
 });
 
 export type ExpenseRefundCreateInput = z.infer<typeof ExpenseRefundCreateSchema>;

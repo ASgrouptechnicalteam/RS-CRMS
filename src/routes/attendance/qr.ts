@@ -216,6 +216,74 @@ const parseAndVerifyQR = (_req: AuthenticatedRequest, qrPayload: any): QrCheck =
   return { payload };
 };
 
+// GET /api/v1/attendance/kiosk-records?date=YYYY-MM-DD - one day's check-ins at this
+// kiosk's branch, to read on the kiosk screen. Only what the screen shows is
+// returned, and no route lets a kiosk change a record.
+const KIOSK_RECORDS_DAYS_BACK = 31;
+router.get(
+  '/kiosk-records',
+  authenticateKioskToken,
+  async (req: KioskAuthenticatedRequest, res: Response) => {
+    try {
+      const today = getISTComponents(new Date()).dateString;
+      const asked = typeof req.query.date === 'string' ? req.query.date : today;
+      const start = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? getISTMidnightInstant(asked) : null;
+      if (!start || Number.isNaN(start.getTime())) {
+        return res.status(400).json({ error: 'Invalid date' });
+      }
+      const todayStart = getISTMidnightInstant(today);
+      const dayMs = 24 * 60 * 60 * 1000;
+      if (
+        start > todayStart ||
+        start.getTime() < todayStart.getTime() - KIOSK_RECORDS_DAYS_BACK * dayMs
+      ) {
+        return res
+          .status(400)
+          .json({ error: `Records are available for the last ${KIOSK_RECORDS_DAYS_BACK} days` });
+      }
+      const end = new Date(start.getTime() + dayMs);
+
+      const logs = await p.attendanceLog.findMany({
+        where: {
+          branch_id: req.kiosk!.branchId,
+          check_in_at: { gte: start, lt: end },
+          employee: { company_id: req.kiosk!.companyId },
+        },
+        select: {
+          id: true,
+          status: true,
+          check_in_at: true,
+          check_out_at: true,
+          working_duration_minutes: true,
+          employee: { select: { full_name: true, employee_code: true } },
+        },
+        orderBy: { check_in_at: 'asc' },
+      });
+
+      return res.status(200).json({
+        date: asked,
+        records: logs.map((l) => {
+          // closeIfStaleOpenLog closes a forgotten check-in at exactly midnight.
+          const missedCheckout = l.check_out_at?.getTime() === end.getTime();
+          return {
+            id: l.id,
+            name: l.employee.full_name || l.employee.employee_code,
+            employee_code: l.employee.employee_code,
+            status: l.status,
+            check_in_at: l.check_in_at,
+            check_out_at: l.check_out_at,
+            missed_checkout: missedCheckout,
+            worked_minutes: missedCheckout ? null : l.working_duration_minutes,
+          };
+        }),
+      });
+    } catch (error) {
+      logger.error('Kiosk records error:', error);
+      return res.status(500).json({ error: 'Could not load the records' });
+    }
+  },
+);
+
 // POST /api/v1/attendance/scan - Verify QR and Stamp Attendance (IST rules)
 // Kiosk-only: must be authenticated with a type:'KIOSK' token.
 // The token's embedded branchId is written to AttendanceLog.branch_id so the

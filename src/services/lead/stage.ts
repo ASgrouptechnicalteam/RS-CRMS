@@ -5,24 +5,42 @@ import { AppError } from './errors';
 import { CALL_OUTCOMES } from './calls';
 import { generateNextBookingCode } from '../siteVisit/shared';
 import { OpportunityService } from '../opportunity.service';
+import { Roles } from '../../shared';
 
 const p = prisma;
 
 /**
- * Stages a Channel Partner Manager can add a lead at. Associates bring
- * customers who have often already been spoken to, qualified or even taken
- * on a visit before the lead reaches the CRM. Booking stages are excluded:
- * those need a real booking with payments and approvals.
+ * Stages a lead can be added at. Real estate does not always follow the steps:
+ * customers walk in for a visit or a demo with no call and no qualification, and
+ * associates bring customers who are already further along. Booking stages are
+ * excluded: those need a real booking with payments and approvals.
  */
 export const INITIAL_STAGES = [
   'ASSIGNED',
   'CONTACTED',
   'QUALIFIED',
+  'DEMO_SCHEDULED',
+  'DEMO_COMPLETED',
   'SITE_VISIT_SCHEDULED',
   'SITE_VISIT_COMPLETED',
   'NEGOTIATION',
 ] as const;
 export type InitialStage = (typeof INITIAL_STAGES)[number];
+
+// A demo handler must be able to run a demo: same roles as moving a lead to a demo.
+const DEMO_HANDLER_ROLES: string[] = [
+  Roles.PROJECT_MANAGER,
+  Roles.AGENT,
+  Roles.SALES_MANAGER,
+  Roles.CHANNEL_PARTNER_MANAGER,
+  Roles.MD,
+];
+const VISIT_STAGES: InitialStage[] = [
+  'SITE_VISIT_SCHEDULED',
+  'SITE_VISIT_COMPLETED',
+  'NEGOTIATION',
+];
+const DEMO_STAGES: InitialStage[] = ['DEMO_SCHEDULED', 'DEMO_COMPLETED'];
 
 export interface StageDetails {
   contacted_at?: string;
@@ -32,6 +50,9 @@ export interface StageDetails {
   visit_handled_by_id?: number;
   visit_rating?: 'HOT_INTERESTED' | 'WARM' | 'COLD' | 'NOT_INTERESTED';
   visit_feedback?: string;
+  demo_at?: string;
+  demo_handled_by_id?: number;
+  demo_summary?: string;
   negotiation_notes?: string;
   expected_value?: number;
 }
@@ -40,13 +61,12 @@ const STAGE_LABEL: Record<InitialStage, string> = {
   ASSIGNED: 'Not contacted yet',
   CONTACTED: 'Contacted',
   QUALIFIED: 'Qualified',
+  DEMO_SCHEDULED: 'Demo scheduled',
+  DEMO_COMPLETED: 'Demo completed',
   SITE_VISIT_SCHEDULED: 'Site visit scheduled',
   SITE_VISIT_COMPLETED: 'Site visit completed',
   NEGOTIATION: 'Negotiation',
 };
-
-const atLeast = (stage: InitialStage, min: InitialStage) =>
-  INITIAL_STAGES.indexOf(stage) >= INITIAL_STAGES.indexOf(min);
 
 const parseDate = (v: string | undefined, label: string) => {
   const d = v ? new Date(v) : null;
@@ -61,6 +81,8 @@ export interface ResolvedStage {
   project?: { id: number; name: string; assigned_pm_id: number | null };
   visitAt?: Date;
   handler?: { id: number; name: string };
+  demoAt?: Date;
+  demoHandler?: { id: number; name: string };
   details: StageDetails;
 }
 
@@ -84,28 +106,70 @@ export async function resolveInitialStage(
   if (stage === 'ASSIGNED') return out;
   const now = Date.now() + 5 * 60 * 1000;
 
-  out.contactedAt = parseDate(details.contacted_at, 'Date the customer was first spoken to');
-  if (out.contactedAt.getTime() > now) {
-    throw new AppError(400, 'The first-contact date cannot be in the future');
+  // A call is on record only if there was one: someone who walks in for a visit
+  // or a demo was never called, so these are optional from the demo stages on.
+  const needsContact = stage === 'CONTACTED' || stage === 'QUALIFIED';
+  if (needsContact || details.contacted_at) {
+    out.contactedAt = parseDate(details.contacted_at, 'Date the customer was first spoken to');
+    if (out.contactedAt.getTime() > now) {
+      throw new AppError(400, 'The first-contact date cannot be in the future');
+    }
+    out.callNotes = details.call_notes?.trim() || undefined;
   }
-  out.callNotes = details.call_notes?.trim() || undefined;
 
-  if (atLeast(stage, 'QUALIFIED')) {
+  if (stage === 'QUALIFIED') {
     const hasLocation = !!(dto.preferred_locations?.length || dto.preferred_location?.trim());
     if (!dto.property_type_preference || !dto.budget_max || !hasLocation) {
       throw new AppError(400, 'Property type, budget and preferred location are required');
     }
   }
 
-  if (atLeast(stage, 'SITE_VISIT_SCHEDULED')) {
-    if (!details.project_id) throw new AppError(400, 'Choose the project of the site visit');
+  const isVisit = VISIT_STAGES.includes(stage);
+  if (isVisit && !details.project_id) {
+    throw new AppError(400, 'Choose the project of the site visit');
+  }
+  if (details.project_id && (isVisit || DEMO_STAGES.includes(stage))) {
     const project = await p.project.findFirst({
       where: { id: details.project_id, company_id: user.companyId },
       select: { id: true, name: true, assigned_pm_id: true },
     });
     if (!project) throw new AppError(404, 'Project not found');
     out.project = project;
+  }
 
+  if (DEMO_STAGES.includes(stage)) {
+    if (!details.demo_handled_by_id) throw new AppError(400, 'Choose who handles the demo');
+    const handler = await p.employee.findFirst({
+      where: {
+        id: details.demo_handled_by_id,
+        company_id: user.companyId,
+        status: 'ACTIVE',
+        roles: { some: { role: { name: { in: DEMO_HANDLER_ROLES } } } },
+      },
+      select: { id: true, full_name: true, employee_code: true },
+    });
+    if (!handler) {
+      throw new AppError(
+        400,
+        'A demo is handled by a Project Manager, Agent, Sales Manager, Channel Partner Manager or the MD.',
+      );
+    }
+    out.demoHandler = { id: handler.id, name: handler.full_name || handler.employee_code };
+    out.demoAt = parseDate(details.demo_at, 'Demo date and time');
+    if (stage === 'DEMO_SCHEDULED' && out.demoAt.getTime() < Date.now() - 60 * 60 * 1000) {
+      throw new AppError(400, 'A scheduled demo must be in the future');
+    }
+    if (stage === 'DEMO_COMPLETED') {
+      if (out.demoAt.getTime() > now) {
+        throw new AppError(400, 'A completed demo cannot be in the future');
+      }
+      if (!details.demo_summary?.trim()) {
+        throw new AppError(400, 'Enter what happened in the demo');
+      }
+    }
+  }
+
+  if (isVisit) {
     if (!details.visit_handled_by_id) {
       throw new AppError(400, 'Choose who handles the site visit');
     }
@@ -122,7 +186,7 @@ export async function resolveInitialStage(
     }
   }
 
-  if (atLeast(stage, 'SITE_VISIT_COMPLETED')) {
+  if (stage === 'SITE_VISIT_COMPLETED' || stage === 'NEGOTIATION') {
     if (out.visitAt!.getTime() > now) {
       throw new AppError(400, 'A completed visit cannot be in the future');
     }
@@ -163,30 +227,67 @@ export async function applyInitialStage(
 ) {
   if (r.stage === 'ASSIGNED') return;
 
-  await tx.leadActivity.create({
-    data: {
-      lead_id: lead.id,
-      actor_id: user.employeeId,
-      activity_type: 'CALL_LOGGED',
-      notes: `[${CALL_OUTCOMES.CONNECTED_INTERESTED}] ${r.callNotes || 'Spoken to before the lead was added'}`,
-      created_at: r.contactedAt,
-    },
-  });
+  if (r.contactedAt) {
+    await tx.leadActivity.create({
+      data: {
+        lead_id: lead.id,
+        actor_id: user.employeeId,
+        activity_type: 'CALL_LOGGED',
+        notes: `[${CALL_OUTCOMES.CONNECTED_INTERESTED}] ${r.callNotes || 'Spoken to before the lead was added'}`,
+        created_at: r.contactedAt,
+      },
+    });
+  }
 
-  if (r.project) {
-    const pmId = r.project.assigned_pm_id;
+  if (r.demoHandler) {
+    const completed = r.stage === 'DEMO_COMPLETED';
+    const summary = r.details.demo_summary?.trim() || 'Demo arranged when the lead was added.';
+    // Already agreed with the handler, so it does not wait for their acceptance.
+    await tx.demo.create({
+      data: {
+        lead_id: lead.id,
+        handler_id: r.demoHandler.id,
+        scheduled_at: r.demoAt!,
+        summary,
+        status: completed ? 'COMPLETED' : 'PENDING',
+        accepted_at: new Date(),
+        accepted_by: user.employeeId,
+      },
+    });
+    await tx.leadActivity.create({
+      data: {
+        lead_id: lead.id,
+        actor_id: user.employeeId,
+        activity_type: completed ? 'DEMO_COMPLETED' : 'STATUS_CHANGED',
+        notes: `Demo${r.project ? ` of ${r.project.name}` : ''} on ${r.demoAt!.toDateString()}, handled by ${r.demoHandler.name}. ${summary}`,
+      },
+    });
+    if (r.demoHandler.id !== user.employeeId) {
+      await tx.notification.create({
+        data: {
+          employee_id: r.demoHandler.id,
+          type: 'STATUS_UPDATE',
+          title: completed ? 'Demo recorded' : 'Demo scheduled for you',
+          message: `${lead.customer_name} (${lead.lead_code}), ${r.demoAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. Recorded when the lead was added.`,
+        },
+      });
+    }
+  }
+
+  if (VISIT_STAGES.includes(r.stage)) {
+    const pmId = r.project!.assigned_pm_id;
     const completed = r.stage !== 'SITE_VISIT_SCHEDULED';
     const booking = await tx.siteVisitBooking.create({
       data: {
         booking_code: await generateNextBookingCode(),
         lead_id: lead.id,
         telecaller_id: user.employeeId,
-        project_id: r.project.id,
+        project_id: r.project!.id,
         project_manager_id: pmId ?? r.handler!.id,
         assigned_agent_id: pmId && pmId !== r.handler!.id ? r.handler!.id : null,
         scheduled_date: r.visitAt!,
         status: completed ? 'COMPLETED' : 'CONFIRMED',
-        verification_call_notes: 'Recorded by the Channel Partner Manager when adding the lead.',
+        verification_call_notes: 'Recorded when the lead was added.',
         ...(completed
           ? {
               completed_at: r.visitAt,
@@ -202,8 +303,8 @@ export async function applyInitialStage(
         actor_id: user.employeeId,
         activity_type: completed ? 'SITE_VISIT_COMPLETED' : 'SITE_VISIT_BOOKED',
         notes: completed
-          ? `Visit ${booking.booking_code} to ${r.project.name} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}. Interest: ${r.details.visit_rating}. Feedback: ${r.details.visit_feedback!.trim()}`
-          : `Visit ${booking.booking_code} to ${r.project.name} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}`,
+          ? `Visit ${booking.booking_code} to ${r.project!.name} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}. Interest: ${r.details.visit_rating}. Feedback: ${r.details.visit_feedback!.trim()}`
+          : `Visit ${booking.booking_code} to ${r.project!.name} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}`,
       },
     });
     await tx.notification.create({
@@ -211,7 +312,7 @@ export async function applyInitialStage(
         employee_id: r.handler!.id,
         type: 'STATUS_UPDATE',
         title: completed ? 'Site visit recorded' : 'Site visit scheduled for you',
-        message: `${lead.customer_name} (${lead.lead_code}) — ${r.project.name}, ${r.visitAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. Recorded by the Channel Partner Manager.`,
+        message: `${lead.customer_name} (${lead.lead_code}) — ${r.project!.name}, ${r.visitAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. Recorded when the lead was added.`,
       },
     });
   }
@@ -225,7 +326,7 @@ export async function applyInitialStage(
         notes: `Negotiation: ${r.details.negotiation_notes!.trim()}`,
       },
     });
-    // The deal value the CPM gave; the unit is chosen later, at Booking initiated.
+    // The deal value given here; the unit is chosen later, at Booking initiated.
     await OpportunityService.createFromLeadTx(tx, lead, user.employeeId, null, null, {
       expectedValue: Number(r.details.expected_value),
       projectId: r.project?.id ?? null,
@@ -239,7 +340,7 @@ export async function applyInitialStage(
       lead_id: lead.id,
       actor_id: user.employeeId,
       activity_type: 'STATUS_CHANGED',
-      notes: `Added directly at "${STAGE_LABEL[r.stage]}" by the Channel Partner Manager (the customer had already reached this stage).`,
+      notes: `Added directly at "${STAGE_LABEL[r.stage]}" (the customer had already reached this stage).`,
     },
   });
 }

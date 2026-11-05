@@ -343,7 +343,10 @@ export async function updateLeadStatus(
             (interested?.project_unit?.final_price || null) ??
             lead.budget_max ??
             lead.budget_min ??
-            null,
+            // No budget on record, such as a walk-in added straight at a visit: the
+            // deal is opened with its value still to be set. This is only for the
+            // check here; nothing is stored, and booking still needs a real value.
+            0,
         },
       ];
     }
@@ -558,7 +561,10 @@ export async function updateLeadStatus(
               lead_id: leadId,
               actor_id: user.employeeId || 1,
               activity_type: 'NOTE_ADDED',
-              notes: `Deal value is an ESTIMATE from the lead's budget (${opp.expected_value ?? 'not set'}); no unit has been chosen yet. Pick the unit before moving to Booking initiated.`,
+              notes:
+                opp.expected_value == null
+                  ? 'Deal value not set yet: no budget on record. Set it and the unit before booking.'
+                  : `Deal value is an ESTIMATE from the lead's budget (${opp.expected_value}); no unit has been chosen yet. Pick the unit before moving to Booking initiated.`,
             },
           });
         }

@@ -86,6 +86,14 @@ export async function createLead(
     const isDropped = existingLead.status === 'DROPPED' || existingLead.status === 'CANCELLED';
 
     if (!isDropped) {
+      // Stage details cannot go on a lead that already exists: say so, instead of
+      // answering "added" and quietly losing what was just typed in.
+      if (dto.initial_stage && dto.initial_stage !== 'ASSIGNED') {
+        throw new AppError(
+          409,
+          `${existingLead.customer_name} is already in the CRM as ${existingLead.lead_code}${existingLead.assigned_to ? `, with ${existingLead.assigned_to.full_name || existingLead.assigned_to.employee_code}` : ''}. Open that lead and update it there.`,
+        );
+      }
       // Active lead duplicate check (Task 6)
       // Append note and notify owner, return existing lead
       const sourceName = dto.source || 'MANUAL_ENTRY';
@@ -231,11 +239,11 @@ export async function createLead(
     }
   }
 
-  // A CPM keeping the lead can add it at the stage it has already reached.
+  // Anyone keeping the lead can add it at the stage it has already reached.
   let resolvedStage: ResolvedStage | null = null;
   if (dto.initial_stage && dto.initial_stage !== 'ASSIGNED') {
-    if (!isChannelPartner || ownershipType !== 'DIRECT') {
-      throw new AppError(400, 'Only a Channel Partner Manager keeping the lead can set its stage.');
+    if (isPublicSubmission || ownershipType !== 'DIRECT') {
+      throw new AppError(400, 'Keep the lead yourself to add it at a later stage.');
     }
     resolvedStage = await resolveInitialStage(
       user,

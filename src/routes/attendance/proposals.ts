@@ -356,9 +356,9 @@ router.post(
   validateRequestBody(LateProposalSchema), // Reusing LateProposalSchema since it has date, expected_time, reason
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      // First 2 emergency early logouts in an IST month are approved on the
-      // spot; from the 3rd the MD must approve (MD decision 2026-10-02) and
-      // the kiosk/app checkout gate waits for that approval.
+      // Every emergency early logout waits for the MD (owner's decision
+      // 2026-11-07; until then the first two a month were approved on the
+      // spot and never reached the MD). The kiosk and app checkout wait for it.
       const { dateString: todayStr } = getISTComponents(new Date());
       const [y, m] = todayStr.split('-');
       const monthStart = new Date(`${y}-${m}-01T00:00:00+05:30`);
@@ -370,7 +370,6 @@ router.post(
           created_at: { gte: monthStart },
         },
       });
-      const autoApprove = usedThisMonth < 2;
       const callsLeft = await p.lead.count({ where: uncalledAssigned(req.user!.employeeId) });
 
       // Record proposal in AttendanceProposal table
@@ -380,7 +379,7 @@ router.post(
           type: 'EARLY_CHECKOUT',
           target_date: new Date(`${req.body.date}T${req.body.expected_time}:00+05:30`),
           reason: req.body.reason,
-          status: autoApprove ? 'APPROVED' : 'PENDING',
+          status: 'PENDING',
         },
       });
 
@@ -395,18 +394,46 @@ router.post(
             type: 'EARLY_CHECKOUT',
             target_date: proposal.target_date,
             reason: req.body.reason,
-            auto_approved: autoApprove,
+            auto_approved: false,
             number_this_month: usedThisMonth + 1,
             assigned_calls_left: callsLeft,
           }),
         },
       });
 
+      // Tell every MD who looks after this person's company.
+      const employee = await p.employee.findUnique({
+        where: { id: req.user!.employeeId },
+        select: { full_name: true, employee_code: true, company_id: true },
+      });
+      const mds = await p.employee.findMany({
+        where: {
+          status: 'ACTIVE',
+          roles: { some: { role: { name: Roles.MD } } },
+          OR: [
+            { company_id: employee?.company_id },
+            { company_access: { some: { company_id: employee?.company_id } } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (mds.length > 0) {
+        const at = req.body.expected_time;
+        notifyEmployee(
+          mds.map((m) => m.id),
+          {
+            type: 'SYSTEM',
+            title: `${employee?.full_name || employee?.employee_code || 'An employee'} asked to leave early`,
+            message: `Emergency early logout at ${at} (no. ${usedThisMonth + 1} this month): ${String(req.body.reason).slice(0, 120)}`,
+            link: '/approvals',
+          },
+        ).catch((err) => logger.error({ err }, '[early-logout] could not notify the MD'));
+      }
+
       return res.status(201).json({
-        approved: autoApprove,
-        message: autoApprove
-          ? 'Emergency logout request recorded successfully. You may now scan out at the Kiosk.'
-          : `This is your early logout no. ${usedThisMonth + 1} this month, so it needs the MD's approval. You can check out once it is approved.`,
+        approved: false,
+        message:
+          'Your early logout request has been sent to the MD. You can check out once it is approved.',
         proposalId: proposal.id,
       });
     } catch (error: any) {
@@ -518,6 +545,95 @@ router.get(
     } catch (error) {
       logger.error('Proposal queue error:', error);
       return res.status(500).json({ error: 'Failed to load HR proposal queue' });
+    }
+  },
+);
+
+// Early logouts approved on the spot (the first two a month, until 2026-11-07)
+// were never seen by anyone. They are approved with nobody as reviewer; the MD
+// looks through them here and marks each one reviewed. Nothing else changes.
+const unreviewedEarlyWhere = (employeeIds: number[]) => ({
+  employee_id: { in: employeeIds },
+  type: 'EARLY_CHECKOUT',
+  status: 'APPROVED',
+  reviewed_by: null,
+});
+
+// GET /api/v1/attendance/proposals/early-reviews
+router.get(
+  '/proposals/early-reviews',
+  authenticateToken,
+  requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const employees = await p.employee.findMany({
+        where: await proposalEmployeeScope(req),
+        select: { id: true, full_name: true, employee_code: true },
+      });
+      const where = unreviewedEarlyWhere(employees.map((e) => e.id));
+      const [rows, total] = await Promise.all([
+        p.attendanceProposal.findMany({
+          where,
+          orderBy: { target_date: 'desc' },
+          take: 100,
+        }),
+        p.attendanceProposal.count({ where }),
+      ]);
+      // When they actually checked out that day, if they did.
+      const logs = rows.length
+        ? await p.attendanceLog.findMany({
+            where: {
+              employee_id: { in: [...new Set(rows.map((r) => r.employee_id))] },
+              check_in_at: {
+                gte: new Date(Math.min(...rows.map((r) => r.target_date.getTime())) - 86400000),
+              },
+            },
+            select: { employee_id: true, check_in_at: true, check_out_at: true },
+          })
+        : [];
+      const dayOf = (d: Date) => getISTComponents(d).dateString;
+      const proposals = rows.map((r) => ({
+        ...r,
+        employee: employees.find((e) => e.id === r.employee_id),
+        checked_out_at:
+          logs.find(
+            (l) => l.employee_id === r.employee_id && dayOf(l.check_in_at) === dayOf(r.target_date),
+          )?.check_out_at ?? null,
+      }));
+      return res.status(200).json({ proposals, total });
+    } catch (error) {
+      logger.error('Early logout review list error:', error);
+      return res.status(500).json({ error: 'Failed to load early logouts to review' });
+    }
+  },
+);
+
+// POST /api/v1/attendance/proposals/early-reviews/:id/reviewed, or "all" for every one in scope
+router.post(
+  '/proposals/early-reviews/:id/reviewed',
+  authenticateToken,
+  requireRole([Roles.MD, Roles.ADMIN]),
+  validateRequestBody(EmptyBodySchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const employees = await p.employee.findMany({
+        where: await proposalEmployeeScope(req),
+        select: { id: true },
+      });
+      const all = req.params.id === 'all';
+      const id = parseInt(req.params.id, 10);
+      if (!all && !Number.isInteger(id)) return res.status(400).json({ error: 'Invalid ID' });
+      const marked = await p.attendanceProposal.updateMany({
+        where: { ...unreviewedEarlyWhere(employees.map((e) => e.id)), ...(all ? {} : { id }) },
+        data: { reviewed_by: req.user!.employeeId, reviewed_at: new Date() },
+      });
+      if (!all && marked.count === 0) {
+        return res.status(404).json({ error: 'Not found, or already reviewed' });
+      }
+      return res.status(200).json({ reviewed: marked.count });
+    } catch (error) {
+      logger.error('Early logout review error:', error);
+      return res.status(500).json({ error: 'Failed to mark as reviewed' });
     }
   },
 );

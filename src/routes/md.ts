@@ -201,8 +201,7 @@ const dayOfPeople =
           select: { id: true, actor_id: true, new_value: true, created_at: true },
           orderBy: { created_at: 'asc' },
         }),
-        // Emergency early logouts asked for today: the first two a month are
-        // approved on the spot, later ones wait for the MD.
+        // Emergency early logouts asked for today; every one waits for the MD.
         p.attendanceProposal.findMany({
           where: {
             employee_id: { in: ids },
@@ -552,6 +551,23 @@ router.get(
         },
       });
 
+      // Early logouts approved on the spot that nobody has looked at yet.
+      const earlyWhere = {
+        type: 'EARLY_CHECKOUT',
+        status: 'APPROVED',
+        reviewed_by: null,
+        ...empCo,
+      };
+      const [earlyReviews, earlyReviewsN] = await Promise.all([
+        p.attendanceProposal.findMany({
+          where: earlyWhere,
+          select: { id: true, target_date: true, employee_id: true, reason: true },
+          orderBy: { target_date: 'desc' },
+          take,
+        }),
+        p.attendanceProposal.count({ where: earlyWhere }),
+      ]);
+
       type ProposalRow = (typeof proposals)[number];
       const proposalGroups: { first: ProposalRow; last: ProposalRow; days: number }[] = [];
       const groupIndex = new Map<string, number>();
@@ -626,6 +642,18 @@ router.get(
                 ? `${getISTComponents(g.first.target_date).dateString} to ${getISTComponents(g.last.target_date).dateString} (${g.days} days)`
                 : `for ${getISTComponents(g.first.target_date).dateString}`,
             since: g.first.created_at,
+          })),
+        },
+        {
+          key: 'early_reviews',
+          label: 'Early logouts approved automatically, to review',
+          link: '/approvals',
+          count: earlyReviewsN,
+          items: earlyReviews.map((x) => ({
+            id: x.id,
+            title: `${nameOf.get(x.employee_id) || ''} - left early`,
+            subtitle: `${getISTComponents(x.target_date).dateString}: ${(x.reason || '').slice(0, 60)}`,
+            since: x.target_date,
           })),
         },
         {

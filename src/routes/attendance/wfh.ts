@@ -419,9 +419,19 @@ router.post(
           },
         });
         if (!early) {
-          return res
-            .status(400)
-            .json({ error: 'Logout is not allowed before 18:00 IST without an emergency request' });
+          const waiting = await p.attendanceProposal.count({
+            where: {
+              employee_id: employeeId,
+              type: 'EARLY_CHECKOUT',
+              status: 'PENDING',
+              target_date: dayRange,
+            },
+          });
+          return res.status(400).json({
+            error: waiting
+              ? 'Your early logout request is waiting for the MD to approve it.'
+              : 'Logout is not allowed before 18:00 IST without an emergency request',
+          });
         }
       }
       if (employee.report_required) {

@@ -718,7 +718,7 @@ router.post(
   authenticateToken,
   canManage,
   (req, res, next) =>
-    upload.single('file')(req, res, (err: any) =>
+    (upload.single('file') as any)(req, res, (err: any) =>
       err ? res.status(err.statusCode || 400).json({ error: err.message }) : next(),
     ),
   async (req: AuthenticatedRequest, res, next) => {

@@ -17,7 +17,7 @@ import { can } from '../authz/authorization';
 import { getDownstreamEmployeeIds } from '../utils/hierarchy';
 import { deriveTaskSlaStatus } from '../services/task-sla.status';
 import { TaskPolicy } from '../policies/task.policy';
-import { isTaskOverdue } from '../services/taskOverdue';
+import { isTaskOverdue, OPEN_TASK_STATUSES } from '../services/taskOverdue';
 import {
   TaskError,
   finishTask,
@@ -71,7 +71,20 @@ router.get(
       const companyId = req.user!.companyId;
       const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 200, 1), 500);
       const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
-      const where = { assignee: { company_id: companyId } };
+      // ?status=OVERDUE (dashboard links): filtered here, not in the page,
+      // so the list is exactly what the count said, whatever the page size.
+      const status = typeof req.query.status === 'string' ? req.query.status : '';
+      const where = {
+        assignee: { company_id: companyId },
+        ...(status === 'OVERDUE'
+          ? {
+              OR: [
+                { status: 'OVERDUE' },
+                { status: { in: OPEN_TASK_STATUSES }, target_date: { lt: new Date() } },
+              ],
+            }
+          : {}),
+      };
 
       const [rows, total] = await Promise.all([
         p.task.findMany({
@@ -80,7 +93,8 @@ router.get(
             assignee: { select: { id: true, employee_code: true, full_name: true } },
             lead: { select: TASK_LEAD_SELECT },
           },
-          orderBy: [{ target_date: 'asc' }, { id: 'asc' }],
+          // Latest first (owner, 2026-11-14).
+          orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
           take: limit,
           skip: offset,
         }),

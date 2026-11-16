@@ -39,7 +39,9 @@ export const SiteVisitCreateSchema = z.object({
   scheduled_date: z.string().datetime(),
   opportunity_id: z.number().int().positive().optional(),
   pick_up_requested: z.boolean().optional().default(false),
-  pick_up_address: z.string().optional(),
+  pick_up_address: z.string().max(500).optional(),
+  // Optional "Tell the PM" note: what the customer wants, worries, who is coming.
+  customer_brief: z.string().trim().max(500).optional(),
   // The customer goes to the site on their own: nobody is routed or assigned.
   direct: z.boolean().optional(),
   notes: z.string().max(1000).optional(),

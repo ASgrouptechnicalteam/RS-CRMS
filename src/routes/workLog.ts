@@ -34,7 +34,12 @@ export const WORK_LOG_KINDS = [
   'INSTAGRAM_REEL',
   'INSTAGRAM_STORY',
   'FACEBOOK_POST',
+  'FACEBOOK_REEL',
   'YOUTUBE_VIDEO',
+  'YOUTUBE_SHORT',
+  'PINTEREST_PIN',
+  'LINKEDIN_POST',
+  'WHATSAPP_QUOTE_IMAGE',
   'AD_CAMPAIGN',
   'WHATSAPP_BROADCAST',
   'CONTENT_DESIGN',
@@ -44,6 +49,36 @@ export const WORK_LOG_KINDS = [
   'PARTNER_MEETING',
   'OTHER',
 ] as const;
+
+/**
+ * Item 1 (2026-11-15, owner decision 3): each post / reel kind names its
+ * platform, and must carry a link (the proof) and a count. A WhatsApp quote
+ * image needs only a count.
+ */
+export const PLATFORM_KINDS = {
+  INSTAGRAM: ['INSTAGRAM_POST', 'INSTAGRAM_REEL'],
+  FACEBOOK: ['FACEBOOK_POST', 'FACEBOOK_REEL'],
+  YOUTUBE: ['YOUTUBE_VIDEO', 'YOUTUBE_SHORT'],
+  PINTEREST: ['PINTEREST_PIN'],
+  LINKEDIN: ['LINKEDIN_POST'],
+  WHATSAPP_IMAGES: ['WHATSAPP_QUOTE_IMAGE'],
+} as const;
+export type Platform = keyof typeof PLATFORM_KINDS;
+export const POST_KINDS: readonly string[] = [
+  ...PLATFORM_KINDS.INSTAGRAM,
+  ...PLATFORM_KINDS.FACEBOOK,
+  ...PLATFORM_KINDS.YOUTUBE,
+  ...PLATFORM_KINDS.PINTEREST,
+  ...PLATFORM_KINDS.LINKEDIN,
+];
+
+/** Sum of `count` per platform over parsed work-log entries. */
+export const platformCounts = (entries: { kind: string; count: number }[]) => {
+  const out = {} as Record<Platform, number>;
+  for (const [platform, kinds] of Object.entries(PLATFORM_KINDS) as [Platform, readonly string[]][])
+    out[platform] = entries.filter((e) => kinds.includes(e.kind)).reduce((n, e) => n + e.count, 0);
+  return out;
+};
 
 const WorkLogSchema = z
   .object({
@@ -60,6 +95,14 @@ const WorkLogSchema = z
     title: z.string().trim().max(80).optional(),
     associate_name: z.string().trim().max(120).optional(),
     associate_id: z.string().trim().max(60).optional(),
+  })
+  .refine((v) => !POST_KINDS.includes(v.kind) || (!!v.link && v.link.length > 0), {
+    message: 'Add the link to the post',
+    path: ['link'],
+  })
+  .refine((v) => (!POST_KINDS.includes(v.kind) && v.kind !== 'WHATSAPP_QUOTE_IMAGE') || !!v.count, {
+    message: 'Enter how many',
+    path: ['count'],
   })
   .refine((v) => v.kind !== 'OTHER' || (v.title && v.title.length >= 3), {
     message: 'Say what you did (at least 3 characters)',

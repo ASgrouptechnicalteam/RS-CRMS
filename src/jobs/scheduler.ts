@@ -53,11 +53,12 @@ jobManager.register({
   envDisableKey: 'DISABLE_JOB_BACKUP_VERIFY',
 });
 
-// 7. Report generation (Weekly on Monday at 7:00 AM)
+// 7. Weekly / monthly reports (every 30 minutes; acts only from 07:00 IST on
+// a Monday or the 1st until the end of the third day, once per period).
 jobManager.register({
   name: 'Report Generation',
-  schedule: '0 7 * * 1',
-  handler: tasks.reportGenerationJob,
+  schedule: '*/30 * * * *',
+  handler: () => tasks.reportGenerationJob(),
   envDisableKey: 'DISABLE_JOB_REPORT_GEN',
 });
 
@@ -161,6 +162,65 @@ jobManager.register({
   envDisableKey: 'DISABLE_JOB_OFFBOARD',
 });
 
+// Database growth history and the "database filling up" warning (item 9,
+// 2026-11-15). 03:30 IST; relies on keepAwake keeping the free host up.
+import { metricSnapshotJob } from '../services/systemHealth';
+jobManager.register({
+  name: 'Metric Snapshot',
+  schedule: '30 3 * * *',
+  handler: async () => {
+    await metricSnapshotJob();
+  },
+  envDisableKey: 'DISABLE_JOB_METRIC_SNAPSHOT',
+});
+
+// Overdue / due-in-7-days installments to the accountant and booking owners
+// (item 6 #1, 2026-11-15). 09:00 IST.
+import { installmentDigestJob } from '../services/installmentDigest';
+jobManager.register({
+  name: 'Installment Digest',
+  schedule: '0 9 * * *',
+  handler: async () => {
+    await installmentDigestJob();
+  },
+  envDisableKey: 'DISABLE_JOB_INSTALLMENT_DIGEST',
+});
+
+// Monthly budget reminders: the accountant on the 25th, the MD on the 1st
+// (item 4, 2026-11-15). Checks daily at 10:00 IST.
+import { budgetReminderJob } from '../services/budgetReminder';
+jobManager.register({
+  name: 'Budget Reminder',
+  schedule: '0 10 * * *',
+  handler: async () => {
+    await budgetReminderJob();
+  },
+  envDisableKey: 'DISABLE_JOB_BUDGET_REMINDER',
+});
+
+// Work updates (2026-11-16): a reminder to the digital team after 90 minutes
+// with nothing running (09:30-18:30 IST); anything left running pauses at 19:00.
+import { workUpdateNudgeJob } from '../services/workUpdates';
+jobManager.register({
+  name: 'Work Update Reminder',
+  schedule: '*/15 * * * *',
+  handler: async () => {
+    await workUpdateNudgeJob();
+  },
+  envDisableKey: 'DISABLE_JOB_WORK_UPDATE_REMINDER',
+});
+
+// Assets (2026-11-16): SIM recharges due in 3 days, warranties ending in 30 days.
+import { assetReminderJob } from '../services/assets';
+jobManager.register({
+  name: 'Asset Reminder',
+  schedule: '30 9 * * *',
+  handler: async () => {
+    await assetReminderJob();
+  },
+  envDisableKey: 'DISABLE_JOB_ASSET_REMINDER',
+});
+
 export const initJobs = () => {
   jobManager.startAll();
 
@@ -174,6 +234,8 @@ export const initJobs = () => {
     ['DISABLE_JOB_OFFBOARD', 'Offboard leavers', () => offboardDueLeavers()],
     // The 23:58 rollup, if last night's run never happened.
     ['DISABLE_JOB_ATTENDANCE_ROLLUP', 'Attendance rollup', () => tasks.runMissedDailyRollup()],
+    // "Your report is ready", if the Monday / 1st window is open and it has not gone out.
+    ['DISABLE_JOB_REPORT_GEN', 'Report generation', () => tasks.reportGenerationJob()],
   ];
   void (async () => {
     for (const [disableKey, name, run] of catchUps) {

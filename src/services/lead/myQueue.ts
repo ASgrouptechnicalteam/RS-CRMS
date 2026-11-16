@@ -3,11 +3,11 @@ import { TokenPayload } from '../../utils/jwt';
 import { getISTComponents } from '../../utils/time';
 import { LeadPolicy } from '../../policies/lead.policy';
 import { getCallQueueMeta, splitCalls } from './calls';
+import { CALLABLE_STATUSES, followUpsDue } from '../counts/followUps';
 
 const p = prisma;
 
-/** The statuses a telecaller still calls about (same list as the dashboard used). */
-export const QUEUE_STATUSES = ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'SITE_VISIT_SCHEDULED'];
+export const QUEUE_STATUSES = CALLABLE_STATUSES;
 const RETRY_OUTCOMES = ['NO_ANSWER', 'BUSY_OR_SWITCHED_OFF'];
 export type QueueTab = 'new' | 'followups' | 'all';
 
@@ -39,7 +39,7 @@ export async function getMyQueue(
   const dayStart = new Date(`${today}T00:00:00+05:30`);
   const endOfToday = new Date(`${today}T23:59:59.999+05:30`);
 
-  const [light, meta, todayCalls] = await Promise.all([
+  const [light, meta, todayCalls, due] = await Promise.all([
     p.lead.findMany({
       where: {
         assigned_to_id: user.employeeId,
@@ -51,6 +51,7 @@ export async function getMyQueue(
     }),
     getCallQueueMeta(user, QUEUE_STATUSES),
     splitCalls(user.employeeId, dayStart, new Date(dayStart.getTime() + 24 * 3600 * 1000)),
+    followUpsDue([user.employeeId], user.companyId, now),
   ]);
 
   type Light = (typeof light)[number];
@@ -83,7 +84,7 @@ export async function getMyQueue(
   const followUps = light
     .filter((l) => !isNewCall(l))
     .sort((a, b) => rank(a) - rank(b) || followTime(a) - followTime(b));
-  const followUpsDue = followUps.filter((l) => isDue(l) || isRetry(l)).length;
+  const dueNow = due.get(user.employeeId)!;
 
   const batchMap = new Map<
     string,
@@ -106,7 +107,7 @@ export async function getMyQueue(
     .filter((b) => b.left > 0)
     .sort((a, b) => (a.assigned_at?.getTime() || 0) - (b.assigned_at?.getTime() || 0));
 
-  const tab: QueueTab = opts.tab || (followUpsDue > 0 ? 'followups' : 'new');
+  const tab: QueueTab = opts.tab || (dueNow.total > 0 ? 'followups' : 'new');
   const shown =
     tab === 'new'
       ? newCalls.filter((l) => !opts.batch || batchKey(l) === opts.batch)
@@ -147,7 +148,8 @@ export async function getMyQueue(
     counts: {
       new: newCalls.length,
       followups: followUps.length,
-      followups_due: followUpsDue,
+      followups_due: dueNow.total,
+      callbacks_due: dueNow.callbacks_due,
       all: light.length,
     },
     total: shown.length,

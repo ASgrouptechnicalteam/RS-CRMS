@@ -1,19 +1,21 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { TokenPayload } from '../utils/jwt';
 import { Roles, Permissions } from '../shared';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import { logger } from '../utils/logger';
 import { toHolidayDateKey, todayKeyIST } from '../utils/time';
-import { moveLeadOwnership } from './lead/transfer';
+import { moveLeadsKeepingStage, LEAD_CHUNK } from './lead/handoverMove';
+import {
+  activeContactedLeads,
+  untouchedLeads,
+  ACTIVE_LEAD_STATUSES,
+} from './lead/masterLeadReturn';
 
 const p = prisma;
 
-/** Leads that are finished: nothing left to hand over. */
-const CLOSED_LEAD_STATUSES = ['BOOKED', 'DROPPED'];
 const OPEN_TASK_STATUSES = ['PENDING', 'IN_PROGRESS', 'OVERDUE', 'BLOCKED'];
 const CLOSED_VISIT_STATUSES = ['COMPLETED', 'CANCELLED'] as any;
-/** Leads moved per transaction, so a big book never holds one long transaction. */
-const LEAD_CHUNK = 50;
 
 export class OffboardError extends Error {
   constructor(
@@ -79,9 +81,13 @@ export async function getHandoverSummary(employeeId: number) {
     bookings,
     directReports,
     targets,
+    contactedByStage,
+    notContacted,
+    dropped,
+    closed,
   ] = await Promise.all([
     p.lead.count({
-      where: { assigned_to_id: employeeId, status: { notIn: CLOSED_LEAD_STATUSES } },
+      where: { assigned_to_id: employeeId, status: { in: ACTIVE_LEAD_STATUSES } },
     }),
     p.task.count({ where: { assignee_id: employeeId, status: { in: OPEN_TASK_STATUSES } } }),
     p.customer.count({ where: { assigned_to_id: employeeId } }),
@@ -128,10 +134,32 @@ export async function getHandoverSummary(employeeId: number) {
       select: { id: true, full_name: true, employee_code: true },
       orderBy: { full_name: 'asc' },
     }),
+    p.lead.groupBy({
+      by: ['status'],
+      where: activeContactedLeads(employeeId),
+      _count: { _all: true },
+    }),
+    p.lead.count({ where: untouchedLeads(employeeId) }),
+    p.lead.count({ where: { assigned_to_id: employeeId, status: 'DROPPED' } }),
+    p.lead.count({
+      where: { assigned_to_id: employeeId, status: { in: ['BOOKED', 'RECOVERED_TO_POOL'] } },
+    }),
   ]);
+  const by_stage: Record<string, number> = {};
+  for (const g of contactedByStage) by_stage[g.status] = g._count._all;
+  const contactedActive = contactedByStage.reduce((n, g) => n + g._count._all, 0);
   return {
     as_of: now,
     moves: { leads, tasks, customers },
+    /** Contacted and active: what a hand-over moves to people. */
+    contacted_active: contactedActive,
+    contacted: contactedActive,
+    by_stage,
+    /** Untouched: they go back to master data. */
+    not_contacted: notContacted,
+    /** Stay with the leaver, never handed over. */
+    dropped,
+    closed,
     manual: {
       pm_visits: pmVisits,
       agent_visits: agentVisits,
@@ -164,6 +192,7 @@ export async function handOverWork(
   targetId: number,
   actor: TokenPayload,
   reason: string,
+  options: { onlyContacted?: boolean } = {},
 ) {
   const leaver = await p.employee.findUnique({
     where: { id: leaverId },
@@ -184,62 +213,39 @@ export async function handOverWork(
   const moved = { leads: 0, call_backs: 0, opportunities: 0, visits: 0, tasks: 0, customers: 0 };
   let leadsLeft = 0;
   let failed = 0;
+  let leadsNotContacted = 0;
+  const where: Prisma.LeadWhereInput = options.onlyContacted
+    ? activeContactedLeads(leaverId)
+    : { assigned_to_id: leaverId, status: { in: ACTIVE_LEAD_STATUSES } };
+  // Untouched leads wait for the return to master data; a person should not get them.
+  if (options.onlyContacted) {
+    leadsNotContacted = await p.lead.count({ where: untouchedLeads(leaverId) });
+  }
 
   // Chunks by id so a lead that fails to move (e.g. a workflow guard) is
   // skipped and counted, never retried forever.
   let afterId = 0;
   for (;;) {
     const chunk = await p.lead.findMany({
-      where: {
-        assigned_to_id: leaverId,
-        status: { notIn: CLOSED_LEAD_STATUSES },
-        id: { gt: afterId },
-      },
+      where: { ...where, id: { gt: afterId } },
       orderBy: { id: 'asc' },
       take: LEAD_CHUNK,
     });
     if (chunk.length === 0) break;
     afterId = chunk[chunk.length - 1].id;
-
-    const movable = chunk.filter((l) => l.company_id === target.company_id);
-    leadsLeft += chunk.length - movable.length;
-    try {
-      await p.$transaction(async (tx) => {
-        for (const lead of movable) {
-          const r = await moveLeadOwnership(tx, lead, target.id, actor, {
-            action: 'LEAD_HANDED_OVER',
-            note,
-            reason,
-          });
-          moved.leads++;
-          moved.call_backs += r.movedCallBacks;
-          moved.opportunities += r.movedOpportunities;
-          moved.visits += r.movedVisits;
-        }
-      });
-    } catch (e) {
-      // The whole chunk rolled back: move those one by one so one bad lead
-      // does not hold back the other 49.
-      logger.error('[handover] chunk failed, moving one by one:', e);
-      for (const lead of movable) {
-        try {
-          const r = await p.$transaction((tx) =>
-            moveLeadOwnership(tx, lead, target.id, actor, {
-              action: 'LEAD_HANDED_OVER',
-              note,
-              reason,
-            }),
-          );
-          moved.leads++;
-          moved.call_backs += r.movedCallBacks;
-          moved.opportunities += r.movedOpportunities;
-          moved.visits += r.movedVisits;
-        } catch (err) {
-          failed++;
-          logger.error(`[handover] lead ${lead.id} not moved:`, err);
-        }
-      }
-    }
+    const t = await moveLeadsKeepingStage(
+      chunk,
+      target,
+      actor,
+      { action: 'LEAD_HANDED_OVER', note, reason },
+      leaverId,
+    );
+    moved.leads += t.leads;
+    moved.call_backs += t.call_backs;
+    moved.opportunities += t.opportunities;
+    moved.visits += t.visits;
+    leadsLeft += t.left;
+    failed += t.failed;
   }
 
   await p.$transaction(async (tx) => {
@@ -267,6 +273,7 @@ export async function handOverWork(
           moved,
           leads_left: leadsLeft,
           leads_failed: failed,
+          leads_not_contacted: leadsNotContacted,
         }),
       },
     });
@@ -287,7 +294,13 @@ export async function handOverWork(
     }).catch((e) => logger.error('[handover] notify failed:', e));
   }
 
-  return { to: target, moved, leads_left: leadsLeft, leads_failed: failed };
+  return {
+    to: target,
+    moved,
+    leads_left: leadsLeft,
+    leads_failed: failed,
+    leads_not_contacted: leadsNotContacted,
+  };
 }
 
 async function notifyManagement(companyId: number, title: string, message: string, link: string) {
@@ -352,7 +365,9 @@ export async function offboardEmployee(employeeId: number, actor: TokenPayload) 
   let handover: Awaited<ReturnType<typeof handOverWork>> | null = null;
   if (emp.handover_to_id) {
     try {
-      handover = await handOverWork(employeeId, emp.handover_to_id, actor, 'resigned');
+      handover = await handOverWork(employeeId, emp.handover_to_id, actor, 'resigned', {
+        onlyContacted: true,
+      });
     } catch (e) {
       if (!(e instanceof OffboardError)) logger.error('[offboard] handover failed:', e);
     }
@@ -377,6 +392,14 @@ export async function offboardEmployee(employeeId: number, actor: TokenPayload) 
       `Some of ${name}'s leads were not handed over`,
       `${handover.leads_left + handover.leads_failed} leads are still with ${name}. Hand them over from their profile.`,
       link,
+    );
+  }
+  if (handover && handover.leads_not_contacted > 0) {
+    await notifyManagement(
+      emp.company_id,
+      `${name}'s uncontacted leads are waiting`,
+      `${handover.leads_not_contacted} leads nobody has contacted are still with ${name}. Return them from Master Data.`,
+      '/master-data',
     );
   }
 

@@ -4,6 +4,7 @@ import { TokenPayload } from '../utils/jwt';
 import { buildProjectScope } from '../authz/dataScope';
 import { ProjectCreateInput, ProjectUpdateInput, Roles, Permissions } from '../shared';
 import { can } from '../authz/authorization';
+import { ProjectPolicy } from '../policies/project.policy';
 import { slugify, generateUniqueSlug } from '../utils/slugify';
 import { fetchWithCache, clearCacheByPrefix } from '../utils/cache';
 import { getStorageService, processImageBuffer, PROJECT_MEDIA_LIMITS } from './storage.service';
@@ -13,7 +14,6 @@ import { WorkflowEngine } from '../workflows/workflowEngine';
 import { WorkflowDomain } from '../workflows/types';
 import { FieldChange, isApproved, projectChanges, recordChanges } from './projectChangeLog';
 import { moveOpenVisitsToNewPm } from './siteVisit/moveToNewPm';
-import { ProjectPolicy } from '../policies/project.policy';
 const p = prisma;
 
 /** Key prefix of ProjectService.listProjects's per-user cache entries. */
@@ -98,7 +98,12 @@ export async function notifyProjectReview(
   const ids = [...new Set(recipients)].filter((id) => id !== actorId);
   if (!ids.length) return 0;
   try {
-    await notifyEmployee(ids, { ...payload, link: `/projects/${project.id}` });
+    await notifyEmployee(ids, {
+      ...payload,
+      link: `/projects/${project.id}`,
+      entity_type: 'PROJECT',
+      entity_id: project.id,
+    });
   } catch (err) {
     logger.error(`[ProjectReview] ${event} notification failed for project ${project.id}:`, err);
   }
@@ -215,11 +220,13 @@ export class ProjectService {
       verification_status?: string;
       unassigned?: boolean;
       dm_executive_id?: number;
+      search?: string;
+      project_type?: string;
     },
     take: number = 50,
     skip: number = 0,
   ) {
-    const whereCondition = await buildProjectScope(user);
+    let whereCondition = await buildProjectScope(user);
 
     if (filters.status) {
       whereCondition.status = filters.status;
@@ -245,6 +252,24 @@ export class ProjectService {
     if (filters.dm_executive_id) {
       whereCondition.digital_marketing_executive_id = filters.dm_executive_id;
     }
+    // Search and type are ANDed in, since the scope above may already use OR.
+    const extra: Prisma.ProjectWhereInput[] = [];
+    const q = filters.search?.trim();
+    if (q) {
+      extra.push({
+        OR: [
+          { name: { contains: q } },
+          { location: { contains: q } },
+          { city: { contains: q } },
+          { project_code: { contains: q } },
+          { developer_name: { contains: q } },
+        ],
+      });
+    }
+    if (filters.project_type) {
+      extra.push({ project_type: filters.project_type as any });
+    }
+    if (extra.length) whereCondition = { AND: [whereCondition, ...extra] };
 
     // `total` (of the full scoped/filtered set, not just this page) lets the
     // frontend know whether it got everything, instead of a truncated
@@ -266,7 +291,29 @@ export class ProjectService {
         }),
         p.project.count({ where: whereCondition }),
       ]);
-      return { projects, total };
+      // One grouped query for every card's unit counts (the list used to make
+      // one request per card).
+      const counts = projects.length
+        ? await p.projectUnit.groupBy({
+            by: ['project_id', 'sales_status'],
+            where: { project_id: { in: projects.map((x) => x.id) } },
+            _count: { _all: true },
+          })
+        : [];
+      const inv = new Map<number, { total: number; by_status: Record<string, number> }>();
+      for (const c of counts) {
+        const row = inv.get(c.project_id) || { total: 0, by_status: {} };
+        row.total += c._count._all;
+        row.by_status[c.sales_status] = c._count._all;
+        inv.set(c.project_id, row);
+      }
+      return {
+        projects: projects.map((x) => ({
+          ...x,
+          inventory: inv.get(x.id) || { total: 0, by_status: {} },
+        })),
+        total,
+      };
     });
   }
 
@@ -431,9 +478,12 @@ export class ProjectService {
       'developer_name',
       'status',
     ];
-    const inReview = ['PENDING_DM_POLISH', 'PENDING_MD_APPROVAL', 'PENDING_VERIFICATION'].includes(
-      project.verification_status,
-    );
+    const inReview = [
+      'PENDING_DM_POLISH',
+      'PENDING_DM_EXEC',
+      'PENDING_MD_APPROVAL',
+      'PENDING_VERIFICATION',
+    ].includes(project.verification_status);
     const canOverrideLock = user.roles.includes(Roles.ADMIN) || user.roles.includes(Roles.MD);
     if (inReview && !canOverrideLock) {
       // The wizard re-sends a whole step on every save, so only a value that
@@ -1055,7 +1105,10 @@ export class ProjectService {
     title?: string,
   ) {
     const project = await this.assertProjectInScope(user, projectId);
-    if (!can(user, Permissions.PROJECTS_UPDATE, project)) {
+    if (
+      !can(user, Permissions.PROJECTS_UPDATE, project) &&
+      !ProjectPolicy.canPolishContent(user, project)
+    ) {
       throw { status: 403, message: 'Forbidden: Missing projects.update permission' };
     }
     const url = await this.storeMediaFile(file, kind);
@@ -1084,7 +1137,10 @@ export class ProjectService {
 
   static async deleteMedia(user: TokenPayload, projectId: number, mediaId: number) {
     const project = await this.assertProjectInScope(user, projectId);
-    if (!can(user, Permissions.PROJECTS_UPDATE, project)) {
+    if (
+      !can(user, Permissions.PROJECTS_UPDATE, project) &&
+      !ProjectPolicy.canPolishContent(user, project)
+    ) {
       throw { status: 403, message: 'Forbidden: Missing projects.update permission' };
     }
     const media = await p.projectMedia.findFirst({ where: { id: mediaId, project_id: projectId } });
@@ -1109,7 +1165,10 @@ export class ProjectService {
     title?: string,
   ) {
     const project = await this.assertProjectInScope(user, projectId);
-    if (!can(user, Permissions.PROJECTS_UPDATE, project)) {
+    if (
+      !can(user, Permissions.PROJECTS_UPDATE, project) &&
+      !ProjectPolicy.canPolishContent(user, project)
+    ) {
       throw { status: 403, message: 'Forbidden: Missing projects.update permission' };
     }
     // Any extension used to be accepted and stored as-is, then served from
@@ -1150,7 +1209,10 @@ export class ProjectService {
 
   static async deleteDocument(user: TokenPayload, projectId: number, documentId: number) {
     const project = await this.assertProjectInScope(user, projectId);
-    if (!can(user, Permissions.PROJECTS_UPDATE, project)) {
+    if (
+      !can(user, Permissions.PROJECTS_UPDATE, project) &&
+      !ProjectPolicy.canPolishContent(user, project)
+    ) {
       throw { status: 403, message: 'Forbidden: Missing projects.update permission' };
     }
     const doc = await p.projectDocument.findFirst({

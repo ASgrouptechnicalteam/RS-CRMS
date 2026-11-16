@@ -145,6 +145,7 @@ export const EmployeeResignationUpdateSchema = z.object({
 export const EmployeeHandoverSchema = z.object({
   to_employee_id: z.number().int().positive(),
   reason: z.string().trim().max(300).optional(),
+  only_contacted: z.boolean().optional(),
 });
 
 export const EmployeePromoteSchema = z

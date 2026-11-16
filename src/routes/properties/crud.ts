@@ -44,16 +44,9 @@ router.get(
           typeof dm_executive_id === 'string' ? parseInt(dm_executive_id, 10) : undefined,
       };
 
-      // DM Executives automatically see only their own assigned-to-polish properties
-      const userRoles: string[] = (req.user as any)?.roles || [];
-      const isDMExecutiveOnly =
-        userRoles.includes('digital marketing executive') &&
-        !userRoles.some((r: string) =>
-          ['Digital Marketing head(manager)', 'Marketing Director', 'md', 'admin'].includes(r),
-        );
-      if (isDMExecutiveOnly && !filters.dm_executive_id) {
-        filters.dm_executive_id = req.user!.employeeId;
-      }
+      // DM Executives see everything the data scope allows (so they can market
+      // all live inventory). Their own polish queue is opt-in via
+      // ?dm_executive_id= — the DM Executive dashboard passes it explicitly.
 
       // Default was 20 with a 100 max and no `total` in the response — the
       // frontend's own list fetch (PropertyManagement.tsx) never passes a

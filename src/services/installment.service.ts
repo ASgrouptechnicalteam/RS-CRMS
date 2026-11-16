@@ -1,13 +1,16 @@
+import { pmMaySee } from '../authz/pmScope';
 import { prisma } from '../lib/prisma';
 import { PrismaClient, Installment } from '@prisma/client';
 import { TokenPayload } from '../utils/jwt';
 import { BookingPolicy } from '../policies/booking.policy';
 
-
 const p = prisma;
 
 export class AppError extends Error {
-  constructor(public statusCode: number, message: string) {
+  constructor(
+    public statusCode: number,
+    message: string,
+  ) {
     super(message);
     this.name = 'AppError';
   }
@@ -20,7 +23,12 @@ export class InstallmentService {
   static async createInstallment(
     user: TokenPayload,
     bookingId: number,
-    dto: { installment_number: number; expected_amount: number; due_date: string; remarks?: string }
+    dto: {
+      installment_number: number;
+      expected_amount: number;
+      due_date: string;
+      remarks?: string;
+    },
   ) {
     // 1. Verify booking exists and user has access
     const booking = await p.booking.findFirst({
@@ -31,7 +39,7 @@ export class InstallmentService {
       throw new AppError(404, 'Booking not found');
     }
 
-    if (!BookingPolicy.canView(user, booking)) {
+    if (!BookingPolicy.canView(user, booking) || !(await pmMaySee(user, 'booking', booking.id))) {
       throw new AppError(403, 'You do not have access to this booking');
     }
 
@@ -86,7 +94,7 @@ export class InstallmentService {
       throw new AppError(404, 'Booking not found');
     }
 
-    if (!BookingPolicy.canView(user, booking)) {
+    if (!BookingPolicy.canView(user, booking) || !(await pmMaySee(user, 'booking', booking.id))) {
       throw new AppError(403, 'You do not have access to this booking');
     }
 
@@ -103,7 +111,7 @@ export class InstallmentService {
     // Lazy OVERDUE mapping
     return installments.map((inst: any) => {
       let mappedStatus = inst.status;
-      
+
       if (inst.status === 'PENDING' && new Date(inst.due_date) < now) {
         mappedStatus = 'OVERDUE';
       }

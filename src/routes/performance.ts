@@ -9,6 +9,9 @@ import { getISTComponents, getISTMonthRange, calculateAttendancePoints } from '.
 import { AttendanceStatusType } from '../shared';
 import { isManagerOf } from '../utils/hierarchy';
 import { overdueInPeriod } from '../services/taskOverdue';
+import { scoreInputs } from '../services/counts/metrics';
+import { aboutDaysIn, parseDateRange } from '../services/counts/period';
+import { buildAchievements } from '../services/achievements';
 
 const router = Router();
 const p = prisma;
@@ -85,144 +88,13 @@ async function computeMonthScore(
   endOfMonth: Date,
   tierBasisScore?: number,
 ) {
-  // The dailyAttendanceRollupJob cron runs at 05:30 AM IST (Midnight UTC) on the morning *after*
-  // the day it evaluates. To correctly group these overnight events into the calendar month they
-  // actually belong to (e.g. August 31st's absence runs on Sept 1st 05:30), we shift the bounds by 6 hours.
-  const cronStart = new Date(startOfMonth.getTime() + 6 * 60 * 60 * 1000);
-  const cronEnd = new Date(endOfMonth.getTime() + 6 * 60 * 60 * 1000);
-
-  // These queries are independent; they ran one after another (24 round
-  // trips per /my-score with last month included -- 10 s on staging). Run
-  // them together.
-  const [
-    taskEvents,
-    reportEvents,
-    belowTargetEvents,
-    targetExceededEvents,
-    overdueTasksCount,
-    uninformedAbsentEvents,
-    midnightAutoCheckoutEvents,
-    missingDailyReportEvents,
-    completedAllWorkEvents,
-    propertyBookingContributions,
-    manualAdjustments,
-    attendanceLogs,
-  ] = await Promise.all([
-    p.task.count({
-      where: {
-        assignee_id: employeeId,
-        status: 'COMPLETED',
-        updated_at: { gte: startOfMonth, lte: endOfMonth },
-        created_by: { not: employeeId },
-      },
-    }),
-    p.dailyReport.count({
-      where: { employee_id: employeeId, submitted_at: { gte: startOfMonth, lte: endOfMonth } },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'DAILY_REPORT_BELOW_TARGET',
-        created_at: { gte: startOfMonth, lte: endOfMonth },
-      },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'DAILY_REPORT_TARGET_EXCEEDED',
-        created_at: { gte: startOfMonth, lte: endOfMonth },
-      },
-    }),
-    p.task.count({
-      where: { assignee_id: employeeId, ...overdueInPeriod(startOfMonth, endOfMonth) },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'UNINFORMED_ABSENT',
-        created_at: { gte: cronStart, lte: cronEnd },
-      },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'ATTENDANCE_AUTO_CHECKOUT_MIDNIGHT',
-        created_at: { gte: cronStart, lte: cronEnd },
-      },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'MISSING_DAILY_REPORT',
-        created_at: { gte: cronStart, lte: cronEnd },
-      },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'COMPLETED_ALL_WORK',
-        created_at: { gte: cronStart, lte: cronEnd },
-      },
-    }),
-    p.auditEvent.count({
-      where: {
-        actor_id: employeeId,
-        action: 'PROPERTY_BOOKED_CONTRIBUTION',
-        created_at: { gte: startOfMonth, lte: endOfMonth },
-      },
-    }),
-    p.performanceAdjustment.findMany({
-      where: {
-        employee_id: employeeId,
-        created_at: { gte: startOfMonth, lte: endOfMonth },
-      },
-    }),
-    p.attendanceLog.findMany({
-      where: { employee_id: employeeId, check_in_at: { gte: startOfMonth, lte: endOfMonth } },
-      include: { employee: { select: { employment_type: true } } },
-    }),
-  ]);
-  const manualAdjustmentsTotal = manualAdjustments.reduce((sum, adj) => sum + adj.points, 0);
-  const manualAdjustmentsCount = manualAdjustments.length;
-
-  let presentCount = 0;
-  let lateCount = 0;
-  let halfDayCount = 0;
-  let attendanceBoost = 0;
-  for (const log of attendanceLogs) {
-    if (log.status === 'PRESENT' || log.status === 'APPROVED_LATE') presentCount++;
-    if (log.status === 'LATE') lateCount++;
-    if (log.status === 'HALF_DAY') halfDayCount++;
-    if (log.status === 'PRESENT') {
-      attendanceBoost += calculateAttendancePoints(
-        log.status as AttendanceStatusType,
-        log.check_in_at,
-        log.employee.employment_type || 'FULL_TIME',
-      );
-    }
-  }
-
-  return calculatePerformanceScore(
-    {
-      completedTasks: taskEvents,
-      overdueTasks: overdueTasksCount,
-      dailyReports: reportEvents,
-      belowTargetEvents,
-      targetExceededEvents,
-      uninformedAbsentEvents,
-      midnightAutoCheckoutEvents,
-      missingDailyReportEvents,
-      completedAllWorkEvents,
-      propertyBookingContributions,
-      presentCount,
-      attendanceBoost,
-      lateCount,
-      halfDayCount,
-      manualAdjustmentsTotal,
-      manualAdjustmentsCount,
-    },
-    tierBasisScore,
-  );
+  // Night-job events (absence, auto check-out, missing report, cleared desk)
+  // count in the month of the day they are about (services/counts/metrics.ts).
+  const inputs = await scoreInputs([employeeId], {
+    start: startOfMonth,
+    end: new Date(endOfMonth.getTime() + 1),
+  });
+  return calculatePerformanceScore(inputs.get(employeeId)!, tierBasisScore);
 }
 
 router.get('/my-score', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
@@ -263,8 +135,8 @@ router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res:
     const year = req.query.year ? Number(req.query.year) : istYear;
     const month = req.query.month ? Number(req.query.month) : istMonth;
     const { startOfMonth, endOfMonth } = getISTMonthRange(year, month);
-    const cronStart = new Date(startOfMonth.getTime() + 6 * 60 * 60 * 1000);
-    const cronEnd = new Date(endOfMonth.getTime() + 6 * 60 * 60 * 1000);
+    // Night-job events belong to the day they are about, not the (often late) run.
+    const aboutThisMonth = aboutDaysIn(startOfMonth, new Date(endOfMonth.getTime() + 1));
     const events: any[] = [];
 
     // The six reads below are independent; they used to run one after
@@ -301,7 +173,7 @@ router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res:
                 'COMPLETED_ALL_WORK',
               ],
             },
-            created_at: { gte: cronStart, lte: cronEnd },
+            ...aboutThisMonth,
           },
           {
             action: {
@@ -551,184 +423,53 @@ router.get('/team', authenticateToken, async (req: AuthenticatedRequest, res: Re
       OR: [{ status: 'ACTIVE' }, { last_working_day: { gte: startOfMonth } }],
     });
 
-    // The dailyAttendanceRollupJob cron runs at 05:30 AM IST (Midnight UTC) on the morning *after*
-    // the day it evaluates. To correctly group these overnight events into the calendar month they
-    // actually belong to (e.g. August 31st's absence runs on Sept 1st 05:30), we shift the bounds by 6 hours.
-    const cronStart = new Date(startOfMonth.getTime() + 6 * 60 * 60 * 1000);
-    const cronEnd = new Date(endOfMonth.getTime() + 6 * 60 * 60 * 1000);
-
     const employees = await p.employee.findMany({
       where: whereClause,
       include: { branch: true, roles: { include: { role: true } } },
       orderBy: { employee_code: 'asc' },
     });
 
-    const teamScores = await Promise.all(
-      employees.map(async (emp: any) => {
-        const [
-          tasksDone,
-          tasksOverdue,
-          reportsDone,
-          belowTargetCount,
-          targetExceededEvents,
-          attendanceLogs,
-          uninformedAbsent,
-          midnightAutoCheckout,
-          missingDailyReport,
-          completedAllWork,
-          propertyBookingContributions,
-        ] = await Promise.all([
-          p.task.count({
-            where: {
-              assignee_id: emp.id,
-              status: 'COMPLETED',
-              updated_at: { gte: startOfMonth, lte: endOfMonth },
-              created_by: { not: emp.id },
-            },
-          }),
-          p.task.count({
-            where: { assignee_id: emp.id, ...overdueInPeriod(startOfMonth, endOfMonth) },
-          }),
-          p.dailyReport.count({
-            where: { employee_id: emp.id, submitted_at: { gte: startOfMonth, lte: endOfMonth } },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'DAILY_REPORT_BELOW_TARGET',
-              created_at: { gte: startOfMonth, lte: endOfMonth },
-            },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'DAILY_REPORT_TARGET_EXCEEDED',
-              created_at: { gte: startOfMonth, lte: endOfMonth },
-            },
-          }),
-          p.attendanceLog.findMany({
-            where: { employee_id: emp.id, check_in_at: { gte: startOfMonth, lte: endOfMonth } },
-            select: { status: true, check_in_at: true },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'UNINFORMED_ABSENT',
-              created_at: { gte: cronStart, lte: cronEnd },
-            },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'ATTENDANCE_AUTO_CHECKOUT_MIDNIGHT',
-              created_at: { gte: cronStart, lte: cronEnd },
-            },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'MISSING_DAILY_REPORT',
-              created_at: { gte: cronStart, lte: cronEnd },
-            },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'COMPLETED_ALL_WORK',
-              created_at: { gte: cronStart, lte: cronEnd },
-            },
-          }),
-          p.auditEvent.count({
-            where: {
-              actor_id: emp.id,
-              action: 'PROPERTY_BOOKED_CONTRIBUTION',
-              created_at: { gte: startOfMonth, lte: endOfMonth },
-            },
-          }),
-        ]);
-
-        let presentCount = 0;
-        let lateCount = 0;
-        let halfDayCount = 0;
-        let attendanceBoost = 0;
-        for (const log of attendanceLogs) {
-          if (log.status === 'PRESENT' || log.status === 'APPROVED_LATE') presentCount++;
-          else if (log.status === 'LATE') lateCount++;
-          else if (log.status === 'HALF_DAY') halfDayCount++;
-          // Only PRESENT feeds the boost — LATE/HALF_DAY stay penalized via
-          // lateCount/halfDayCount below; adding calculateAttendancePoints's
-          // -1.0 for those here too would double-count the penalty.
-          if (log.status === 'PRESENT') {
-            attendanceBoost += calculateAttendancePoints(
-              log.status as AttendanceStatusType,
-              log.check_in_at,
-              emp.employment_type || 'FULL_TIME',
-            );
-          }
-        }
-
-        const manualAdjustments = await p.performanceAdjustment.findMany({
-          where: {
-            employee_id: emp.id,
-            created_at: { gte: startOfMonth, lte: endOfMonth },
-          },
-        });
-        const manualAdjustmentsTotal = manualAdjustments.reduce((sum, adj) => sum + adj.points, 0);
-        const manualAdjustmentsCount = manualAdjustments.length;
-
-        const { score, breakdown } = calculatePerformanceScore({
-          completedTasks: tasksDone,
-          overdueTasks: tasksOverdue,
-          dailyReports: reportsDone,
-          belowTargetEvents: belowTargetCount,
-          targetExceededEvents,
-          uninformedAbsentEvents: uninformedAbsent,
-          midnightAutoCheckoutEvents: midnightAutoCheckout,
-          missingDailyReportEvents: missingDailyReport,
-          completedAllWorkEvents: completedAllWork,
-          propertyBookingContributions,
-          presentCount,
-          attendanceBoost,
-          lateCount,
-          halfDayCount,
-          manualAdjustmentsTotal,
-          manualAdjustmentsCount,
-        });
-
-        return {
-          id: emp.id,
-          employeeCode: emp.employee_code,
-          fullName: emp.full_name || emp.employee_code,
-          branch: emp.branch?.name || '—',
-          roles: emp.roles.map((r: any) => r.role.name),
-          score,
-          breakdown: {
-            tasksDone,
-            tasksOverdue,
-            reportsDone,
-            belowTargetCount,
-            targetExceededEvents,
-            presentCount,
-            lateCount,
-            halfDayCount,
-            uninformedAbsent,
-            midnightAutoCheckoutEvents: midnightAutoCheckout,
-            missingDailyReportEvents: missingDailyReport,
-            propertyBookingContributions,
-            manualAdjustmentsTotal,
-            manualAdjustmentsCount,
-          },
-          zone:
-            score >= 86
-              ? 'EXCELLENT'
-              : score >= 66
-                ? 'SAFE'
-                : score >= 41
-                  ? 'SATISFACTORY'
-                  : 'DANGER',
-        };
-      }),
+    // One grouped query per measure for the whole team (was 11 per person).
+    const inputs = await scoreInputs(
+      employees.map((e) => e.id),
+      { start: startOfMonth, end: new Date(endOfMonth.getTime() + 1) },
     );
+    const teamScores = employees.map((emp: any) => {
+      const i = inputs.get(emp.id)!;
+      const { score } = calculatePerformanceScore(i);
+      return {
+        id: emp.id,
+        employeeCode: emp.employee_code,
+        fullName: emp.full_name || emp.employee_code,
+        branch: emp.branch?.name || '—',
+        roles: emp.roles.map((r: any) => r.role.name),
+        score,
+        breakdown: {
+          tasksDone: i.completedTasks,
+          tasksOverdue: i.overdueTasks,
+          reportsDone: i.dailyReports,
+          belowTargetCount: i.belowTargetEvents,
+          targetExceededEvents: i.targetExceededEvents,
+          presentCount: i.presentCount,
+          lateCount: i.lateCount,
+          halfDayCount: i.halfDayCount,
+          uninformedAbsent: i.uninformedAbsentEvents,
+          midnightAutoCheckoutEvents: i.midnightAutoCheckoutEvents,
+          missingDailyReportEvents: i.missingDailyReportEvents,
+          propertyBookingContributions: i.propertyBookingContributions,
+          manualAdjustmentsTotal: i.manualAdjustmentsTotal,
+          manualAdjustmentsCount: i.manualAdjustmentsCount,
+        },
+        zone:
+          score >= 86
+            ? 'EXCELLENT'
+            : score >= 66
+              ? 'SAFE'
+              : score >= 41
+                ? 'SATISFACTORY'
+                : 'DANGER',
+      };
+    });
 
     teamScores.sort((a, b) => b.score - a.score);
     return res.status(200).json({ team: teamScores, total: teamScores.length });
@@ -744,8 +485,8 @@ router.get(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { telecallerId, startDate, endDate } = req.query;
-      const start = startDate ? new Date(startDate as string) : new Date(new Date().setDate(1)); // Default to start of month
-      const end = endDate ? new Date(endDate as string) : new Date();
+      // IST: the 1st of this month 00:00 by default; a date-only end covers that whole day.
+      const { start, end } = parseDateRange(startDate, endDate);
 
       const tId = telecallerId ? parseInt(telecallerId as string, 10) : undefined;
 
@@ -778,8 +519,7 @@ router.get(
 router.get('/pm-metrics', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { pmId, startDate, endDate } = req.query;
-    const start = startDate ? new Date(startDate as string) : new Date(new Date().setDate(1));
-    const end = endDate ? new Date(endDate as string) : new Date();
+    const { start, end } = parseDateRange(startDate, endDate);
 
     const pId = pmId ? parseInt(pmId as string, 10) : undefined;
 
@@ -800,120 +540,22 @@ router.get('/pm-metrics', authenticateToken, async (req: AuthenticatedRequest, r
   }
 });
 
-// --- Achievements Endpoint ---
+// --- Achievements: a monthly scoreboard by role group (services/achievements.ts) ---
+// ?period=this_week|this_month|last_month|this_quarter|all (default this_month).
+// ?employeeId=<id> returns that one person's row, if the viewer may see them.
 router.get('/achievements', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const isMDOrAdmin =
-      req.user!.roles.includes(Roles.MD) ||
-      req.user!.roles.includes(Roles.ADMIN) ||
-      req.user!.roles.includes(Roles.MARKETING_DIRECTOR);
-
-    const targetEmployeeId =
-      isMDOrAdmin && req.query.employeeId && req.query.employeeId !== 'ALL'
-        ? Number(req.query.employeeId)
-        : req.query.employeeId === 'ALL'
-          ? 'ALL'
-          : req.user!.employeeId;
-
-    const getStatsForEmployee = async (empId: number) => {
-      // 1. Leads Sourced
-      const leadsSourced = await p.lead.count({ where: { created_by_id: empId } });
-
-      // 2. Site Visits Scheduled (Telecaller)
-      const siteVisitsScheduled = await p.siteVisitBooking.count({
-        where: { telecaller_id: empId },
-      });
-
-      // 3. Site Visits Executed (PM)
-      const siteVisitsExecuted = await p.siteVisitBooking.count({
-        where: { project_manager_id: empId, status: 'COMPLETED' },
-      });
-
-      // 4. Deals Closed (Booking Assigned Employee)
-      const dealsClosed = await p.booking.count({
-        where: { assigned_employee_id: empId, status: { not: 'CANCELLED' } },
-      });
-
-      // 5. Assisted Conversions
-      const assistedBookings = await p.booking.findMany({
-        where: {
-          assigned_employee_id: { not: empId },
-          status: { not: 'CANCELLED' },
-          customer: {
-            origin_lead: {
-              OR: [
-                { created_by_id: empId },
-                { assigned_to_id: empId },
-                {
-                  site_visits: {
-                    some: {
-                      OR: [
-                        { telecaller_id: empId },
-                        { project_manager_id: empId },
-                        { assigned_agent_id: empId },
-                      ],
-                    },
-                  },
-                },
-              ],
-            },
-          },
-        },
-        select: { id: true },
-      });
-      const assistedConversions = assistedBookings.length;
-
-      return {
-        employeeId: empId,
-        leadsSourced,
-        siteVisitsScheduled,
-        siteVisitsExecuted,
-        dealsClosed,
-        assistedConversions,
-      };
-    };
-
-    if (targetEmployeeId === 'ALL') {
-      if (!isMDOrAdmin) return res.status(403).json({ error: 'Forbidden' });
-
-      const allEmployees = await p.employee.findMany({
-        where: {
-          status: 'ACTIVE',
-          roles: {
-            none: { role: { name: Roles.ADMIN } },
-          },
-        },
-        select: {
-          id: true,
-          full_name: true,
-          employee_code: true,
-          roles: true,
-          profile_image_url: true,
-        },
-      });
-
-      const leaderboard = await Promise.all(
-        allEmployees.map(async (emp) => {
-          const stats = await getStatsForEmployee(emp.id);
-          return {
-            ...emp,
-            ...stats,
-          };
-        }),
-      );
-
-      leaderboard.sort(
-        (a, b) =>
-          b.dealsClosed - a.dealsClosed ||
-          b.assistedConversions - a.assistedConversions ||
-          b.siteVisitsExecuted - a.siteVisitsExecuted,
-      );
-
-      return res.status(200).json({ leaderboard });
-    } else {
-      const stats = await getStatsForEmployee(targetEmployeeId as number);
-      return res.status(200).json(stats);
+    const board = await buildAchievements(
+      req.user!,
+      typeof req.query.period === 'string' ? req.query.period : undefined,
+    );
+    const one = req.query.employeeId;
+    if (one && one !== 'ALL') {
+      const row = board.leaderboard.find((r) => r.id === Number(one));
+      if (!row) return res.status(404).json({ error: 'Employee not found' });
+      return res.status(200).json({ ...row, employeeId: row.id, period: board.period });
     }
+    return res.status(200).json(board);
   } catch (error) {
     logger.error('Achievements fetch error:', error);
     return res.status(500).json({ error: 'Failed to fetch achievements' });

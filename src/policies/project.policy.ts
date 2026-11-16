@@ -14,6 +14,20 @@ import { Roles, Permissions } from '../shared';
  * PROJECT_MANAGER: Only projects explicitly assigned to them (assigned_pm_id = user.employeeId).
  * TELECALLER / AGENT: Read-only on launched projects (no write rights).
  */
+/**
+ * Project.verification_status values before the MD approves (VERIFIED). A
+ * Digital Marketing Executive may edit a project they created or are assigned
+ * only while it is in one of these (item 3, 2026-11-15). Unknown => locked.
+ */
+export const DM_EXECUTIVE_EDITABLE_PROJECT = [
+  'DRAFT',
+  'PENDING_VERIFICATION',
+  'PENDING_DM_EXEC',
+  'PENDING_DM_POLISH',
+  'PENDING_MD_APPROVAL',
+  'REJECTED',
+];
+
 export class ProjectPolicy {
   /**
    * A Project Manager "owns" a record when it is assigned to them, or when
@@ -95,6 +109,23 @@ export class ProjectPolicy {
   }
 
   /**
+   * The Marketing Executive a project is currently with may add its marketing
+   * content (photos, brochure, documents, SEO, description) — and nothing else.
+   * Only while it is in their step (PENDING_DM_EXEC) and assigned to them.
+   */
+  static canPolishContent(
+    user: TokenPayload,
+    project: { verification_status: string; digital_marketing_executive_id: number | null },
+  ): boolean {
+    return (
+      (user.permissions || []).includes(Permissions.PROJECTS_DM_POLISH) &&
+      user.roles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE) &&
+      project.verification_status === 'PENDING_DM_EXEC' &&
+      project.digital_marketing_executive_id === user.employeeId
+    );
+  }
+
+  /**
    * Determines whether a user may update a specific Project.
    * - Management: may update any project in their company.
    * - Project Manager: may ONLY update projects explicitly assigned to them.
@@ -102,7 +133,14 @@ export class ProjectPolicy {
    */
   static canUpdate(
     user: TokenPayload,
-    project: { company_id: number; assigned_pm_id: number | null },
+    project: {
+      company_id: number;
+      assigned_pm_id: number | null;
+      // For the Digital Marketing Executive rule below. Left out => locked.
+      verification_status?: string | null;
+      created_by_id?: number | null;
+      digital_marketing_executive_id?: number | null;
+    },
   ): boolean {
     if (!(user.permissions || []).includes(Permissions.PROJECTS_UPDATE)) {
       return false;
@@ -124,6 +162,17 @@ export class ProjectPolicy {
 
     if (user.roles.includes(Roles.PROJECT_MANAGER)) {
       return this.isOwningPm(user, project);
+    }
+
+    // Digital Marketing Executive: a project they added themselves, until the
+    // MD approves it (item 3, 2026-11-15). Being assigned a project's
+    // marketing step allows its marketing content only (canPolishContent),
+    // never its core details or units (owner, 11 Nov). The Head is management.
+    if (user.roles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE)) {
+      return (
+        project.created_by_id === user.employeeId &&
+        DM_EXECUTIVE_EDITABLE_PROJECT.includes(project.verification_status ?? '')
+      );
     }
 
     return false;

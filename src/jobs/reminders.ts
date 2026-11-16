@@ -4,6 +4,9 @@ import { notifyEmployee } from '../utils/notifyEmployee';
 import { getISTComponents } from '../utils/time';
 import { dayInfoMany } from '../services/workCalendar';
 import { Roles } from '../shared';
+import { leadsPastEscalation, refreshPipelines } from '../services/associate.service';
+
+import { ATTENTION_OVERDUE_DAYS } from '../services/projectAttention.service';
 
 // Reminders for the working day. One sweep runs every 10 minutes; each
 // reminder has a time window and goes to each person at most once a day (a
@@ -125,7 +128,7 @@ export async function remindCheckIn(d: Day) {
       id: s.id,
       title: 'You have not checked in yet',
       message:
-        'Scan the QR at the office (or check in from the app if you are on field work or working from home). Check-ins after 10:30 are marked late.',
+        'Scan the QR at the office (or check in from the app if you are working from home). Approved field work marks your attendance by itself. Check-ins after 10:30 are marked late.',
       link: '/my-attendance',
     })),
   );
@@ -357,12 +360,134 @@ export async function remindFinanceQueue(d: Day) {
   return sendOnce('REMINDER_FINANCE_QUEUE', d, targets);
 }
 
+// ---- 8. Associates' leads silent past the limit: tell the CPM's manager ----
+// One digest a day per manager (the notification is the marker). An
+// unassigned associate, or a CPM with no active manager, goes to the MD.
+export async function remindAssociateLeadsStale(d: Day) {
+  const stale = await leadsPastEscalation(d.now);
+  if (stale.length === 0) return 0;
+  const ownerIds = [
+    ...new Set(stale.map((s) => s.associate.owner_cpm_id).filter((x): x is number => !!x)),
+  ];
+  const owners = await p.employee.findMany({
+    where: { id: { in: ownerIds } },
+    select: { id: true, full_name: true, reporting_manager_id: true },
+  });
+  const managerIds = owners.map((o) => o.reporting_manager_id).filter((x): x is number => !!x);
+  const activeManagers = new Set(
+    (
+      await p.employee.findMany({
+        where: { id: { in: managerIds }, status: 'ACTIVE' },
+        select: { id: true },
+      })
+    ).map((m) => m.id),
+  );
+  const ownerOf = new Map(owners.map((o) => [o.id, o]));
+  const mds = await holdersByCompany(Roles.MD, false);
+  const by = new Map<number, string[]>();
+  for (const s of stale) {
+    const owner = s.associate.owner_cpm_id ? ownerOf.get(s.associate.owner_cpm_id) : undefined;
+    const to =
+      owner?.reporting_manager_id && activeManagers.has(owner.reporting_manager_id)
+        ? [owner.reporting_manager_id]
+        : mds.get(s.associate.company_id) || [];
+    const who = s.associate.associate_code
+      ? `${s.associate.full_name} (${s.associate.associate_code})`
+      : s.associate.full_name;
+    const line = `${s.lead.lead_code} of ${who}, ${s.days} days${owner ? `, CPM ${owner.full_name}` : ', no CPM'}`;
+    for (const id of to) by.set(id, [...(by.get(id) || []), line]);
+  }
+  return sendOnce(
+    'ASSOCIATE_LEAD_STALE',
+    d,
+    [...by.entries()].map(([id, lines]) => ({
+      id,
+      title: `${lines.length} associate lead${lines.length === 1 ? '' : 's'} with no update`,
+      message:
+        lines.slice(0, 3).join('; ') + (lines.length > 3 ? ` and ${lines.length - 3} more` : ''),
+      link: '/associates',
+    })),
+  );
+}
+
+// ---- 9. Associates: ACTIVE / DORMANT from their leads (no message) ----
+export async function refreshAssociatePipelines(d: Day) {
+  await refreshPipelines(d.now);
+  return 0;
+}
+
+// ---- 10. Projects waiting on a person for 3+ days (once a day, until done) ----
+export async function remindProjectReviews(d: Day) {
+  const cutoff = new Date(d.now.getTime() - ATTENTION_OVERDUE_DAYS * DAY_MS);
+  const [stale, dmHeads, mds] = await Promise.all([
+    p.project.findMany({
+      where: {
+        status: { not: 'CANCELLED' },
+        updated_at: { lte: cutoff },
+        OR: [
+          {
+            verification_status: {
+              in: ['PENDING_DM_POLISH', 'PENDING_DM_EXEC', 'PENDING_MD_APPROVAL'],
+            },
+          },
+          { verification_status: 'REJECTED' },
+        ],
+      },
+      select: {
+        company_id: true,
+        verification_status: true,
+        assigned_pm_id: true,
+        created_by_id: true,
+        digital_marketing_executive_id: true,
+      },
+    }),
+    holdersByCompany(Roles.DIGITAL_MARKETING_HEAD, true),
+    holdersByCompany(Roles.MD, false),
+  ]);
+  const wait = new Map<number, { review: number; polish: number; mdStage: number; fix: number }>();
+  const bump = (id: number, k: 'review' | 'polish' | 'mdStage' | 'fix') => {
+    const row = wait.get(id) || { review: 0, polish: 0, mdStage: 0, fix: 0 };
+    row[k]++;
+    wait.set(id, row);
+  };
+  for (const pr of stale) {
+    if (pr.verification_status === 'PENDING_DM_POLISH')
+      (dmHeads.get(pr.company_id) || []).forEach((id) => bump(id, 'review'));
+    else if (pr.verification_status === 'PENDING_DM_EXEC') {
+      if (pr.digital_marketing_executive_id) bump(pr.digital_marketing_executive_id, 'polish');
+    } else if (pr.verification_status === 'PENDING_MD_APPROVAL')
+      (mds.get(pr.company_id) || []).forEach((id) => bump(id, 'mdStage'));
+    else
+      new Set([pr.assigned_pm_id, pr.created_by_id].filter((x): x is number => x != null)).forEach(
+        (id) => bump(id, 'fix'),
+      );
+  }
+  const targets = [...wait].map(([id, w]) => {
+    const parts = [
+      w.review ? `${w.review} waiting for Marketing review` : '',
+      w.polish ? `${w.polish} waiting for your marketing content` : '',
+      w.mdStage ? `${w.mdStage} waiting for your approval` : '',
+      w.fix ? `${w.fix} rejected and waiting for your fix` : '',
+    ].filter(Boolean);
+    return {
+      id,
+      title: 'Projects waiting on you',
+      message: `${parts.join(', ')} for ${ATTENTION_OVERDUE_DAYS}+ days.`,
+      link: '/projects?attention=1',
+    };
+  });
+  return sendOnce('REMINDER_PROJECT_REVIEWS', d, targets);
+}
+
 export const REMINDERS: Reminder[] = [
+  { type: 'REMINDER_PROJECT_REVIEWS', from: '10:30', until: '17:00', run: remindProjectReviews },
   { type: 'REMINDER_VISITS_TODAY', from: '08:30', until: '12:00', run: remindVisitsToday },
   { type: 'REMINDER_TASKS_TODAY', from: '09:30', until: '13:00', run: remindTasksDue },
   { type: 'REMINDER_CHECK_IN', from: '10:00', until: '11:30', run: remindCheckIn },
   { type: 'REMINDER_HR_QUEUE', from: '10:30', until: '17:00', run: remindHrQueue },
   { type: 'REMINDER_FINANCE_QUEUE', from: '11:00', until: '17:00', run: remindFinanceQueue },
+  { type: 'ASSOCIATE_PIPELINE', from: '09:00', until: '11:00', run: refreshAssociatePipelines },
+  { type: 'ASSOCIATE_LEAD_STALE', from: '10:30', until: '17:00', run: remindAssociateLeadsStale },
   { type: 'REMINDER_DAILY_REPORT', from: '17:30', until: '23:30', run: remindDailyReport },
   { type: 'REMINDER_CHECK_OUT', from: '18:45', until: '22:30', run: remindCheckOut },
 ];

@@ -4,7 +4,7 @@
 // centralized lifecycle transition map, company isolation on every query.
 import { prisma } from '../lib/prisma';
 import { TokenPayload } from '../utils/jwt';
-import { AppError } from './lead.service';
+import { AppError } from './lead/errors';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import crypto from 'crypto';
 

@@ -27,6 +27,10 @@ export const Roles = {
   DIGITAL_MARKETING_EXECUTIVE: 'digital marketing executive',
   SALES_MANAGER: 'Sales manager',
   CHANNEL_PARTNER_MANAGER: 'Channel partner manager',
+  // External channel partner (item 5, 2026-11-15): an employee row so visits,
+  // drafts and kiosk badges can point at them, but no staff permissions and
+  // their own sign-in (routes/cp.ts). Presence-only at the kiosk.
+  CHANNEL_PARTNER_EXTERNAL: 'Channel partner (external)',
   STAFF: 'Staff',
   INVENTORY_EXECUTIVE: 'Inventory Executive',
   DATA_ENTRY_OPERATOR: 'Data Entry Operator',
@@ -65,6 +69,7 @@ export const DepartmentCodes: Record<string, string> = {
   [Roles.MARKETING_DIRECTOR]: 'MK',
   [Roles.SALES_MANAGER]: 'SL',
   [Roles.CHANNEL_PARTNER_MANAGER]: 'CP',
+  [Roles.CHANNEL_PARTNER_EXTERNAL]: 'CP',
   [Roles.STAFF]: 'ST',
   [Roles.INVENTORY_EXECUTIVE]: 'OP',
   [Roles.DATA_ENTRY_OPERATOR]: 'OP',
@@ -191,6 +196,19 @@ export const Permissions = {
   COMPLAINTS_ASSIGN: 'complaints.assign',
   COMPLAINTS_RESOLVE: 'complaints.resolve',
   COMPLAINTS_CLOSE: 'complaints.close',
+
+  // DraftSubmission module: rough property/project drafts handed to the digital team.
+  DRAFTS_SUBMIT: 'drafts.submit', // submit a draft; sees only own drafts
+  DRAFTS_REVIEW: 'drafts.review', // digital team: pick up, ask for info, link the real record
+  // Petty cash and the monthly budget (item 4, 2026-11-15). Routes also check
+  // the role: only the accountant manages and submits, only the MD approves.
+  PETTY_CASH_MANAGE: 'petty_cash.manage',
+  PETTY_CASH_READ: 'petty_cash.read',
+  BUDGETS_SUBMIT: 'budgets.submit',
+  BUDGETS_APPROVE: 'budgets.approve',
+  // Asset management (2026-11-16): HR manages, the accountant views and exports.
+  ASSETS_MANAGE: 'assets.manage',
+  ASSETS_READ: 'assets.read',
 } as const;
 
 export type Permission = (typeof Permissions)[keyof typeof Permissions];
@@ -210,6 +228,8 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
   [Roles.TECHNICAL_MANAGER]: ALL_PERMISSIONS, // same access as Admin
 
   [Roles.HR_MANAGER]: [
+    Permissions.ASSETS_MANAGE,
+    Permissions.ASSETS_READ,
     Permissions.LEADS_TELECALLER_REPORT,
     Permissions.PROJECTS_READ,
     Permissions.PROPERTIES_READ,
@@ -246,6 +266,10 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
   ],
 
   [Roles.FINANCE]: [
+    Permissions.ASSETS_READ,
+    Permissions.PETTY_CASH_MANAGE,
+    Permissions.PETTY_CASH_READ,
+    Permissions.BUDGETS_SUBMIT,
     // D10: every role works its own leads (data scope keeps them to their own/team).
     Permissions.LEADS_CREATE,
     Permissions.LEADS_UPDATE,
@@ -317,6 +341,8 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
   ],
 
   [Roles.PROJECT_MANAGER]: [
+    // Hands rough drafts to the digital team (DraftSubmission module).
+    Permissions.DRAFTS_SUBMIT,
     // D10: every role works its own leads (data scope keeps them to their own/team).
     Permissions.LEADS_CREATE,
     Permissions.LEADS_UPDATE,
@@ -448,7 +474,17 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
   ],
 
   [Roles.DIGITAL_MARKETING_HEAD]: [
+    // Reviews drafts and builds the real record from them (DraftSubmission;
+    // create/update come from item 3 above).
+    Permissions.DRAFTS_REVIEW,
     Permissions.PROJECTS_READ,
+    // Item 3 (2026-11-15): the digital team adds projects and properties.
+    // Edits follow ProjectPolicy / PropertyPolicy.canUpdate (an Executive only
+    // until the MD approves; the Head stays unlocked, audited).
+    Permissions.PROJECTS_CREATE,
+    Permissions.PROJECTS_UPDATE,
+    Permissions.PROPERTIES_CREATE,
+    Permissions.PROPERTIES_UPDATE,
     Permissions.PROJECTS_DM_POLISH,
     Permissions.PROPERTIES_DM_POLISH,
     Permissions.PROPERTIES_READ,
@@ -497,9 +533,19 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
   ],
 
   [Roles.DIGITAL_MARKETING_EXECUTIVE]: [
+    // Reviews drafts and builds the real record from them (DraftSubmission;
+    // create/update come from item 3 above).
+    Permissions.DRAFTS_REVIEW,
     // D10: every role works its own leads (data scope keeps them to their own/team).
     Permissions.LEADS_CREATE,
     Permissions.PROJECTS_READ,
+    // Item 3 (2026-11-15): the digital team adds projects and properties.
+    // Edits follow ProjectPolicy / PropertyPolicy.canUpdate (an Executive only
+    // until the MD approves; the Head stays unlocked, audited).
+    Permissions.PROJECTS_CREATE,
+    Permissions.PROJECTS_UPDATE,
+    Permissions.PROPERTIES_CREATE,
+    Permissions.PROPERTIES_UPDATE,
     Permissions.LEADS_READ,
     Permissions.LEADS_UPDATE,
     // PROPERTIES_READ is required alongside PROPERTIES_DM_POLISH -- GET
@@ -555,6 +601,10 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
     Permissions.EMPLOYEES_READ,
     Permissions.COMPLAINTS_CREATE,
   ],
+
+  // No staff permissions: every requireAuthz route refuses them, and their
+  // token cannot pass authenticateToken at all (utils/cpJwt.ts).
+  [Roles.CHANNEL_PARTNER_EXTERNAL]: [],
 
   [Roles.CHANNEL_PARTNER_MANAGER]: [
     Permissions.LEADS_CREATE,

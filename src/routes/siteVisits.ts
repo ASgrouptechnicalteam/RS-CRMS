@@ -6,6 +6,8 @@ import multer from 'multer';
 import { Permissions } from '../shared';
 import { can } from '../authz/authorization';
 import { SiteVisitPolicy } from '../policies/siteVisit.policy';
+import { buildSiteVisitScope, getAccessibleCompanyIds } from '../authz/dataScope';
+import { Roles } from '../shared';
 import { processImageBuffer, getStorageService } from '../services/storage.service';
 import {
   SiteVisitCreateSchema,
@@ -22,6 +24,7 @@ import {
 import { validateRequestBody } from '../middleware/validate';
 import { SiteVisitService } from '../services/siteVisit.service';
 import { LeadService } from '../services/lead.service';
+import { getVisitBrief, recordBriefOpened } from '../services/siteVisit/brief';
 import { prisma } from '../lib/prisma';
 
 const router = Router();
@@ -49,6 +52,59 @@ router.get(
   },
 );
 
+// GET /api/v1/site-visits/route-targets - who a PM can pass a visit to (names only).
+// /employees shows a PM just their own reports, which left the Route list empty.
+router.get(
+  '/route-targets',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT]),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const people = await prisma.employee.findMany({
+        where: {
+          company_id: { in: await getAccessibleCompanyIds(req.user!) },
+          status: 'ACTIVE',
+          id: { not: req.user!.employeeId },
+          roles: {
+            some: {
+              role: {
+                name: {
+                  // ?for=run: who can run a visit, external channel partners
+                  // included (item 5); otherwise who a visit can be routed to.
+                  in: [
+                    Roles.PROJECT_MANAGER,
+                    Roles.SALES_MANAGER,
+                    Roles.AGENT,
+                    ...(req.query.for === 'run' ? [Roles.CHANNEL_PARTNER_EXTERNAL] : []),
+                  ],
+                },
+              },
+            },
+          },
+        },
+        select: {
+          id: true,
+          full_name: true,
+          employee_code: true,
+          roles: { select: { role: { select: { name: true } } } },
+        },
+        orderBy: { full_name: 'asc' },
+      });
+      return res.status(200).json({
+        employees: people.map((e) => ({
+          id: e.id,
+          full_name: e.full_name,
+          employee_code: e.employee_code,
+          roles: e.roles.map((r) => r.role.name),
+        })),
+      });
+    } catch (error: any) {
+      logger.error('Fetch route targets error:', error);
+      next(error);
+    }
+  },
+);
+
 // GET /api/v1/site-visits/:id/history - Get reassignment/routing history
 router.get(
   '/:id/history',
@@ -60,11 +116,10 @@ router.get(
       if (isNaN(visitId))
         return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
 
-      // First check if user can access the visit
-      const filters = { leadId: '' }; // Just to pass valid type
-      // Check access implicitly by fetching from db directly but constrained to company
+      // Only people who can see the visit can read its history.
       const visit = await prisma.siteVisitBooking.findFirst({
-        where: { id: visitId, lead: { company_id: req.user!.companyId } },
+        where: { id: visitId, ...(await buildSiteVisitScope(req.user!)) },
+        select: { id: true },
       });
       if (!visit) throw { status: 404, message: 'Site visit not found' };
 
@@ -77,9 +132,38 @@ router.get(
         orderBy: { created_at: 'asc' },
       });
 
+      // Same masking as the list: the reason behind a hop is for executives only.
+      if (!SiteVisitPolicy.canViewReassignmentReason(req.user!)) {
+        for (const h of history) delete (h as any).reason;
+      }
       return res.status(200).json({ history });
     } catch (error: any) {
       logger.error('Fetch site visit history error:', error);
+      next(error);
+    }
+  },
+);
+
+// GET /api/v1/site-visits/:id/brief - what the PM or agent reads before the visit.
+// Same visibility as the visit list. Opening it is recorded but never required.
+router.get(
+  '/:id/brief',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_READ]),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      const brief = await getVisitBrief(req.user!, visitId);
+      if (!brief.customer_hidden) {
+        await recordBriefOpened(req.user!, visitId).catch((err) =>
+          logger.error('Visit brief open not recorded:', err),
+        );
+      }
+      return res.status(200).json({ brief });
+    } catch (error: any) {
+      logger.error('Visit brief error:', error);
       next(error);
     }
   },
@@ -307,7 +391,7 @@ router.get(
       const visitId = parseInt(req.params.id, 10);
       if (isNaN(visitId)) return res.status(400).json({ error: 'Invalid ID format' });
       const visit = await prisma.siteVisitBooking.findFirst({
-        where: { id: visitId, ...SiteVisitPolicy.canList(req.user!) },
+        where: { id: visitId, ...(await buildSiteVisitScope(req.user!)) },
         select: { proof_photo_url: true },
       });
       if (!visit || !visit.proof_photo_url || !visit.proof_photo_url.includes(PROOF_PREFIX)) {

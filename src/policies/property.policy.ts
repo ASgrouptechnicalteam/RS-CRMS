@@ -2,6 +2,19 @@ import { TokenPayload } from '../utils/jwt';
 import { Roles, Permissions } from '../shared';
 import { Property } from '@prisma/client';
 
+/**
+ * Property.status values before the MD approves (LIVE). A Digital Marketing
+ * Executive may change a property they created or are assigned only while it
+ * is in one of these (item 3, 2026-11-15). Unknown => locked.
+ */
+export const DM_EXECUTIVE_EDITABLE_PROPERTY = [
+  'DRAFT',
+  'PENDING_VERIFICATION',
+  'PENDING_DM_POLISH',
+  'PENDING_MD_APPROVAL',
+  'REJECTED',
+];
+
 export class PropertyPolicy {
   /**
    * A Project Manager "owns" a record when it is assigned to them, or when
@@ -67,7 +80,52 @@ export class PropertyPolicy {
     if (user.roles.includes(Roles.PROJECT_MANAGER)) {
       return this.isOwningPm(user, property);
     }
+    // Digital Marketing Executive: a property they added themselves, until the
+    // MD approves it. An assigned polish step is DM_POLISH work, not edits.
+    if (user.roles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE)) {
+      return (
+        property.created_by_id === user.employeeId &&
+        DM_EXECUTIVE_EDITABLE_PROPERTY.includes(property.status)
+      );
+    }
     return false;
+  }
+
+  /**
+   * Digital Marketing Executive: a property they created or are assigned for
+   * polish, until the MD approves it (LIVE and after are locked). Used for
+   * approving / rejecting its images (item 3, 2026-11-15).
+   */
+  static executiveMayTouch(
+    user: TokenPayload,
+    property: Pick<Property, 'status' | 'created_by_id' | 'digital_marketing_executive_id'>,
+  ): boolean {
+    const mine =
+      property.created_by_id === user.employeeId ||
+      property.digital_marketing_executive_id === user.employeeId;
+    return mine && DM_EXECUTIVE_EDITABLE_PROPERTY.includes(property.status);
+  }
+
+  /**
+   * Approving / rejecting a property image (needs PROPERTIES_DM_POLISH). Was
+   * open to any holder on any property, LIVE included: an Executive could
+   * change the photos of an approved listing. Management (Head included,
+   * owner decision 7) stays unlocked; an Executive follows executiveMayTouch.
+   */
+  static canReviewImage(
+    user: TokenPayload,
+    property: Pick<
+      Property,
+      'company_id' | 'status' | 'created_by_id' | 'digital_marketing_executive_id'
+    >,
+  ): boolean {
+    if (!(user.permissions || []).includes(Permissions.PROPERTIES_DM_POLISH)) return false;
+    if (!user.roles.includes(Roles.ADMIN) && property.company_id !== user.companyId) return false;
+    if (user.roles.includes(Roles.ADMIN) || this.isManagement(user)) return true;
+    if (user.roles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE)) {
+      return this.executiveMayTouch(user, property);
+    }
+    return true;
   }
 
   /**

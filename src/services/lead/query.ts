@@ -28,7 +28,7 @@ export async function getUnclaimedLeads(user: TokenPayload) {
       created_by: { select: { id: true, employee_code: true, full_name: true } },
       preferred_locations: { orderBy: { sort_order: 'asc' } },
     },
-    orderBy: { created_at: 'asc' },
+    orderBy: { created_at: 'desc' }, // latest first (owner, 2026-11-14)
   });
 }
 
@@ -44,6 +44,8 @@ export interface LeadListFilters {
   unassigned?: boolean;
   /** Only leads created at or after this instant. */
   created_from?: Date;
+  /** Only leads created before this instant. */
+  created_to?: Date;
 }
 
 /**
@@ -64,6 +66,7 @@ async function buildFilteredLeadWhere(user: TokenPayload, filters: LeadListFilte
   if (filters.created_by_id) extra.push({ created_by_id: filters.created_by_id });
   if (filters.unassigned) extra.push({ assigned_to_id: null });
   if (filters.created_from) extra.push({ created_at: { gte: filters.created_from } });
+  if (filters.created_to) extra.push({ created_at: { lt: filters.created_to } });
   const q = filters.q?.trim();
   if (q) {
     extra.push({

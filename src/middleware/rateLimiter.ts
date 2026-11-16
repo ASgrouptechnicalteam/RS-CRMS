@@ -197,3 +197,17 @@ export const aiSearchLimiter = rateLimit({
     code: 'RATE_LIMIT_EXCEEDED',
   },
 });
+
+// "Send me a test notification": a few per minute per person.
+export const pushTestLimiter = rateLimit({
+  keyGenerator: (req: any) => `push-test-${req.user?.employeeId ?? clientIp(req)}`,
+  windowMs: 60 * 1000,
+  skip: skipRateLimitInTests,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many test notifications, please try again after a minute',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+});

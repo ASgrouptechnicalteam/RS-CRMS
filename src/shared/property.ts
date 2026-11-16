@@ -354,7 +354,7 @@ export const PropertyBrand = {
   RADHA_REAL_HOMES: 'RADHA_REAL_HOMES', // Commercial Plots & Land
 } as const;
 
-const BasePropertyCreateSchema = z.object({
+export const BasePropertyCreateSchema = z.object({
   status: z.string().optional(),
   title: z.string().min(3, 'Title is required'),
   description: z.string().optional().nullable(),
@@ -379,12 +379,15 @@ const BasePropertyCreateSchema = z.object({
   ]),
   area_sqft: z.number().positive('Area in sqft is required'),
   location: z.string().min(2, 'Location is required'),
-  address: z.string().optional(),
+  // .nullable() on the optional text fields: the form sends null when a user
+  // clears a select (e.g. Facing back to "Not specified"); plain .optional()
+  // 400'd with "Expected string, received null" on create.
+  address: z.string().optional().nullable(),
   bedrooms: z.number().int().optional().nullable(),
   bathrooms: z.number().int().optional().nullable(),
-  facing: z.string().optional(),
-  amenities: z.string().optional(),
-  possession_status: z.enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION']).optional(),
+  facing: z.string().optional().nullable(),
+  amenities: z.string().optional().nullable(),
+  possession_status: z.enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION']).optional().nullable(),
   assigned_pm_id: z.number().int().optional().nullable(),
   // Was missing entirely — validateRequestBody's schema.parse() strips any key not
   // listed here, so a property could never actually be linked to a project via this
@@ -399,7 +402,7 @@ const BasePropertyCreateSchema = z.object({
   pincode: z.string().optional().nullable(),
   latitude: z.number().optional().nullable(),
   longitude: z.number().optional().nullable(),
-  listing_type: z.enum(['NEW', 'RESALE']).optional(),
+  listing_type: z.enum(['NEW', 'RESALE']).optional().nullable(),
   source: z.enum(['INTERNAL', 'WEBSITE_SELLER']).optional(),
   ...PropertyPricingFields,
   ...CategoryDetailFields,
@@ -420,7 +423,12 @@ export const PropertyCreateSchema = BasePropertyCreateSchema.superRefine((data, 
 export type PropertyCreateInput = z.infer<typeof PropertyCreateSchema>;
 
 // A fully relaxed version of PropertyCreateSchema for saving incomplete drafts
-export const PropertyDraftSchema = BasePropertyCreateSchema.partial();
+// Area may be 0 and location blank while a draft is still being filled in.
+export const PropertyDraftSchema = BasePropertyCreateSchema.partial().extend({
+  title: z.string().min(1, 'Title is required even for a draft').optional(),
+  area_sqft: z.number().nonnegative().optional(),
+  location: z.string().optional(),
+});
 export type PropertyDraftInput = z.infer<typeof PropertyDraftSchema>;
 
 export const PropertyVerificationSchema = z.object({
@@ -476,7 +484,7 @@ export const PropertyUpdateSchema = z.object({
   brand_type: z.enum(['SONTHILLU', 'RADHA_REAL_HOMES']).optional(),
   category: z.string().optional(),
   area_sqft: z.number().positive().optional(),
-  location: blankAsAbsent(z.string().min(3).optional()),
+  location: blankAsAbsent(z.string().min(2).optional()),
   address: z.string().optional().nullable(),
   bedrooms: z.number().int().optional().nullable(),
   bathrooms: z.number().int().optional().nullable(),

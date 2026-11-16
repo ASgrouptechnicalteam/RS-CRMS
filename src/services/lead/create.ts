@@ -10,6 +10,7 @@ import { findBestAssigneeForLead } from '../../utils/distributionService';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { cleanPhone } from '../../shared/zodHelpers';
+import { associateIdForNewLead } from '../associate.service';
 const p = prisma;
 
 export async function createLead(
@@ -238,6 +239,14 @@ export async function createLead(
       throw new AppError(400, "Enter the associate's name, phone and associate ID.");
     }
   }
+  // Linked to the associate's record when the code or phone matches exactly one.
+  const associateId = fromAssociate
+    ? await associateIdForNewLead(
+        user.companyId,
+        dto.external_agent_associate_id,
+        dto.external_agent_phone,
+      )
+    : null;
 
   // Anyone keeping the lead can add it at the stage it has already reached.
   let resolvedStage: ResolvedStage | null = null;
@@ -396,12 +405,20 @@ export async function createLead(
         external_agent_phone: fromAssociate ? dto.external_agent_phone : null,
         external_agent_associate_id: fromAssociate ? dto.external_agent_associate_id : null,
         external_agent_company: fromAssociate ? dto.external_agent_company || null : null,
+        associate_id: associateId,
         last_contacted_at: resolvedStage?.contactedAt || null,
       },
     });
 
     if (dto.preferred_locations && dto.preferred_locations.length > 0) {
       await syncLeadPreferredLocations(tx, lead.id, dto.preferred_locations);
+    }
+    // A lead makes an enrolled (or dormant) associate active.
+    if (associateId) {
+      await tx.associate.updateMany({
+        where: { id: associateId, pipeline: { in: ['ENROLLED', 'DORMANT'] } },
+        data: { pipeline: 'ACTIVE', pipeline_changed_at: new Date() },
+      });
     }
 
     await tx.leadActivity.create({

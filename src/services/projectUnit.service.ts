@@ -323,6 +323,8 @@ export class ProjectUnitService {
             name: true,
             project_code: true,
             location: true,
+            rera_status: true,
+            rera_number: true,
             assigned_pm_id: true,
             company_id: true,
             branch_id: true,

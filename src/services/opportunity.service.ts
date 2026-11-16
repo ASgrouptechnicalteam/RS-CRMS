@@ -1,12 +1,17 @@
+import { pmScope, pmMaySee } from '../authz/pmScope';
 import { prisma } from '../lib/prisma';
 import { PrismaClient, Opportunity, Prisma } from '@prisma/client';
 import { TokenPayload } from '../utils/jwt';
 import { OpportunityPolicy } from '../policies/opportunity.policy';
-import { AppError } from './lead.service'; // Resuse AppError
+// AppError straight from lead/errors: importing lead.service here closes an
+// import loop (lead/status -> opportunity.service -> lead.service) that left
+// LeadService.updateLeadStatus undefined when md.ts loaded first (2026-11-16).
+import { AppError } from './lead/errors';
 import { WorkflowEngine } from '../workflows/workflowEngine';
 import { WorkflowDomain } from '../workflows/types';
 import { CustomerService } from './customer.service';
 import { BookingService } from './booking.service';
+import { buildSiteVisitScope } from '../authz/dataScope';
 
 export class OpportunityService {
   /**
@@ -232,7 +237,7 @@ export class OpportunityService {
     const opp = await prisma.opportunity.findFirst({ where: { id, company_id: user.companyId } });
     if (!opp) throw new AppError(404, 'Opportunity not found');
 
-    if (!OpportunityPolicy.canMutate(user, opp)) {
+    if (!OpportunityPolicy.canMutate(user, opp) || !(await pmMaySee(user, 'opportunity', id))) {
       throw new AppError(403, 'Unauthorized to update this Opportunity');
     }
 
@@ -296,6 +301,7 @@ export class OpportunityService {
       where: {
         lead_id,
         company_id: user.companyId,
+        ...pmScope.opportunity(user),
       },
       include: {
         project: { select: { id: true, name: true } },
@@ -424,13 +430,14 @@ export class OpportunityService {
         property: true,
         project_unit: { include: { project: { select: { id: true, name: true } } } },
         tasks: true,
-        site_visits: true,
+        // Only the visits the caller may see, not every visit of the opportunity.
+        site_visits: { where: await buildSiteVisitScope(user) },
       },
     });
 
     if (!opp || opp.company_id !== user.companyId) throw new AppError(404, 'Opportunity not found');
 
-    if (!OpportunityPolicy.canView(user, opp)) {
+    if (!OpportunityPolicy.canView(user, opp) || !(await pmMaySee(user, 'opportunity', opp.id))) {
       throw new AppError(403, 'Unauthorized to view this Opportunity');
     }
 
@@ -583,7 +590,7 @@ export class OpportunityService {
       throw new AppError(404, 'Opportunity not found or access denied');
     }
 
-    if (!OpportunityPolicy.canMutate(user, opp)) {
+    if (!OpportunityPolicy.canMutate(user, opp) || !(await pmMaySee(user, 'opportunity', opp.id))) {
       throw new AppError(403, 'Unauthorized to convert this Opportunity');
     }
 

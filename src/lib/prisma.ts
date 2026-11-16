@@ -1,7 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { auditContext } from '../utils/requestContext';
 import { dbGuard } from './dbGuard';
 import { forgetAuthRows } from './authRowCache';
+import { currentPushLink, pushForNotificationRows } from '../utils/pushDispatch';
+import { recordQueryTime } from './queryTiming';
 
 /**
  * Singleton Prisma Client instance for the API.
@@ -55,6 +57,48 @@ prisma.$use((params, next) =>
   ),
 );
 
+// How long each call takes, for the Technical Manager's system health
+// (lib/queryTiming.ts; memory only, never written to the database).
+prisma.$use(async (params, next) => {
+  const started = performance.now();
+  try {
+    return await next(params);
+  } finally {
+    recordQueryTime(params.model, params.action, performance.now() - started);
+  }
+});
+
+// Money columns are exact decimals in the database (DECIMAL(14,2) on Booking,
+// Payment, Installment and ExpenseRefund; item 6 #8, 2026-11-15). Prisma hands
+// a DECIMAL back as a Decimal object, which prints as a string in JSON and does
+// not add or compare like a number. Every result is turned back into plain
+// numbers here, so the API's answers and the existing sums stay as they were;
+// the database does the exact storing and rounding to paise. In code, read a
+// money value with num() / round2() from utils/money.ts, never .toNumber().
+// Petty cash and the budget work on Decimal objects themselves and are left alone.
+const KEEP_DECIMAL = new Set(['PettyCashEntry', 'MonthlyBudget', 'MonthlyBudgetLine']);
+const plainNumbers = (v: any): any => {
+  if (v === null || typeof v !== 'object') return v;
+  if (Prisma.Decimal.isDecimal(v)) return (v as Prisma.Decimal).toNumber();
+  if (v instanceof Date || Buffer.isBuffer(v)) return v;
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      const x = v[i];
+      if (x !== null && typeof x === 'object') v[i] = plainNumbers(x);
+    }
+    return v;
+  }
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (x !== null && typeof x === 'object') v[k] = plainNumbers(x);
+  }
+  return v;
+};
+prisma.$use(async (params, next) => {
+  const result = await next(params);
+  return params.model && KEEP_DECIMAL.has(params.model) ? result : plainNumbers(result);
+});
+
 // A changed employee must take effect at once (lib/authRowCache.ts).
 const READ_ACTIONS = /^(find|count|aggregate|groupBy)/;
 prisma.$use(async (params, next) => {
@@ -85,6 +129,33 @@ prisma.$use(async (params, next) => {
     }
   }
   return next(params);
+});
+
+// Every Notification row, whichever code path created it, also goes to the
+// person's phone (utils/pushDispatch.ts). Fire and forget: the write is never
+// slowed, failed or rolled back by the push. Inside a transaction the push may
+// leave before the commit, so it waits a little.
+prisma.$use(async (params, next) => {
+  // Read before the write: the async context may not survive the query engine.
+  const link = currentPushLink();
+  const result = await next(params);
+  if (
+    params.model === 'Notification' &&
+    (params.action === 'create' || params.action === 'createMany')
+  ) {
+    try {
+      const opts = { link, delayMs: params.runInTransaction ? 400 : 0 };
+      if (params.action === 'create') {
+        pushForNotificationRows([result], opts);
+      } else {
+        const data = params.args?.data;
+        pushForNotificationRows(Array.isArray(data) ? data : data ? [data] : [], opts);
+      }
+    } catch {
+      /* never break the write */
+    }
+  }
+  return result;
 });
 
 const publicDbUrl = withPool(dbUrl, 2);

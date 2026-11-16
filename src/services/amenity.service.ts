@@ -47,8 +47,20 @@ export class AmenityService {
     try {
       return await p.amenity.create({ data: { company_id: user.companyId, ...data } });
     } catch (err: any) {
-      if (err?.code === 'P2002')
+      if (err?.code === 'P2002') {
+        // A name removed from the list earlier is brought back instead of
+        // staying blocked for good (the list hides inactive rows).
+        const old = await p.amenity.findFirst({
+          where: { company_id: user.companyId, name: data.name, is_active: false },
+        });
+        if (old) {
+          return p.amenity.update({
+            where: { id: old.id },
+            data: { is_active: true, ...(data.category ? { category: data.category } : {}) },
+          });
+        }
         throw { status: 409, message: 'An amenity with this name already exists' };
+      }
       throw err;
     }
   }

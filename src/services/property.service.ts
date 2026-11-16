@@ -68,12 +68,22 @@ function resolvePropertyPricingFields(data: Record<string, any>): Record<string,
     'road_width_ft',
     'base_rate',
     'base_rate_unit',
-    'discount_amount',
     'discount_reason',
   ]) {
     if (data[key] !== undefined) out[key] = data[key];
   }
-  for (const key of ['is_corner', 'is_park_facing', 'is_road_facing', 'is_main_road_facing']) {
+  // discount_amount is a NOT NULL column (default 0): a cleared field arrives
+  // as null and must become 0, not crash the update.
+  if (data.discount_amount !== undefined) out.discount_amount = data.discount_amount ?? 0;
+  // is_premium_location was accepted by the schema but never written, so the
+  // "Premium Location" tick silently reverted on every save.
+  for (const key of [
+    'is_corner',
+    'is_park_facing',
+    'is_road_facing',
+    'is_main_road_facing',
+    'is_premium_location',
+  ]) {
     if (data[key] !== undefined) out[key] = !!data[key];
   }
 
@@ -179,13 +189,22 @@ export class PropertyService {
     if (filters.sales_status) {
       whereCondition.sales_status = filters.sales_status as any;
     }
-    if (filters.status) {
-      whereCondition.status = filters.status;
-    } else {
-      // Archived listings are a soft-delete state — hidden by default, only
-      // shown when explicitly filtered for (?status=ARCHIVED).
-      whereCondition.status = { not: 'ARCHIVED' };
-    }
+    // Added through AND so it can never overwrite a status restriction that
+    // buildPropertyScope already set (an Agent's `status: 'LIVE'` was being
+    // replaced by `{ not: 'ARCHIVED' }`, widening what they could list).
+    // Archived listings are a soft-delete state — hidden by default, only
+    // shown when explicitly filtered for (?status=ARCHIVED).
+    const statusClause = filters.status
+      ? { status: filters.status }
+      : { status: { not: 'ARCHIVED' } };
+    whereCondition.AND = [
+      ...(Array.isArray(whereCondition.AND)
+        ? whereCondition.AND
+        : whereCondition.AND
+          ? [whereCondition.AND]
+          : []),
+      statusClause,
+    ];
     if (filters.project_id) {
       whereCondition.project_id = filters.project_id;
     } else {
@@ -360,6 +379,11 @@ export class PropertyService {
 
     const propertyCode = await this.generateNextPropertyCode();
 
+    // A draft is a private work-in-progress: it is stored as DRAFT (not pushed
+    // into PM verification), may be missing area/location, and notifies nobody
+    // until it is submitted from the edit form.
+    const isDraft = data.status === 'DRAFT';
+
     let finalPmId = null;
     if (data.assigned_pm_id) {
       // Explicit PM assignment
@@ -438,10 +462,10 @@ export class PropertyService {
             branch_id: branchId,
             title: data.title,
             description: data.description || null,
-            brand_type: data.brand_type,
-            category: data.category,
-            area_sqft: data.area_sqft,
-            location: data.location,
+            brand_type: data.brand_type || 'SONTHILLU',
+            category: data.category || 'VILLA',
+            area_sqft: data.area_sqft || 0,
+            location: data.location || '',
             address: data.address || null,
             bedrooms: data.bedrooms ? Number(data.bedrooms) : null,
             bathrooms: data.bathrooms ? Number(data.bathrooms) : null,
@@ -468,7 +492,7 @@ export class PropertyService {
               ? { create: data.farm_land_details }
               : undefined,
             assigned_pm_id: finalPmId,
-            status: 'PENDING_VERIFICATION',
+            status: isDraft ? 'DRAFT' : 'PENDING_VERIFICATION',
             created_by_id: employeeId,
             ...resolvePropertyPricingFields(data),
             // WR-2: Structured location fields
@@ -484,6 +508,8 @@ export class PropertyService {
             slug,
           },
         });
+
+        if (isDraft) return property;
 
         await tx.propertyVerificationLog.create({
           data: {
@@ -593,6 +619,11 @@ export class PropertyService {
         id: true,
         status: true,
         assigned_pm_id: true,
+        area_sqft: true,
+        location: true,
+        base_rate: true,
+        title: true,
+        property_code: true,
         pricing: { select: { property_id: true } },
         plot_details: { select: { property_id: true } },
         apartment_details: { select: { property_id: true } },
@@ -673,6 +704,24 @@ export class PropertyService {
 
     Object.assign(safeData, resolvePropertyPricingFields(data));
 
+    // A DRAFT stays a draft until the form submits it (any status other than
+    // DRAFT). Submitting hands it to PM verification, same as a fresh create,
+    // and must first be complete. Any other status is never changed by an
+    // edit: editing a LIVE listing keeps it LIVE (changes show on the website
+    // immediately).
+    const submittingDraft = property.status === 'DRAFT' && data.status !== 'DRAFT';
+    if (submittingDraft) {
+      const area = data.area_sqft ?? property.area_sqft;
+      const location = (data.location ?? property.location ?? '').trim();
+      const baseRate = data.base_rate !== undefined ? data.base_rate : property.base_rate;
+      if (!(area > 0)) throw { status: 400, message: 'Enter the property size before submitting.' };
+      if (location.length < 2)
+        throw { status: 400, message: 'Enter the location before submitting.' };
+      if (baseRate == null || baseRate <= 0)
+        throw { status: 400, message: 'Enter the base rate before submitting.' };
+      safeData.status = 'PENDING_VERIFICATION';
+    }
+
     const updatedProperty = await p.property.update({
       where: { id: propertyId },
       data: {
@@ -700,6 +749,29 @@ export class PropertyService {
         ...subRecordUpdate('farm_land_details', data.farm_land_details, property.farm_land_details),
       },
     });
+
+    if (submittingDraft) {
+      await p.propertyVerificationLog.create({
+        data: {
+          property_id: propertyId,
+          actor_id: user.employeeId || 1,
+          from_status: 'DRAFT',
+          to_status: 'PENDING_VERIFICATION',
+          notes: `Property ${property.property_code} submitted from draft for On-Site Verification.`,
+        },
+      });
+      const pmId = updatedProperty.assigned_pm_id;
+      if (pmId && !(data.assigned_pm_id && data.assigned_pm_id !== property.assigned_pm_id)) {
+        await p.notification.create({
+          data: {
+            employee_id: pmId,
+            type: 'PROPERTY_ASSIGNED',
+            title: `Property Assigned: ${property.property_code}`,
+            message: `Property "${updatedProperty.title}" (${property.property_code}) has been assigned to you.`,
+          },
+        });
+      }
+    }
 
     if (updatedProperty.status === 'LIVE') {
       import('./lead.service').then(({ LeadService }) => {
@@ -734,6 +806,8 @@ export class PropertyService {
       const newPmId = data.assigned_pm_id;
       const oldPmId = property.assigned_pm_id;
 
+      // The audit trail and the open site visits follow the change, including
+      // when the PM is cleared (newPmId is null then).
       await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
         await tx.auditEvent.create({
           data: {
@@ -751,6 +825,8 @@ export class PropertyService {
         }
       });
 
+      // Clearing the PM sends null; there is nobody to notify (and a null
+      // employee_id would crash the notification insert).
       if (newPmId) {
         await p.notification.create({
           data: {
@@ -760,17 +836,17 @@ export class PropertyService {
             message: `Property "${updatedProperty.title}" (${updatedProperty.property_code}) has been assigned to you.`,
           },
         });
-      }
 
-      if (oldPmId) {
-        await p.notification.create({
-          data: {
-            employee_id: oldPmId,
-            type: 'PROPERTY_REASSIGNED',
-            title: `Property Reassigned: ${updatedProperty.property_code}`,
-            message: `Property "${updatedProperty.title}" (${updatedProperty.property_code}) has been reassigned from you.`,
-          },
-        });
+        if (oldPmId) {
+          await p.notification.create({
+            data: {
+              employee_id: oldPmId,
+              type: 'PROPERTY_REASSIGNED',
+              title: `Property Reassigned: ${updatedProperty.property_code}`,
+              message: `Property "${updatedProperty.title}" (${updatedProperty.property_code}) has been reassigned from you.`,
+            },
+          });
+        }
       }
     }
 

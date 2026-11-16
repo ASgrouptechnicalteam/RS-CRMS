@@ -48,10 +48,14 @@ router.get(
       // every PM in their accessible companies -- but return picker fields
       // only (no contact/address/KYC data), since this bypasses the normal
       // team scope.
+      // Same for the DM Head choosing which Marketing Executive gets a project:
+      // an executive outside their reporting line left the list empty.
       const isPmPickerLookup =
-        resolvedRoleName === Roles.PROJECT_MANAGER &&
-        (req.user!.roles.includes(Roles.INVENTORY_EXECUTIVE) ||
-          req.user!.roles.includes(Roles.DATA_ENTRY_OPERATOR));
+        (resolvedRoleName === Roles.PROJECT_MANAGER &&
+          (req.user!.roles.includes(Roles.INVENTORY_EXECUTIVE) ||
+            req.user!.roles.includes(Roles.DATA_ENTRY_OPERATOR))) ||
+        (resolvedRoleName === Roles.DIGITAL_MARKETING_EXECUTIVE &&
+          req.user!.roles.includes(Roles.DIGITAL_MARKETING_HEAD));
 
       const whereClause: any = isPmPickerLookup
         ? {

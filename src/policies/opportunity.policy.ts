@@ -1,3 +1,4 @@
+import { pmScope } from '../authz/pmScope';
 import { TokenPayload } from '../utils/jwt';
 import { Roles } from '../shared';
 import { Opportunity } from '@prisma/client';
@@ -39,6 +40,9 @@ export class OpportunityPolicy {
         owner_id: user.employeeId,
       });
     }
+    // PM narrowing (switch): only opportunities linked to this PM.
+    const pmWhere = pmScope.opportunity(user);
+    if (pmWhere.OR) whereCondition.AND.push(pmWhere);
 
     return whereCondition;
   }

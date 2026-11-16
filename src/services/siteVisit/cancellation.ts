@@ -3,17 +3,13 @@ import { TokenPayload } from '../../utils/jwt';
 import { Permissions } from '../../shared';
 import { can } from '../../authz/authorization';
 import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
-import { applyTransition } from './shared';
+import { applyTransition, findVisitForUser } from './shared';
 
 const p = prisma;
 
 /** cancel: any active state → CANCELLED. */
 export async function cancelVisit(user: TokenPayload, visitId: number, reason?: string) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (
     !can(user, Permissions.SITE_VISITS_COMPLETE, visit) &&
     !SiteVisitPolicy.canHoldOrInitiateCancel(user, visit)
@@ -36,11 +32,7 @@ export async function cancelVisit(user: TokenPayload, visitId: number, reason?: 
 
 /** HOLD: Reconfirmation fails -> ON_HOLD. */
 export async function holdVisit(user: TokenPayload, visitId: number) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!SiteVisitPolicy.canHoldOrInitiateCancel(user, visit)) {
     throw { status: 403, message: 'Forbidden: Only the assigned telecaller can hold this visit.' };
   }
@@ -69,11 +61,7 @@ export async function holdVisit(user: TokenPayload, visitId: number) {
 
 /** INITIATE_CANCEL: 1 hour before visit, Telecaller requests PM cross-check. */
 export async function initiateCancellation(user: TokenPayload, visitId: number) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!SiteVisitPolicy.canHoldOrInitiateCancel(user, visit)) {
     throw {
       status: 403,
@@ -115,11 +103,7 @@ export async function initiateCancellation(user: TokenPayload, visitId: number) 
 
 /** PM_CANCEL_REJECT: PM indicates customer has responded, reverting to PENDING_CUSTOMER_RECONFIRMATION. */
 export async function rejectCancellation(user: TokenPayload, visitId: number) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!SiteVisitPolicy.canConfirmCancel(user, visit)) {
     throw { status: 403, message: 'Forbidden: Only the assigned PM can reject this cancellation.' };
   }
@@ -148,11 +132,7 @@ export async function rejectCancellation(user: TokenPayload, visitId: number) {
 
 /** CONFIRM_CANCEL: PM explicitly confirms cancellation, providing a reason. */
 export async function confirmCancellation(user: TokenPayload, visitId: number, reason: string) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!SiteVisitPolicy.canConfirmCancel(user, visit)) {
     throw {
       status: 403,

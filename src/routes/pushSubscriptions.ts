@@ -11,6 +11,8 @@ import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { validateRequestBody } from '../middleware/validate';
 import { z } from 'zod';
+import { isPushConfigured, sendPushToEmployee } from '../utils/pushDispatch';
+import { pushTestLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -54,6 +56,36 @@ router.get('/vapid-public-key', (req, res) => {
   }
   return res.status(200).json({ publicKey: key });
 });
+
+// GET /api/v1/push/status -- is push set up on the server, and how many
+// devices of the caller are registered.
+router.get('/status', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const devices = await p.pushSubscription.count({
+      where: { employee_id: req.user!.employeeId },
+    });
+    return res.status(200).json({ configured: isPushConfigured(), devices });
+  } catch (error) {
+    logger.error('[PushStatus] Error:', error);
+    return res.status(500).json({ error: 'Failed to read push status.' });
+  }
+});
+
+// POST /api/v1/push/test -- sends a test push to the caller's own devices.
+router.post(
+  '/test',
+  authenticateToken,
+  pushTestLimiter,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const result = await sendPushToEmployee(req.user!.employeeId, {
+      title: 'Test notification',
+      body: 'If you can read this, notifications reach this phone.',
+      type: 'PUSH_TEST',
+      link: '/settings',
+    });
+    return res.status(200).json({ ...result, configured: isPushConfigured() });
+  },
+);
 
 // POST /api/v1/push/subscribe
 // Save a new push subscription for the logged-in employee

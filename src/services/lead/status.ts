@@ -365,6 +365,7 @@ export async function updateLeadStatus(
     if (to === 'BOOKING_INITIATED') return 'STATUS_CHANGED'; // portal provision stub (§6) below
     if (to === 'BOOKED') return 'STATUS_CHANGED';
     if (from === 'NEW' && to === 'ASSIGNED') return 'ASSIGNED_TO_AGENT';
+    if (to === 'CONTACTED' || to === 'QUALIFIED') return to; // Counted on Team Today.
     return 'STATUS_CHANGED';
   };
 

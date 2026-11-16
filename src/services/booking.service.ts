@@ -1,7 +1,9 @@
+import { num } from '../utils/money';
+import { pmScope, pmMaySee } from '../authz/pmScope';
 import { prisma } from '../lib/prisma';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { TokenPayload } from '../utils/jwt';
-import { AppError } from './lead.service';
+import { AppError } from './lead/errors';
 import { BookingPolicy } from '../policies/booking.policy';
 import { Roles } from '../shared';
 import { randomBytes } from 'crypto';
@@ -140,7 +142,7 @@ export class BookingService {
   /** List bookings scoped to the user's company. */
   static async getBookings(user: TokenPayload) {
     const bookings = await prisma.booking.findMany({
-      where: { company_id: user.companyId },
+      where: { company_id: user.companyId, ...pmScope.booking(user) },
       orderBy: { id: 'desc' },
       include: BOOKING_DISPLAY_INCLUDE,
       // Newest 1,000: the list had no limit and grows forever.
@@ -158,7 +160,7 @@ export class BookingService {
     if (!booking) {
       throw new AppError(404, 'Booking not found');
     }
-    if (!BookingPolicy.canView(user, booking)) {
+    if (!BookingPolicy.canView(user, booking) || !(await pmMaySee(user, 'booking', id))) {
       throw new AppError(403, 'Unauthorized to view this booking');
     }
     return booking;
@@ -431,7 +433,7 @@ export class BookingService {
         await tx.opportunity.update({
           where: { id: opp.id },
           data: {
-            expected_value: booking.agreed_price,
+            expected_value: num(booking.agreed_price),
             probability: 100,
           },
         });
@@ -552,7 +554,7 @@ export class BookingService {
   /** Tell Finance which payments of a cancelled booking must be refunded. */
   static async notifyRefundDue(
     booking: { id: number; company_id: number; booking_code: string },
-    refundDue: { amount: number }[],
+    refundDue: { amount: unknown }[],
   ) {
     if (refundDue.length === 0) return;
     const total = refundDue.reduce((sum, r) => sum + Number(r.amount), 0);
@@ -945,7 +947,7 @@ export class BookingService {
         project_unit: { select: { id: true, unit_number: true } },
         form_submitted_by: { select: { id: true, full_name: true, employee_code: true } },
       },
-      orderBy: { form_submitted_at: 'asc' }, // oldest first — FIFO for MD
+      orderBy: { form_submitted_at: 'desc' }, // latest first (owner, 2026-11-14)
     });
   }
 

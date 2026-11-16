@@ -4,6 +4,7 @@ import { checkDbPermission } from '../authz/dbPermissions';
 import { AuthenticatedRequest } from './auth';
 import { Permission, Permissions } from '../shared';
 import { prisma } from '../lib/prisma';
+import { recordApprovedEdit } from '../services/approvedRecordEdit';
 
 /**
  * Actions whose object-level policy is enforced here whenever the route
@@ -22,6 +23,14 @@ const RESOURCE_POLICY_ACTIONS = new Set<string>([
   Permissions.PROPERTIES_DELETE,
   Permissions.CUSTOMERS_KYC_WRITE,
 ]);
+
+/** Change actions whose use on an approved record is audited. */
+const APPROVED_EDIT_ACTIONS: Record<string, 'PROJECT' | 'PROPERTY'> = {
+  [Permissions.PROJECTS_UPDATE]: 'PROJECT',
+  [Permissions.PROJECTS_DM_POLISH]: 'PROJECT',
+  [Permissions.PROPERTIES_UPDATE]: 'PROPERTY',
+  [Permissions.PROPERTIES_DM_POLISH]: 'PROPERTY',
+};
 
 /**
  * Does this user hold `action` right now?
@@ -109,6 +118,15 @@ export const requireAuthz = (
 
       if (resource) {
         (req as any).authorizedResource = resource;
+        // A change to an approved project / LIVE property by anyone but the MD
+        // or Admin is audited once it succeeds (item 3, owner decision 7).
+        const entity = APPROVED_EDIT_ACTIONS[action];
+        if (entity && req.method !== 'GET' && typeof resource.id === 'number') {
+          const status = entity === 'PROJECT' ? resource.verification_status : resource.status;
+          res.on('finish', () => {
+            if (res.statusCode < 400) void recordApprovedEdit(req, entity, resource.id, status);
+          });
+        }
       }
 
       next();

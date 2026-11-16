@@ -1,3 +1,4 @@
+import { pmScope } from '../authz/pmScope';
 import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -129,7 +130,11 @@ router.put(
   authenticateToken,
   requireAuthz(Permissions.CUSTOMERS_KYC_WRITE, async (req) => {
     return await prisma.customer.findFirst({
-      where: { id: parseInt(req.params.id, 10), company_id: req.user!.companyId },
+      where: {
+        id: parseInt(req.params.id, 10),
+        company_id: req.user!.companyId,
+        ...pmScope.customer(req.user!),
+      },
     });
   }),
   validateRequestBody(CustomerKycWriteSchema),

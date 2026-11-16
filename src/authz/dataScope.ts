@@ -1,3 +1,4 @@
+import { pmScope } from './pmScope';
 import { Prisma } from '@prisma/client';
 import { TokenPayload } from '../utils/jwt';
 import { Roles } from '../shared';
@@ -153,6 +154,15 @@ export async function buildPropertyScope(user: TokenPayload): Promise<Prisma.Pro
     };
   }
 
+  // 3b. DIGITAL MARKETING EXECUTIVE — LIVE properties, ones they added, and
+  // ones assigned to them for polish (item 3, 2026-11-15).
+  // From 2026-11-16 they see every property of the company at every stage: they
+  // now add properties themselves and need to see what is live, incomplete or
+  // waiting for verification (the page filters by stage).
+  if (user.roles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE)) {
+    return propertyBaseScope;
+  }
+
   // 4. TELECALLER and everyone else
   // Default to LIVE properties within their company, PLUS anything they
   // personally created — without this OR, a role granted PROPERTIES_CREATE
@@ -230,7 +240,11 @@ export async function buildProjectScope(user: TokenPayload): Promise<Prisma.Proj
       OR: [
         { verification_status: 'VERIFIED' },
         { verification_status: 'PENDING_DM_POLISH' },
+        // projects it has handed to an executive, until they come back
+        { verification_status: 'PENDING_DM_EXEC' },
         { digital_marketing_executive_id: user.employeeId },
+        // projects they added themselves (item 3: the DM team can add)
+        { created_by_id: user.employeeId },
       ],
     };
   }
@@ -260,14 +274,10 @@ export async function buildProjectScope(user: TokenPayload): Promise<Prisma.Proj
   // currently assigned to them for content polish (not in MANAGEMENT_ROLES,
   // so without this branch they'd fall to the generic VERIFIED-only rule
   // below and never see their own polish queue).
+  // From 2026-11-16 they see every project of the company at every stage (they
+  // add projects themselves; the page filters by stage).
   if (user.roles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE)) {
-    return {
-      ...baseScope,
-      OR: [
-        { verification_status: 'VERIFIED' },
-        { digital_marketing_executive_id: user.employeeId },
-      ],
-    };
+    return baseScope;
   }
 
   // 7. AGENT — only see VERIFIED projects that they have a site visit for
@@ -312,7 +322,8 @@ export async function buildCustomerScope(user: TokenPayload): Promise<Prisma.Cus
 
   const isProjectManager = user.roles.includes(Roles.PROJECT_MANAGER);
   if (isProjectManager || user.roles.includes(Roles.DATA_ENTRY_OPERATOR)) {
-    return baseScope;
+    // PM narrowing (switch): `{}` unless it is on and this is a plain PM.
+    return { ...baseScope, ...pmScope.customer(user) };
   }
 
   // Telecallers and Agents only see their assigned customers.
@@ -320,4 +331,57 @@ export async function buildCustomerScope(user: TokenPayload): Promise<Prisma.Cus
     ...baseScope,
     assigned_to_id: user.employeeId,
   };
+}
+
+/**
+ * Role-specific extra visibility for site visits, one clause per role. This is
+ * the single place to add a role that sees visits by some rule of its own:
+ * e.g. an external Channel Partner role that sees only the visits assigned to
+ * them would return `[{ assigned_agent_id: user.employeeId }]` here, with no
+ * change to buildSiteVisitScope or its callers. Nothing is added today.
+ */
+function roleSpecificSiteVisitClauses(_user: TokenPayload): Prisma.SiteVisitBookingWhereInput[] {
+  return [];
+}
+
+/**
+ * Builds the read-visibility scope for Site Visits.
+ *
+ *   ADMIN:     every visit (global, like the other scopes)
+ *   MD:        every visit in the companies they have access to (this includes
+ *              escalated ones: they are escalated to the MD)
+ *   everyone else: only visits they are part of -- the telecaller who booked
+ *              it, the owner of its lead, the PM it is (or was) routed to,
+ *              the agent running it, or a PM who routed it onward
+ *
+ * A person never sees a visit just because they share a role with its PM.
+ */
+export async function buildSiteVisitScope(
+  user: TokenPayload,
+): Promise<Prisma.SiteVisitBookingWhereInput> {
+  if (user.roles.includes(Roles.ADMIN)) {
+    return {};
+  }
+
+  const companyIds = await getAccessibleCompanyIds(user);
+  const companyScope: Prisma.SiteVisitBookingWhereInput = {
+    lead: { company_id: { in: companyIds } },
+  };
+
+  if (user.roles.includes(Roles.MD)) {
+    return companyScope;
+  }
+
+  const me = user.employeeId;
+  const involvement: Prisma.SiteVisitBookingWhereInput[] = [
+    { telecaller_id: me },
+    { lead: { assigned_to_id: me } },
+    { project_manager_id: me },
+    { assigned_agent_id: me },
+    // The PM who routed it onward keeps sight of it (the hop is logged with them as "from").
+    { reassignments: { some: { from_employee_id: me } } },
+    ...roleSpecificSiteVisitClauses(user),
+  ];
+
+  return { AND: [companyScope, { OR: involvement }] };
 }

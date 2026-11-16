@@ -29,7 +29,11 @@ export const CALL_OUTCOMES = {
 } as const;
 export type CallOutcome = keyof typeof CALL_OUTCOMES;
 
-const CONNECTED: CallOutcome[] = ['CONNECTED_INTERESTED', 'CONNECTED_NOT_INTERESTED', 'CALL_BACK'];
+export const CONNECTED: CallOutcome[] = [
+  'CONNECTED_INTERESTED',
+  'CONNECTED_NOT_INTERESTED',
+  'CALL_BACK',
+];
 
 /**
  * Records one call attempt on a lead.
@@ -81,6 +85,16 @@ export async function logCall(
     (input.drop_lead === true || doNotCall);
   const wantsDrop = asksToDrop && ownsLead;
 
+  // A new call-back belongs to whoever has the lead, not to a colleague who rang once.
+  const owner =
+    lead.assigned_to_id && lead.assigned_to_id !== user.employeeId
+      ? await p.employee.findUnique({
+          where: { id: lead.assigned_to_id },
+          select: { id: true, status: true },
+        })
+      : null;
+  const callBackOwnerId = owner?.status === 'ACTIVE' ? owner.id : user.employeeId;
+
   const followUpAt = input.follow_up_at && !doNotCall ? new Date(input.follow_up_at) : null;
   if (followUpAt && Number.isNaN(followUpAt.getTime())) {
     throw new AppError(400, 'Invalid follow-up date');
@@ -113,6 +127,11 @@ export async function logCall(
       // they neither stay pending nor turn overdue (and cost points) for a call
       // that was in fact made. A new date below then creates the next one.
       await closeCallBackTasks(tx, leadId, { outcome: 'COMPLETED', assigneeId: user.employeeId });
+      // A colleague who reached the customer has made the owner's call-back too. A
+      // colleague's "do not call" leaves it for the owner, who decides about the lead.
+      if (owner && CONNECTED.includes(input.outcome) && !doNotCall) {
+        await closeCallBackTasks(tx, leadId, { outcome: 'COMPLETED', assigneeId: owner.id });
+      }
       // Do-not-call-again: no call-back may remain for ANYONE on this lead.
       if (doNotCall && ownsLead) await closeCallBackTasks(tx, leadId, { outcome: 'CANCELLED' });
 
@@ -121,7 +140,7 @@ export async function logCall(
             data: {
               title: `Call back ${lead.customer_name}`,
               description: note || CALL_OUTCOMES[input.outcome],
-              assignee_id: user.employeeId,
+              assignee_id: callBackOwnerId,
               created_by: user.employeeId,
               status: 'PENDING',
               priority: 'HIGH',

@@ -3,7 +3,10 @@ import { Roles } from '../shared';
 import { prisma as p } from '../lib/prisma';
 
 export class AppError extends Error {
-  constructor(public statusCode: number, message: string) {
+  constructor(
+    public statusCode: number,
+    message: string,
+  ) {
     super(message);
     this.name = 'AppError';
   }
@@ -18,28 +21,33 @@ export class PMRoutingService {
       where: { company_id: companyId },
       include: {
         pm: {
-          select: { id: true, full_name: true, email: true, phone: true }
-        }
+          select: { id: true, full_name: true, employee_code: true, email: true, phone: true },
+        },
       },
-      orderBy: { location: 'asc' }
+      orderBy: { location: 'asc' },
     });
   }
 
   /**
    * Assigns a location to a PM.
    */
-  static async assignLocation(companyId: number, pmId: number, location: string, level: string = 'CITY') {
+  static async assignLocation(
+    companyId: number,
+    pmId: number,
+    location: string,
+    level: string = 'CITY',
+  ) {
     // Verify the PM exists and has the project manager role
     const pm = await p.employee.findFirst({
-      where: { 
-        id: pmId, 
+      where: {
+        id: pmId,
         company_id: companyId,
         roles: {
           some: {
-            role: { name: 'project managers' } // Matches the role in this codebase
-          }
-        }
-      }
+            role: { name: 'project managers' }, // Matches the role in this codebase
+          },
+        },
+      },
     });
 
     if (!pm) {
@@ -52,9 +60,9 @@ export class PMRoutingService {
         pm_id_location_company_id: {
           pm_id: pmId,
           location: location,
-          company_id: companyId
-        }
-      }
+          company_id: companyId,
+        },
+      },
     });
 
     if (existing) {
@@ -66,8 +74,13 @@ export class PMRoutingService {
         pm_id: pmId,
         location: location,
         level: level,
-        company_id: companyId
-      }
+        company_id: companyId,
+      },
+      include: {
+        pm: {
+          select: { id: true, full_name: true, employee_code: true, email: true, phone: true },
+        },
+      },
     });
   }
 
@@ -76,7 +89,7 @@ export class PMRoutingService {
    */
   static async removeAssignment(companyId: number, id: number) {
     const assignment = await p.pMLocationAssignment.findFirst({
-      where: { id: id, company_id: companyId }
+      where: { id: id, company_id: companyId },
     });
 
     if (!assignment) {
@@ -84,7 +97,7 @@ export class PMRoutingService {
     }
 
     await p.pMLocationAssignment.delete({
-      where: { id: id }
+      where: { id: id },
     });
 
     return { success: true, message: 'Assignment removed successfully' };

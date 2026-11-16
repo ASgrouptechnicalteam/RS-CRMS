@@ -164,9 +164,12 @@ router.post(
 
       const effectivePassword = initial_password || generateTemporaryPassword();
       const passwordHash = await bcrypt.hash(effectivePassword, 12);
-      const isExempt = [Roles.MD, Roles.HR_MANAGER, Roles.ADMIN, Roles.MARKETING_DIRECTOR].includes(
-        role_name,
-      );
+      // An external channel partner is never absent or late and sends no
+      // report: presence only (item 5, 2026-11-15).
+      const isPartner = role_name === Roles.CHANNEL_PARTNER_EXTERNAL;
+      const isExempt =
+        isPartner ||
+        [Roles.MD, Roles.HR_MANAGER, Roles.ADMIN, Roles.MARKETING_DIRECTOR].includes(role_name);
 
       // No manager chosen: apply the company's default reporting line
       // (utils/reportingRules.ts) instead of leaving it empty -- almost no
@@ -205,7 +208,11 @@ router.post(
           // silently exempting them from the kiosk logout gate (see
           // routes/attendance/qr.ts). Still overridable per-employee via the
           // existing admin-actions endpoint for genuine exceptions.
-          report_required: report_required !== undefined ? Boolean(report_required) : true,
+          report_required: isPartner
+            ? false
+            : report_required !== undefined
+              ? Boolean(report_required)
+              : true,
           reporting_manager_id: reporting_manager_id
             ? parseInt(reporting_manager_id, 10)
             : (defaultManager?.id ?? null),

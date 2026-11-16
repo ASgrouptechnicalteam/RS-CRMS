@@ -433,7 +433,7 @@ router.post(
       return res.status(201).json({
         approved: false,
         message:
-          'Your early logout request has been sent to the MD. You can check out once it is approved.',
+          'Your early logout request has been sent to the MD. You can scan out now; the MD will approve or reject it later.',
         proposalId: proposal.id,
       });
     } catch (error: any) {
@@ -766,28 +766,25 @@ router.post(
           }
         }
       } else if (updated.type === 'FIELD_WORK') {
-        // Today or later: the employee checks in/out from the app on that
-        // day (routes/attendance/wfh.ts, source FIELD) -- real times instead
-        // of an automatic 9:30-18:30. Only a day that has already passed
-        // (approved after the fact) is filled in here, since no check-in
-        // is possible any more.
+        // Approving field work marks the day: present, 9:30-18:30, for a past
+        // day, today or a future day. Approval usually comes in the afternoon
+        // of the same day, so asking the employee to check in from the app
+        // gave afternoon times (and no record at all when they did not), and
+        // the day then showed as absent (production, Nov 2026).
         const targetDate = new Date(updated.target_date);
         const { dateString } = getISTComponents(targetDate);
-        const todayString = getISTComponents(new Date()).dateString;
         const istTodayStart = new Date(`${dateString}T00:00:00+05:30`);
         const istTodayEnd = new Date(`${dateString}T23:59:59+05:30`);
 
-        const existingLog =
-          dateString < todayString
-            ? await p.attendanceLog.findFirst({
-                where: {
-                  employee_id: updated.employee_id,
-                  check_in_at: { gte: istTodayStart, lte: istTodayEnd },
-                },
-              })
-            : null;
+        const existingLog = await p.attendanceLog.findFirst({
+          where: {
+            employee_id: updated.employee_id,
+            check_in_at: { gte: istTodayStart, lte: istTodayEnd },
+          },
+          orderBy: { check_in_at: 'asc' },
+        });
 
-        if (dateString < todayString && !existingLog) {
+        if (!existingLog) {
           await p.attendanceLog.create({
             data: {
               employee_id: updated.employee_id,
@@ -797,10 +794,12 @@ router.post(
               status: 'PRESENT',
               // Created by approving a request, not by anyone scanning.
               source: 'PROPOSAL',
-              notes: 'Field work (approved after the day)',
+              notes: 'Field work (approved)',
             },
           });
-        } else if (existingLog && existingLog.status === 'ABSENT') {
+        } else if (['ABSENT', 'LATE', 'HALF_DAY'].includes(existingLog.status)) {
+          // Already checked in (kiosk or app), e.g. at the office after the
+          // field work: keep the real times, but the day counts as present.
           await p.attendanceLog.update({
             where: { id: existingLog.id },
             data: { status: 'PRESENT' },

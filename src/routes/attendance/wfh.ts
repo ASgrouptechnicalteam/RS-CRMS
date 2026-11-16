@@ -369,7 +369,7 @@ router.post(
         },
       });
       return res.status(200).json({
-        message: `Checked in (work from home) as ${log.status}`,
+        message: `Checked in (${remoteDay.type === 'FIELD_WORK' ? 'field work' : 'work from home'}) as ${log.status}`,
         status: log.status,
         checkInAt: log.check_in_at,
         timeIST: timeString,
@@ -427,11 +427,13 @@ router.post(
               target_date: dayRange,
             },
           });
-          return res.status(400).json({
-            error: waiting
-              ? 'Your early logout request is waiting for the MD to approve it.'
-              : 'Logout is not allowed before 18:00 IST without an emergency request',
-          });
+          // A request still waiting for the MD never blocks the scan: the
+          // person leaves, and the request stays in the MD's approvals.
+          if (!waiting) {
+            return res.status(400).json({
+              error: 'Logout is not allowed before 18:00 IST without an emergency request',
+            });
+          }
         }
       }
       if (employee.report_required) {

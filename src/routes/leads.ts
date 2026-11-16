@@ -18,12 +18,13 @@ import { validateRequestBody } from '../middleware/validate';
 import { LeadService, AppError } from '../services/lead.service';
 import type { LeadListFilters } from '../services/lead/query';
 import { syncLeadPreferredLocations } from '../services/lead/shared';
+import { CALLABLE_STATUSES } from '../services/counts/followUps';
 import { OpportunityService } from '../services/opportunity.service';
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 import { logCall, getCallQueueMeta, splitCalls } from '../services/lead/calls';
 import { getMyQueue } from '../services/lead/myQueue';
-import { listUploadBatches, moveUploadBatch } from '../services/lead/batches';
+import { listUploadBatches, moveUploadBatch, stageTotals } from '../services/lead/batches';
 import {
   getTelecallerReport,
   listTelecallersForReport,
@@ -73,6 +74,7 @@ const parseLeadFilters = (req: AuthenticatedRequest): LeadListFilters => {
     created_by_id: idOrMe(req.query.created_by_id),
     unassigned: req.query.unassigned === 'true',
     created_from: parseDate(req.query.created_from),
+    created_to: parseDate(req.query.created_to),
   };
 };
 
@@ -218,7 +220,7 @@ router.get(
 // (calls logged, last outcome, next call-back) and today's calls split into
 // new calls vs follow-ups. The telecaller dashboard uses it to separate
 // never-called leads from follow-ups.
-const CALL_QUEUE_STATUSES = ['NEW', 'ASSIGNED', 'CONTACTED', 'QUALIFIED', 'SITE_VISIT_SCHEDULED'];
+const CALL_QUEUE_STATUSES = CALLABLE_STATUSES;
 router.get(
   '/call-queue',
   authenticateToken,
@@ -320,11 +322,13 @@ router.get(
       if (isNaN(employeeId) && isNaN(uploaderId)) {
         return res.status(400).json({ error: 'employee_id or uploader_id required' });
       }
+      const kind = req.query.kind === 'contacted' ? 'contacted' : 'uncalled';
       const batches = await listUploadBatches(
         req.user!,
         isNaN(uploaderId) ? { employeeId } : { uploaderId },
+        kind,
       );
-      return res.status(200).json({ batches });
+      return res.status(200).json({ batches, kind, by_stage: stageTotals(batches) });
     } catch (error: any) {
       return handleServiceError(error, res);
     }
@@ -342,6 +346,10 @@ const MoveBatchSchema = z.object({
   reason: z.string().trim().min(3).max(300),
   // Only this many, oldest first. Left out: the whole upload.
   count: z.number().int().positive().optional(),
+  // 'contacted': the person's active leads somebody has worked, keeping their stage.
+  kind: z.enum(['uncalled', 'contacted']).optional(),
+  // contacted only: take from the whole book, not one upload.
+  whole_book: z.boolean().optional(),
 });
 router.post(
   '/move-batch',
@@ -351,9 +359,10 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const result = await moveUploadBatch(req.user!, req.body);
-      return res
-        .status(200)
-        .json({ message: `Moved ${result.moved} leads to ${result.to}`, ...result });
+      return res.status(200).json({
+        message: `Moved ${result.moved} leads to ${result.to}`,
+        ...result,
+      });
     } catch (error: any) {
       return handleServiceError(error, res);
     }

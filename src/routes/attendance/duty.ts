@@ -449,7 +449,7 @@ router.get(
       const [requests, proofs, people] = await Promise.all([
         p.attendanceProposal.findMany({
           where: { employee_id: { in: ids }, type: { in: TEAM_REQUEST_TYPES }, status: 'PENDING' },
-          orderBy: { target_date: 'asc' },
+          orderBy: { target_date: 'desc' },
           take: 200,
         }),
         p.attendanceCheckinProof.findMany({

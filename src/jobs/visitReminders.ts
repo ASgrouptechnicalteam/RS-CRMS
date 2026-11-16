@@ -78,7 +78,7 @@ export const siteVisitReconfirmReminderJob = async () => {
             employee_id: visit.project_manager_id,
             type: 'SYSTEM_ALERT',
             title: 'Upcoming Visit Reminder',
-            message: `Site visit ${visit.booking_code} is scheduled for tomorrow. The telecaller has been reminded to reconfirm.`,
+            message: `Site visit ${visit.booking_code} is scheduled for tomorrow. The telecaller has been reminded to reconfirm. Open Site Visits and tap "Prepare for visit" to read your brief.`,
           },
         });
       }

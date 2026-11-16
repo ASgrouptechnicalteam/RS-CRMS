@@ -1,9 +1,16 @@
 import { prisma } from '../lib/prisma';
 import { Roles } from '../shared';
-import { getISTComponents } from '../utils/time';
-import { WORK_LOG_ACTION, parseWorkLog, countByKind, WorkLogEntry } from '../routes/workLog';
+import { periodContaining } from './counts/period';
+import {
+  WORK_LOG_ACTION,
+  parseWorkLog,
+  countByKind,
+  WorkLogEntry,
+  PLATFORM_KINDS,
+} from '../routes/workLog';
 import { splitCalls } from './lead/calls';
 import { measureMetric } from './targets.service';
+import { doneUpdatesAsWorkLog } from './workUpdates';
 
 // The end-of-day report. Everything the CRM records is filled in by the
 // server ("recorded"); the person may type their own count beside it, plus
@@ -11,13 +18,11 @@ import { measureMetric } from './targets.service';
 // always judged on the recorded numbers.
 
 const p = prisma;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** [start, end) of an IST calendar day as real instants (today by default). */
 export function istDayRange(now = new Date()) {
-  const { dateString } = getISTComponents(now);
-  const start = new Date(`${dateString}T00:00:00+05:30`);
-  return { start, end: new Date(start.getTime() + DAY_MS), dateString };
+  const { start, end, startDate } = periodContaining('DAY', now);
+  return { start, end, dateString: startDate };
 }
 
 /**
@@ -37,7 +42,8 @@ export async function verifiedActivityToday(employeeId: number) {
     p.leadActivity.findMany({
       where: {
         actor_id: employeeId,
-        activity_type: { notIn: ['LEAD_CREATED', 'ASSIGNED_TO_AGENT'] },
+        // An associate's report entered by a CPM is not work on the customer.
+        activity_type: { notIn: ['LEAD_CREATED', 'ASSIGNED_TO_AGENT', 'ASSOCIATE_REPORT'] },
         created_at: { gte: start, lt: end },
       },
       select: { lead_id: true },
@@ -49,10 +55,15 @@ export async function verifiedActivityToday(employeeId: number) {
     }),
     splitCalls(employeeId, start, end),
   ]);
-  const workLog = countByKind(workLogRows.map(parseWorkLog).filter((e): e is WorkLogEntry => !!e));
-  // Calls to associates (Channel Partner Managers) are calls too.
-  const calls = loggedCalls + (workLog.ASSOCIATE_CALL || 0) + (workLog.ASSOCIATE_NEW_CALL || 0);
-  return { calls, ...split, leads_worked: leadsWorked.length, work_log: workLog };
+  // Finished work updates (digital team, 2026-11-16) count like work log entries.
+  const done = await doneUpdatesAsWorkLog([employeeId], start, end);
+  const workLog = countByKind([
+    ...workLogRows.map(parseWorkLog).filter((e): e is WorkLogEntry => !!e),
+    ...done,
+  ]);
+  // Only recorded calls are judged. Typed work log numbers (calls to associates) stay in
+  // work_log, where the report shows them separately.
+  return { calls: loggedCalls, ...split, leads_worked: leadsWorked.length, work_log: workLog };
 }
 
 type Verified = Awaited<ReturnType<typeof verifiedActivityToday>>;
@@ -157,7 +168,52 @@ const F = {
     recorded: workLogSum(['INSTAGRAM_REEL', 'YOUTUBE_VIDEO']),
   },
   stories: { id: 'stories', label: 'Stories', recorded: workLogSum(['INSTAGRAM_STORY']) },
+  // Per platform (item 1, 2026-11-15). New ids, so reports saved with the old
+  // combined "posts" / "reels" fields still read (see FIELD_LABELS).
+  instagram: {
+    id: 'posts_instagram',
+    label: 'Instagram posts & reels',
+    recorded: workLogSum([...PLATFORM_KINDS.INSTAGRAM]),
+  },
+  facebook: {
+    id: 'posts_facebook',
+    label: 'Facebook posts & reels',
+    recorded: workLogSum([...PLATFORM_KINDS.FACEBOOK]),
+  },
+  youtube: {
+    id: 'posts_youtube',
+    label: 'YouTube videos & shorts',
+    recorded: workLogSum([...PLATFORM_KINDS.YOUTUBE]),
+  },
+  pinterest: {
+    id: 'posts_pinterest',
+    label: 'Pinterest pins',
+    recorded: workLogSum([...PLATFORM_KINDS.PINTEREST]),
+  },
+  linkedin: {
+    id: 'posts_linkedin',
+    label: 'LinkedIn posts',
+    recorded: workLogSum([...PLATFORM_KINDS.LINKEDIN]),
+  },
+  whatsappImages: {
+    id: 'whatsapp_quotes',
+    label: 'WhatsApp quote images',
+    recorded: workLogSum([...PLATFORM_KINDS.WHATSAPP_IMAGES]),
+  },
   ads: { id: 'ad_campaigns', label: 'Ad campaigns', recorded: workLogSum(['AD_CAMPAIGN']) },
+  otherWork: {
+    id: 'other_work',
+    label: 'Designs, edits, shoots and other tasks finished',
+    recorded: workLogSum([
+      'CONTENT_DESIGN',
+      'VIDEO_EDITING',
+      'PHOTO_SHOOT',
+      'WEBSITE_UPDATE',
+      'WHATSAPP_BROADCAST',
+      'CLIENT_MEETING',
+      'OTHER',
+    ]),
+  },
   leadsFromAds: {
     id: 'leads_from_ads',
     label: 'Leads from ads today (whole company)',
@@ -200,19 +256,68 @@ const F = {
   },
 } satisfies Record<string, FieldDef>;
 
+/**
+ * Calls to associates logged as follow-ups today (one call is one call,
+ * however many leads were discussed). These are associate follow-ups: they
+ * count here, never in the customer call numbers (`calls`, splitCalls).
+ * "first" = the first call ever to that associate.
+ */
+async function associateCalls(c: Ctx) {
+  const today = await p.associateFollowUp.findMany({
+    where: { employee_id: c.employeeId, channel: 'CALL', created_at: day(c) },
+    select: { associate_id: true },
+    orderBy: { id: 'asc' },
+  });
+  const ids = [...new Set(today.map((t) => t.associate_id))];
+  const before = ids.length
+    ? await p.associateFollowUp.findMany({
+        where: { associate_id: { in: ids }, channel: 'CALL', created_at: { lt: c.start } },
+        select: { associate_id: true },
+        distinct: ['associate_id'],
+      })
+    : [];
+  const called = new Set(before.map((b) => b.associate_id));
+  let first = 0;
+  for (const t of today) {
+    if (!called.has(t.associate_id)) first++;
+    called.add(t.associate_id);
+  }
+  return { first, repeat: today.length - first };
+}
+const withAssociateCalls =
+  (kinds: string[], part: 'first' | 'repeat' | 'all') => async (c: Ctx) => {
+    const n = await associateCalls(c);
+    const extra = part === 'all' ? n.first + n.repeat : n[part];
+    return workLogSum(kinds)(c) + extra;
+  };
+
 // Channel Partner Manager fields keep their ids (production reports use them).
-const CPM_FIELDS: FieldDef[] = (
-  [
-    ['existingProspectsFollowup', 'Existing prospects followed up', ['ASSOCIATE_CALL']],
-    ['newCalls', 'New calls (new associates)', ['ASSOCIATE_NEW_CALL']],
-    ['totalCalls', 'Total calls made', ['ASSOCIATE_CALL', 'ASSOCIATE_NEW_CALL']],
-    ['newProspects', 'New prospects', ['ASSOCIATE_PROSPECT']],
-    ['associateOfficeVisits', "Associates' office visits", ['ASSOCIATE_OFFICE_VISIT']],
-    ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT']],
-    ['associateSiteVisits', 'Associate site visits', ['ASSOCIATE_SITE_VISIT']],
-    ['bookings', 'Bookings', ['ASSOCIATE_BOOKING']],
-  ] as [string, string, string[]][]
-).map(([id, label, kinds]) => ({ id, label, recorded: workLogSum(kinds) }));
+const CPM_FIELDS: FieldDef[] = [
+  {
+    id: 'existingProspectsFollowup',
+    label: 'Existing prospects followed up',
+    recorded: withAssociateCalls(['ASSOCIATE_CALL'], 'repeat'),
+  },
+  {
+    id: 'newCalls',
+    label: 'New calls (new associates)',
+    recorded: withAssociateCalls(['ASSOCIATE_NEW_CALL'], 'first'),
+  },
+  {
+    id: 'totalCalls',
+    label: 'Total calls made',
+    recorded: withAssociateCalls(['ASSOCIATE_CALL', 'ASSOCIATE_NEW_CALL'], 'all'),
+  },
+  ...(
+    [
+      ['newProspects', 'New prospects', ['ASSOCIATE_PROSPECT']],
+      ['associateOfficeVisits', "Associates' office visits", ['ASSOCIATE_OFFICE_VISIT']],
+      ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT']],
+      ['associateSiteVisits', 'Associate site visits', ['ASSOCIATE_SITE_VISIT']],
+      ['bookings', 'Bookings', ['ASSOCIATE_BOOKING']],
+    ] as [string, string, string[]][]
+  ).map(([id, label, kinds]) => ({ id, label, recorded: workLogSum(kinds) })),
+];
 
 const typed = (
   id: string,
@@ -224,12 +329,19 @@ const typed = (
 
 const SALES = [F.calls, F.visitsDone, F.bookingsStarted];
 const DIGITAL = [
-  F.posts,
-  F.reels,
+  F.instagram,
+  F.facebook,
+  F.youtube,
+  F.pinterest,
+  F.linkedin,
+  F.whatsappImages,
   F.stories,
   F.ads,
+  F.otherWork,
   F.leadsFromAds,
-  typed('ad_spend', 'Ad spend today (₹)', 'MONEY', true, 'Enter 0 if nothing was spent.'),
+  // Filled from Work updates; the person only writes the summary (owner,
+  // 2026-11-16), so ad spend is no longer required.
+  typed('ad_spend', 'Ad spend today (₹)', 'MONEY', false, 'Leave empty if nothing was spent.'),
 ];
 
 /** The report's fields for each role (agreed with the user 2026-10-19). */
@@ -266,9 +378,7 @@ export const REPORT_FIELDS: Record<string, FieldDef[]> = {
 
 /** Field id -> label, for showing stored reports. */
 export const FIELD_LABELS: Record<string, string> = Object.fromEntries(
-  Object.values(REPORT_FIELDS)
-    .flat()
-    .map((f) => [f.id, f.label]),
+  [...Object.values(REPORT_FIELDS).flat(), F.posts, F.reels].map((f) => [f.id, f.label]),
 );
 
 // Ids from the old Target Configurator presets: the fields above replace them,
@@ -337,18 +447,14 @@ export async function judgeToday(employeeId: number, companyId: number, roleName
   const checks = target
     ? [
         { label: 'Calls logged in CRM', done: calls, target: target.calls_target },
+        { label: 'Follow-up calls', done: v.follow_up_calls, target: target.followups_target },
         { label: 'Site visits', done: visits, target: target.site_visits_target },
         { label: 'Bookings', done: deals, target: target.closed_deals_target },
       ].filter((x) => x.target > 0)
     : [];
   const missed = checks.filter((x) => x.done < x.target);
   const below = missed.length > 0;
-  const exceeded =
-    !!target &&
-    !below &&
-    (calls > target.calls_target ||
-      visits > target.site_visits_target ||
-      deals > target.closed_deals_target);
+  const exceeded = !below && checks.some((x) => x.done > x.target);
   return {
     verified: v,
     calls,

@@ -4,6 +4,8 @@ import { WorkflowEngine } from '../../workflows/workflowEngine';
 import { WorkflowDomain } from '../../workflows/types';
 import { SiteVisitAction } from '../../workflows/siteVisit.workflow';
 import { Roles } from '../../shared';
+import { Prisma } from '@prisma/client';
+import { buildSiteVisitScope } from '../../authz/dataScope';
 
 const p = prisma;
 
@@ -67,6 +69,39 @@ async function resolveFallbackPm(
   );
   loads.sort((a, b) => a.count - b.count);
   return loads[0].id;
+}
+
+/**
+ * Load a visit (with its lead) only if the caller is allowed to see it -- the
+ * booker, the owner of its lead, the PM it is or was routed to, its agent, or
+ * MD/Admin. Anything else is "not found", so a visit's existence is not
+ * revealed to people who are not part of it.
+ *
+ * `verifyAction`: for the confirm / reconfirm / reschedule actions
+ * (site_visits.verify), which only the person who booked the visit or the
+ * owner of its lead may do (MD/Admin aside). A PM or agent running the visit
+ * gets "not found" here.
+ */
+export async function findVisitForUser(
+  user: TokenPayload,
+  visitId: number,
+  opts: { verifyAction?: boolean } = {},
+) {
+  let where: Prisma.SiteVisitBookingWhereInput;
+  if (opts.verifyAction && !user.roles.includes(Roles.ADMIN) && !user.roles.includes(Roles.MD)) {
+    where = {
+      AND: [
+        { id: visitId },
+        await buildSiteVisitScope(user),
+        { OR: [{ telecaller_id: user.employeeId }, { lead: { assigned_to_id: user.employeeId } }] },
+      ],
+    };
+  } else {
+    where = { id: visitId, ...(await buildSiteVisitScope(user)) };
+  }
+  const visit = await p.siteVisitBooking.findFirst({ where, include: { lead: true } });
+  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  return visit;
 }
 
 export async function generateNextBookingCode(): Promise<string> {

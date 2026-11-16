@@ -4,7 +4,7 @@ import { blankAsAbsent } from './zodHelpers';
 // Project Constants & Schemas
 // MIXED/COMMERCIAL kept for backward compatibility with existing rows — see
 // the ProjectType enum's own comment in schema.prisma (spec item 1.6).
-const ProjectTypeEnum = z.enum([
+export const ProjectTypeEnum = z.enum([
   'PLOTTED',
   'APARTMENT',
   'VILLA',

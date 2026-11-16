@@ -38,7 +38,7 @@ export const CONVERTIBLE_STATES = [
 const DIRECT_OPEN_STATES = ['CONFIRMED', 'PENDING_CUSTOMER_RECONFIRMATION', 'ON_HOLD'];
 
 const isManagement = (user: TokenPayload) =>
-  user.roles.some((r) => [Roles.MD, Roles.ADMIN, Roles.MARKETING_DIRECTOR].includes(r as any));
+  user.roles.some((r) => [Roles.MD, Roles.ADMIN].includes(r as any));
 
 async function loadVisit(user: TokenPayload, visitId: number) {
   const visit = await p.siteVisitBooking.findFirst({

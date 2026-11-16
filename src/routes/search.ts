@@ -1,3 +1,4 @@
+import { pmScope } from '../authz/pmScope';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
@@ -65,8 +66,13 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Respon
         : [],
       canBookings
         ? prisma.booking.findMany({
-            // Same visibility as the bookings list: the whole company.
-            where: { company_id: user.companyId, booking_code: { contains: q } },
+            // Same visibility as the bookings list: the whole company
+            // (narrowed for a PM when the switch is on).
+            where: {
+              company_id: user.companyId,
+              booking_code: { contains: q },
+              ...pmScope.booking(user),
+            },
             take: 5,
             select: {
               id: true,

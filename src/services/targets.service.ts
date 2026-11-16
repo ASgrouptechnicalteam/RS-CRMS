@@ -1,5 +1,13 @@
 import { prisma } from '../lib/prisma';
-import { getISTComponents } from '../utils/time';
+import { periodContaining } from './counts/period';
+import { DEAL_STATUSES } from './counts/deals';
+import { PLATFORM_KINDS, Platform, WORK_LOG_ACTION, parseWorkLog } from '../routes/workLog';
+import {
+  bookingIdsConfirmedIn,
+  visitBookedWhere,
+  visitDoneBy,
+  visitDoneWhere,
+} from './counts/metrics';
 
 const p = prisma;
 
@@ -8,6 +16,14 @@ export const TARGET_METRICS = [
   'VISITS_BOOKED',
   'VISITS_COMPLETED',
   'BOOKINGS_CONFIRMED',
+  'DRAFTS_READY',
+  // Item 1 (2026-11-15): digital work per platform, from the work log.
+  'POSTS_INSTAGRAM',
+  'POSTS_FACEBOOK',
+  'POSTS_YOUTUBE',
+  'POSTS_PINTEREST',
+  'POSTS_LINKEDIN',
+  'WHATSAPP_QUOTES',
 ] as const;
 export const TARGET_PERIODS = ['DAY', 'WEEK', 'MONTH'] as const;
 export type TargetMetric = (typeof TARGET_METRICS)[number];
@@ -18,36 +34,32 @@ export const METRIC_LABELS: Record<TargetMetric, string> = {
   VISITS_BOOKED: 'Site visits booked',
   VISITS_COMPLETED: 'Site visits completed',
   BOOKINGS_CONFIRMED: 'Bookings confirmed',
+  DRAFTS_READY: 'Drafts ready in CRM',
+  POSTS_INSTAGRAM: 'Instagram posts and reels',
+  POSTS_FACEBOOK: 'Facebook posts and reels',
+  POSTS_YOUTUBE: 'YouTube videos and shorts',
+  POSTS_PINTEREST: 'Pinterest pins',
+  POSTS_LINKEDIN: 'LinkedIn posts',
+  WHATSAPP_QUOTES: 'WhatsApp quote images',
 };
 
-const IST_OFFSET = '+05:30';
-const DAY_MS = 24 * 3600 * 1000;
-
-/** Midnight (IST) of the day containing `d`, as a real instant. */
-const istMidnight = (d: Date) =>
-  new Date(`${getISTComponents(d).dateString}T00:00:00${IST_OFFSET}`);
+/** Target metric -> the work-log platform it counts. */
+export const PLATFORM_METRICS: Record<string, Platform> = {
+  POSTS_INSTAGRAM: 'INSTAGRAM',
+  POSTS_FACEBOOK: 'FACEBOOK',
+  POSTS_YOUTUBE: 'YOUTUBE',
+  POSTS_PINTEREST: 'PINTEREST',
+  POSTS_LINKEDIN: 'LINKEDIN',
+  WHATSAPP_QUOTES: 'WHATSAPP_IMAGES',
+};
 
 /**
  * The IST window for a period: the day, the week (Monday to the next Monday) or
- * the calendar month containing `now`. End is exclusive.
+ * the calendar month containing `now`. End is exclusive. (services/counts/period.ts)
  */
 export function periodRange(period: TargetPeriod, now: Date = new Date()) {
-  const today = istMidnight(now);
-  if (period === 'DAY') return { start: today, end: new Date(today.getTime() + DAY_MS) };
-
-  const [y, m, d] = getISTComponents(now).dateString.split('-').map(Number);
-  if (period === 'WEEK') {
-    // UTC day-of-week of the IST calendar date (0 = Sunday); Monday starts the week.
-    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-    const back = (dow + 6) % 7;
-    const start = new Date(today.getTime() - back * DAY_MS);
-    return { start, end: new Date(start.getTime() + 7 * DAY_MS) };
-  }
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const start = new Date(`${y}-${pad(m)}-01T00:00:00${IST_OFFSET}`);
-  const ny = m === 12 ? y + 1 : y;
-  const nm = m === 12 ? 1 : m + 1;
-  return { start, end: new Date(`${ny}-${pad(nm)}-01T00:00:00${IST_OFFSET}`) };
+  const { start, end } = periodContaining(period, now);
+  return { start, end };
 }
 
 /**
@@ -56,6 +68,8 @@ export function periodRange(period: TargetPeriod, now: Date = new Date()) {
  *  - VISITS_BOOKED: visits this person booked (walk-ins are not "booked"; cancelled ones do not count).
  *  - VISITS_COMPLETED: visits this person ran (the agent, else the project manager), by the day they were completed.
  *  - BOOKINGS_CONFIRMED: bookings credited to this person, by the day the booking was confirmed.
+ *  - DRAFTS_READY: drafts this person submitted that reached Ready in CRM, by the day they got there.
+ *    Submitting or being picked up earns nothing, so a junk draft cannot count.
  */
 export async function measureMetric(
   employeeId: number,
@@ -63,6 +77,20 @@ export async function measureMetric(
   start: Date,
   end: Date,
 ): Promise<number> {
+  const platform = PLATFORM_METRICS[metric];
+  if (platform) {
+    // Sum of the count on this person's work-log entries for that platform
+    // (index AuditEvent[actor_id, action, created_at]).
+    const rows = await p.auditEvent.findMany({
+      where: { actor_id: employeeId, action: WORK_LOG_ACTION, created_at: { gte: start, lt: end } },
+      select: { id: true, new_value: true, created_at: true },
+    });
+    const kinds: readonly string[] = PLATFORM_KINDS[platform];
+    return rows
+      .map(parseWorkLog)
+      .filter((e) => e && kinds.includes(e.kind))
+      .reduce((n, e) => n + (e?.count || 0), 0);
+  }
   switch (metric) {
     case 'CALLS':
       return p.leadActivity.count({
@@ -74,36 +102,29 @@ export async function measureMetric(
       });
     case 'VISITS_BOOKED':
       return p.siteVisitBooking.count({
-        where: {
-          telecaller_id: employeeId,
-          visit_type: { in: ['SCHEDULED', 'DIRECT'] },
-          status: { not: 'CANCELLED' },
-          created_at: { gte: start, lt: end },
-        },
+        where: { telecaller_id: employeeId, ...visitBookedWhere({ start, end }) },
       });
     case 'VISITS_COMPLETED':
       return p.siteVisitBooking.count({
+        where: { ...visitDoneWhere({ start, end }), ...visitDoneBy(employeeId) },
+      });
+    case 'DRAFTS_READY':
+      return p.draftSubmission.count({
         where: {
-          visit_type: 'SCHEDULED',
-          status: 'COMPLETED',
-          completed_at: { gte: start, lt: end },
-          OR: [
-            { assigned_agent_id: employeeId },
-            { assigned_agent_id: null, project_manager_id: employeeId },
-          ],
+          submitted_by: employeeId,
+          status: 'READY_IN_CRM',
+          ready_at: { gte: start, lt: end },
         },
       });
     case 'BOOKINGS_CONFIRMED': {
-      const events = await p.auditEvent.findMany({
-        where: { action: 'BOOKING_CONFIRMED', created_at: { gte: start, lt: end } },
-        select: { entity_id: true },
-      });
-      const ids = [...new Set(events.map((e) => e.entity_id).filter((id): id is number => !!id))];
+      const ids = [...(await bookingIdsConfirmedIn({ start, end })).keys()];
       if (ids.length === 0) return 0;
       return p.booking.count({
-        where: { id: { in: ids }, assigned_employee_id: employeeId, status: { not: 'CANCELLED' } },
+        where: { id: { in: ids }, assigned_employee_id: employeeId, status: { in: DEAL_STATUSES } },
       });
     }
+    default:
+      return 0;
   }
 }
 
@@ -128,20 +149,26 @@ export interface TargetProgress {
  * for leave and holidays yet); one whose dates have not started or have ended
  * is not shown.
  */
-export async function progressFor(
-  employee: { id: number; company_id: number; roles: string[] },
-  now: Date = new Date(),
-): Promise<TargetProgress[]> {
-  const rows = await p.performanceTarget.findMany({
-    where: {
-      company_id: employee.company_id,
-      is_active: true,
-      OR: [{ employee_id: employee.id }, { employee_id: null, role_name: { in: employee.roles } }],
-    },
-  });
+type TargetRow = {
+  id: number;
+  employee_id: number | null;
+  role_name: string | null;
+  metric: string;
+  period: string;
+  value: number;
+  valid_from: Date;
+  valid_to: Date | null;
+};
 
-  const chosen = new Map<string, (typeof rows)[number]>();
+/**
+ * Which of these target rows apply to one person now: a person's own target
+ * replaces their role's for the same metric+period; several roles take the
+ * highest. Rows must already be limited to this person and their roles.
+ */
+export function chooseTargets<T extends TargetRow>(rows: T[], employeeId: number, now: Date) {
+  const chosen = new Map<string, T>();
   for (const t of rows) {
+    if (t.employee_id && t.employee_id !== employeeId) continue;
     const range = periodRange(t.period as TargetPeriod, now);
     const started = t.valid_from.getTime() < range.end.getTime();
     const notEnded = !t.valid_to || t.valid_to.getTime() >= range.start.getTime();
@@ -156,6 +183,22 @@ export async function progressFor(
       chosen.set(key, t);
     }
   }
+  return chosen;
+}
+
+export async function progressFor(
+  employee: { id: number; company_id: number; roles: string[] },
+  now: Date = new Date(),
+): Promise<TargetProgress[]> {
+  const rows = await p.performanceTarget.findMany({
+    where: {
+      company_id: employee.company_id,
+      is_active: true,
+      OR: [{ employee_id: employee.id }, { employee_id: null, role_name: { in: employee.roles } }],
+    },
+  });
+
+  const chosen = chooseTargets(rows, employee.id, now);
 
   const out: TargetProgress[] = [];
   for (const t of chosen.values()) {

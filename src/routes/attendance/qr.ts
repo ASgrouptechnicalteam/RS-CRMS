@@ -308,16 +308,22 @@ router.post(
       // Load employee and verify Tenant Isolation & Status
       const scannedEmployee = await p.employee.findUnique({
         where: { id: targetEmployeeId },
+        include: { roles: { select: { role: { select: { name: true } } } } },
       });
 
       if (!scannedEmployee) return res.status(404).json({ error: 'Employee not found' });
       if (scannedEmployee.company_id !== targetCompanyId) {
         return res.status(403).json({ error: 'Company mismatch.' });
       }
+      // An external channel partner is welcome at the office but has no
+      // attendance: the scan records presence only (item 5, 2026-11-15).
+      const presenceOnly = scannedEmployee.roles.some(
+        (r) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL,
+      );
       if (
         scannedEmployee.status !== 'ACTIVE' ||
         lastWorkingDayPassed(scannedEmployee.last_working_day) ||
-        !scannedEmployee.attendance_required
+        (!scannedEmployee.attendance_required && !presenceOnly)
       ) {
         return res.status(403).json({ error: 'Not eligible for attendance.' });
       }
@@ -329,6 +335,28 @@ router.post(
           req.kiosk!.kioskCredentialId,
         );
         if (!access.ok) return res.status(access.status).json(access.body);
+      }
+
+      if (presenceOnly) {
+        // No AttendanceLog: nothing late, absent, checked out or reported.
+        const { timeString } = getISTComponents(new Date());
+        await p.auditEvent.create({
+          data: {
+            actor_id: scannedEmployee.id,
+            action: 'OFFICE_PRESENCE',
+            entity_type: 'EMPLOYEE',
+            entity_id: scannedEmployee.id,
+            company_id: scannedEmployee.company_id,
+            new_value: JSON.stringify({ branch_id: branchId, at: new Date().toISOString() }),
+          },
+        });
+        return res.status(200).json({
+          message: `Welcome, ${scannedEmployee.full_name || 'partner'}. Your visit is noted.`,
+          alreadyStamped: false,
+          presenceOnly: true,
+          timeIST: timeString,
+          full_name: scannedEmployee.full_name,
+        });
       }
 
       const now = new Date();
@@ -516,11 +544,13 @@ router.post(
               },
             },
           });
-          return res.status(400).json({
-            error: waiting
-              ? 'Your early logout request is waiting for the MD to approve it.'
-              : 'Logout is not allowed before 18:00 IST without an emergency request',
-          });
+          // A request still waiting for the MD never blocks the scan: the
+          // person leaves, and the request stays in the MD's approvals.
+          if (!waiting) {
+            return res.status(400).json({
+              error: 'Logout is not allowed before 18:00 IST without an emergency request',
+            });
+          }
         }
       }
 

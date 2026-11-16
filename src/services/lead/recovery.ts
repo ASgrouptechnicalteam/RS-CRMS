@@ -199,7 +199,7 @@ export async function recoverManualLead(user: TokenPayload, leadId: number) {
       data: {
         lead_id: leadId,
         actor_id: user.employeeId || 1,
-        activity_type: 'CALL_LOGGED',
+        activity_type: 'CONTACT_RECORDED', // Not a call: nobody rang the customer.
         notes: 'Initial contact logged upon manual recovery.',
       },
     });
@@ -251,7 +251,7 @@ export async function recoverFreshLead(user: TokenPayload, leadId: number) {
       data: {
         lead_id: freshLead.id,
         actor_id: user.employeeId || 1,
-        activity_type: 'CALL_LOGGED',
+        activity_type: 'CONTACT_RECORDED', // Not a call: nobody rang the customer.
         notes: 'Initial contact logged for fresh start.',
       },
     });

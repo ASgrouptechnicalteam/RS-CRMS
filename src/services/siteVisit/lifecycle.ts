@@ -5,7 +5,7 @@ import { can } from '../../authz/authorization';
 import { WorkflowEngine } from '../../workflows/workflowEngine';
 import { WorkflowDomain } from '../../workflows/types';
 import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
-import { applyTransition, dropReasonFromOutcomes } from './shared';
+import { applyTransition, dropReasonFromOutcomes, findVisitForUser } from './shared';
 import { createFeedbackRequest, dispatchFeedbackRequestNotification } from '../feedback.service';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
@@ -15,11 +15,7 @@ const p = prisma;
 
 /** accept: PM/Agent accepts the routed visit. */
 export async function acceptVisit(user: TokenPayload, visitId: number, notes?: string) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!can(user, Permissions.SITE_VISITS_ACCEPT, visit)) {
     throw { status: 403, message: 'Forbidden: Missing permission to accept site visits' };
   }
@@ -27,13 +23,19 @@ export async function acceptVisit(user: TokenPayload, visitId: number, notes?: s
     throw { status: 403, message: 'Forbidden: only the routed PM/Agent may accept this visit' };
   }
 
+  const me = await p.employee.findUnique({
+    where: { id: user.employeeId },
+    select: { full_name: true, employee_code: true },
+  });
+  const who = me?.full_name || me?.employee_code || user.employeeCode;
+
   return applyTransition(
     user,
     visitId,
     'ACCEPT',
     { project_manager_id: user.employeeId },
     'SITE_VISIT_ACCEPTED',
-    `Site visit ${visit.booking_code} accepted by ${user.employeeId}.${notes ? ` Notes: ${notes}` : ''}`,
+    `Site visit ${visit.booking_code} accepted by ${who}.${notes ? ` Notes: ${notes}` : ''}`,
   );
 }
 
@@ -44,11 +46,13 @@ export async function reassignVisit(
   toEmployeeId: number,
   reason: string,
 ) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
+  if (!SiteVisitPolicy.canRouteVisit(user, visit)) {
+    throw {
+      status: 403,
+      message: 'Forbidden: only the project manager this visit is routed to can pass it on',
+    };
+  }
 
   const targetWithRoles = await p.employee.findFirst({
     where: { id: toEmployeeId },
@@ -141,11 +145,13 @@ export async function reassignVisit(
 
 /** escalate: no PM/Agent available → Marketing Director for manual resolution. */
 export async function escalateVisit(user: TokenPayload, visitId: number, reason: string) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
+  if (!SiteVisitPolicy.canRouteVisit(user, visit)) {
+    throw {
+      status: 403,
+      message: 'Forbidden: only the project manager this visit is routed to can pass it on',
+    };
+  }
 
   const transition = WorkflowEngine.canTransition({
     domain: WorkflowDomain.SITE_VISIT,
@@ -159,8 +165,14 @@ export async function escalateVisit(user: TokenPayload, visitId: number, reason:
   }
 
   return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
-    const md = await tx.employee.findFirst({
-      where: { roles: { some: { role: { name: Roles.MARKETING_DIRECTOR } } } },
+    // Escalated visits go to the MD(s) of the visit's company.
+    const mds = await tx.employee.findMany({
+      where: {
+        status: 'ACTIVE',
+        company_id: visit.lead.company_id,
+        roles: { some: { role: { name: Roles.MD } } },
+      },
+      select: { id: true },
     });
 
     const updated = await tx.siteVisitBooking.update({
@@ -173,29 +185,31 @@ export async function escalateVisit(user: TokenPayload, visitId: number, reason:
         lead: { connect: { id: visit.lead_id } },
         actor: { connect: { id: user.employeeId } },
         activity_type: 'SITE_VISIT_ESCALATED',
-        notes: `Site visit ${visit.booking_code} escalated to Marketing Director. Reason: ${reason}`,
+        notes: `Site visit ${visit.booking_code} escalated to the MD. Reason: ${reason}`,
       },
     });
 
-    if (md) {
-      await tx.notification.create({
-        data: {
-          employee_id: md.id,
-          type: 'SYSTEM_ALERT',
+    if (mds.length > 0) {
+      await tx.notification.createMany({
+        data: mds.map((m) => ({
+          employee_id: m.id,
+          type: 'SYSTEM_ALERT' as const,
           title: 'Site Visit Escalated',
           message: `Site visit ${visit.booking_code} could not be assigned to a PM/Agent. Reason: ${reason}`,
-        },
+        })),
       });
-      // Web push to Marketing Director (outside transaction)
-      notifyEmployee(
-        md.id,
-        {
-          type: 'SYSTEM_ALERT',
-          title: 'Site Visit Escalated',
-          message: `Site visit ${visit.booking_code} escalated — no PM/Agent available.`,
-        },
-        { skipDbNotification: true },
-      ).catch((err) => logger.error('[WebPush] Site visit escalate:', err));
+      // Web push to the MD(s) (outside transaction)
+      for (const m of mds) {
+        notifyEmployee(
+          m.id,
+          {
+            type: 'SYSTEM_ALERT',
+            title: 'Site Visit Escalated',
+            message: `Site visit ${visit.booking_code} escalated — no PM/Agent available.`,
+          },
+          { skipDbNotification: true },
+        ).catch((err) => logger.error('[WebPush] Site visit escalate:', err));
+      }
     }
 
     return updated;
@@ -204,11 +218,7 @@ export async function escalateVisit(user: TokenPayload, visitId: number, reason:
 
 /** Telecaller triggers day-before reconfirmation call. */
 export async function reconfirmCustomer(user: TokenPayload, visitId: number) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId, { verifyAction: true });
   if (!can(user, Permissions.SITE_VISITS_VERIFY, visit)) {
     throw { status: 403, message: 'Forbidden: Missing site_visits.verify permission' };
   }
@@ -228,11 +238,7 @@ export async function rescheduleVisit(
   visitId: number,
   data: { scheduled_date?: string; property_ids?: number[]; project_unit_ids?: number[] },
 ) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId, { verifyAction: true });
   if (!can(user, Permissions.SITE_VISITS_VERIFY, visit)) {
     throw { status: 403, message: 'Forbidden: Missing site_visits.verify permission' };
   }
@@ -290,11 +296,7 @@ export async function rescheduleVisit(
 
 /** PM confirms or releases after a reschedule (PENDING_PM_RECONFIRMATION). */
 export async function pmReconfirm(user: TokenPayload, visitId: number, release: boolean) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!SiteVisitPolicy.canAccept(user, visit)) {
     throw { status: 403, message: 'Forbidden: only the PM may reconfirm this visit' };
   }
@@ -348,11 +350,7 @@ export async function pmReconfirm(user: TokenPayload, visitId: number, release: 
 
 /** confirm: PENDING_CUSTOMER_RECONFIRMATION / RESCHEDULE_REQUESTED → CONFIRMED. */
 export async function confirmVisit(user: TokenPayload, visitId: number) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId, { verifyAction: true });
   if (!can(user, Permissions.SITE_VISITS_VERIFY, visit)) {
     throw { status: 403, message: 'Forbidden: Missing site_visits.verify permission' };
   }
@@ -380,11 +378,7 @@ export async function assignAgent(
   visitId: number,
   input: { agent_id?: number; self?: boolean; notes?: string },
 ) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
 
   const agentId = input.self ? user.employeeId : input.agent_id!;
   const agentRow = await p.employee.findFirst({
@@ -402,8 +396,11 @@ export async function assignAgent(
     throw { status: 403, message: "Forbidden: only this visit's PM can choose who runs it" };
   }
   const agentRoles = (agentRow.roles || []).map((er: any) => er.role?.name).filter(Boolean);
-  if (!SiteVisitPolicy.canReassignTarget(user, { id: agentRow.id, roles: agentRoles })) {
-    throw { status: 400, message: 'Only a Project Manager or Agent can run a site visit' };
+  if (!SiteVisitPolicy.canRunVisit({ roles: agentRoles })) {
+    throw {
+      status: 400,
+      message: 'Only a Project Manager, an Agent or a channel partner can run a site visit',
+    };
   }
   if (!AGENT_ASSIGNABLE_STATUSES.includes(visit.status)) {
     throw {
@@ -468,11 +465,7 @@ export async function assignAgent(
 
 /** start: CONFIRMED → ACTIVE (day-of). */
 export async function startVisit(user: TokenPayload, visitId: number) {
-  const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
-    include: { lead: true },
-  });
-  if (!visit) throw { status: 404, message: 'Site visit booking not found' };
+  const visit = await findVisitForUser(user, visitId);
   if (!can(user, Permissions.SITE_VISITS_COMPLETE, visit)) {
     throw { status: 403, message: 'Forbidden: Missing site_visits.complete permission' };
   }
@@ -518,8 +511,9 @@ export async function completeVisit(
   proof_photo_url?: string,
   rating?: string,
 ) {
+  await findVisitForUser(user, visitId);
   const visit = await p.siteVisitBooking.findFirst({
-    where: { id: visitId, lead: {} },
+    where: { id: visitId },
     include: { lead: true, site_visit_properties: true },
   });
   if (!visit) throw { status: 404, message: 'Site visit booking not found' };

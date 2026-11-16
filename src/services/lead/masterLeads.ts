@@ -5,6 +5,7 @@ import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { Roles, DO_NOT_CALL_EXIT_REASONS } from '../../shared';
 import { AppError } from './errors';
+import { followUpsDue } from '../counts/followUps';
 
 const p = prisma;
 
@@ -36,13 +37,67 @@ export const uncalledAssigned = (employeeId: number) => ({
   activities: { none: { activity_type: 'CALL_LOGGED' } },
 });
 
+const activeGroup = async (user: TokenPayload, groupId: number) => {
+  const group = await p.masterLeadGroup.findFirst({
+    where: { id: groupId, company_id: user.companyId, is_active: true },
+  });
+  if (!group) throw new AppError(404, 'That group was not found');
+  return group;
+};
+
+const isDuplicateKey = (e: unknown) => (e as { code?: string })?.code === 'P2002';
+
+export async function createGroup(user: TokenPayload, input: { name: string }) {
+  const name = text(input.name, 80);
+  if (name.length < 2) throw new AppError(400, 'Enter a group name');
+  try {
+    return await p.masterLeadGroup.create({
+      data: { company_id: user.companyId, name, created_by_id: user.employeeId },
+    });
+  } catch (e) {
+    if (isDuplicateKey(e)) throw new AppError(409, 'A group with this name already exists');
+    throw e;
+  }
+}
+
+/** Rename, or retire a group. A retired group keeps its numbers but takes no new work. */
+export async function updateGroup(
+  user: TokenPayload,
+  groupId: number,
+  input: { name?: string; is_active?: boolean },
+) {
+  const group = await p.masterLeadGroup.findFirst({
+    where: { id: groupId, company_id: user.companyId },
+  });
+  if (!group) throw new AppError(404, 'That group was not found');
+  const name = input.name === undefined ? undefined : text(input.name, 80);
+  if (name !== undefined && name.length < 2) throw new AppError(400, 'Enter a group name');
+  try {
+    return await p.masterLeadGroup.update({
+      where: { id: groupId },
+      data: { name, is_active: input.is_active },
+    });
+  } catch (e) {
+    if (isDuplicateKey(e)) throw new AppError(409, 'A group with this name already exists');
+    throw e;
+  }
+}
+
 export async function startBatch(
   user: TokenPayload,
-  input: { file_name: string; file_size?: number; source?: string; source_detail?: string },
+  input: {
+    group_id: number;
+    file_name: string;
+    file_size?: number;
+    source?: string;
+    source_detail?: string;
+  },
 ) {
+  await activeGroup(user, input.group_id);
   return p.masterLeadBatch.create({
     data: {
       company_id: user.companyId,
+      group_id: input.group_id,
       file_name: text(input.file_name, 200) || 'Upload',
       file_size: BigInt(Math.max(0, Math.floor(input.file_size || 0))),
       source: text(input.source, 40) || 'BULK_UPLOAD',
@@ -83,6 +138,7 @@ export async function addRows(
   const seen = new Set<string>();
   const data: {
     company_id: number;
+    group_id: number;
     batch_id: number;
     phone: string;
     name: string | null;
@@ -100,6 +156,7 @@ export async function addRows(
     seen.add(phone);
     data.push({
       company_id: user.companyId,
+      group_id: batch.group_id,
       batch_id: batchId,
       phone,
       name: text(row.customer_name ?? row.name, 100) || null,
@@ -108,6 +165,16 @@ export async function addRows(
       notes: text(row.notes, 255) || null,
     });
   }
+
+  // First group wins: a number already held stays where it is, and the upload says where.
+  const held = data.length
+    ? await p.masterLead.findMany({
+        where: { company_id: user.companyId, phone: { in: data.map((d) => d.phone) } },
+        select: { group_id: true },
+      })
+    : [];
+  const repeats: Record<string, number> = { ...((batch.repeats_by_group as object) || {}) };
+  for (const h of held) repeats[h.group_id] = (repeats[h.group_id] || 0) + 1;
 
   const created = data.length
     ? (await p.masterLead.createMany({ data, skipDuplicates: true })).count
@@ -119,6 +186,7 @@ export async function addRows(
       added: { increment: created },
       failed: { increment: failed },
       duplicates: { increment: input.rows.length - failed - created },
+      repeats_by_group: repeats,
       ...(input.done ? { completed_at: new Date() } : {}),
     },
   });
@@ -136,7 +204,11 @@ const batchView = (b: any) => ({ ...b, file_size: Number(b.file_size) });
 /** Totals from the upload counters (never a count over the whole table). */
 export async function getOverview(user: TokenPayload) {
   const today = dayStart();
-  const [batches, telecallers] = await Promise.all([
+  const [groups, batches, telecallers] = await Promise.all([
+    p.masterLeadGroup.findMany({
+      where: { company_id: user.companyId },
+      orderBy: { name: 'asc' },
+    }),
     p.masterLeadBatch.findMany({
       where: { company_id: user.companyId },
       orderBy: { created_at: 'desc' },
@@ -153,7 +225,7 @@ export async function getOverview(user: TokenPayload) {
   ]);
 
   const ids = telecallers.map((t) => t.id);
-  const [left, assignedToday, followUps] = await Promise.all([
+  const [left, assignedToday, due] = await Promise.all([
     p.lead.findMany({
       where: {
         company_id: user.companyId,
@@ -174,24 +246,24 @@ export async function getOverview(user: TokenPayload) {
       },
       _count: { _all: true },
     }),
-    p.task.groupBy({
-      by: ['assignee_id'],
-      where: {
-        assignee_id: { in: ids },
-        lead_id: { not: null },
-        target_date: { lt: new Date(today.getTime() + 24 * 3600 * 1000) },
-        status: { notIn: ['COMPLETED', 'CANCELLED', 'NOT_COMPLETED', 'BLOCKED'] },
-      },
-      _count: { _all: true },
-    }),
+    followUpsDue(ids, user.companyId),
   ]);
 
-  const added = batches.reduce((n, b) => n + b.added, 0);
-  const assigned = batches.reduce((n, b) => n + b.assigned_count, 0);
-  const skipped = batches.reduce((n, b) => n + b.skipped_count, 0);
+  const totalsFor = (rows: typeof batches) => {
+    const added = rows.reduce((n, b) => n + b.added, 0);
+    const assigned = rows.reduce((n, b) => n + b.assigned_count, 0);
+    const skipped = rows.reduce((n, b) => n + b.skipped_count, 0);
+    return { added, assigned, skipped, unassigned: Math.max(0, added - assigned - skipped) };
+  };
 
   return {
-    totals: { added, assigned, skipped, unassigned: Math.max(0, added - assigned - skipped) },
+    totals: totalsFor(batches),
+    groups: groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      is_active: g.is_active,
+      ...totalsFor(batches.filter((b) => b.group_id === g.id)),
+    })),
     batches: batches.map(batchView),
     telecallers: telecallers.map((t) => {
       const mine = left.filter((l) => l.assigned_to_id === t.id);
@@ -200,17 +272,29 @@ export async function getOverview(user: TokenPayload) {
         assigned_today: assignedToday.find((a) => a.assigned_to_id === t.id)?._count._all || 0,
         left: mine.length,
         overdue: mine.filter((l) => !l.assigned_at || l.assigned_at < today).length,
-        follow_ups_due: followUps.find((f) => f.assignee_id === t.id)?._count._all || 0,
+        follow_ups_due: due.get(t.id)?.total || 0,
       };
     }),
   };
 }
 
-/** Moves up to `count` of the oldest unassigned numbers to one telecaller. */
+/** The usual ways one mobile number gets typed into a lead, for an indexed exact match. */
+const phoneForms = (phone: string) => [
+  phone,
+  `91${phone}`,
+  `+91${phone}`,
+  `+91 ${phone}`,
+  `0${phone}`,
+  `${phone.slice(0, 5)} ${phone.slice(5)}`,
+  `+91 ${phone.slice(0, 5)} ${phone.slice(5)}`,
+];
+
+/** Moves up to `count` of the oldest unassigned numbers in one group to one telecaller. */
 async function assignTo(
   user: TokenPayload,
   employee: { id: number },
   count: number,
+  group: { id: number; name: string },
   batchId?: number,
 ) {
   let given = 0;
@@ -235,19 +319,24 @@ async function assignTo(
           }[]
         >(
           `SELECT id, batch_id, phone, name, email, location, notes FROM MasterLead
-           WHERE company_id = ? AND status = 'NEW' ${batchId ? 'AND batch_id = ?' : ''}
+           WHERE company_id = ? AND group_id = ? AND status = 'NEW' ${batchId ? 'AND batch_id = ?' : ''}
            ORDER BY id LIMIT ? FOR UPDATE`,
-          ...(batchId ? [user.companyId, batchId, step] : [user.companyId, step]),
+          ...(batchId
+            ? [user.companyId, group.id, batchId, step]
+            : [user.companyId, group.id, step]),
         );
         if (rows.length < step) empty = true;
         if (!rows.length) return;
 
         // A number can become a lead after it was uploaded (website, Facebook...).
         const existing = await tx.lead.findMany({
-          where: { company_id: user.companyId, phone: { in: rows.map((r) => r.phone) } },
+          where: {
+            company_id: user.companyId,
+            phone: { in: rows.flatMap((r) => phoneForms(r.phone)) },
+          },
           select: { phone: true, id: true, status: true, exit_reason: true },
         });
-        const existingBy = new Map(existing.map((l) => [l.phone, l]));
+        const existingBy = new Map(existing.map((l) => [cleanPhone(l.phone), l]));
         const fresh = rows.filter((r) => !existingBy.has(r.phone));
         const stale = rows.filter((r) => existingBy.has(r.phone));
 
@@ -268,7 +357,8 @@ async function assignTo(
                 preferred_location: r.location,
                 notes: r.notes,
                 source: b?.source || 'BULK_UPLOAD',
-                source_detail: b?.source_detail || null,
+                // The group name, so reports can tell government data from housing leads.
+                source_detail: b?.source_detail || group.name,
                 status: 'ASSIGNED',
                 assigned_to_id: employee.id,
                 assigned_at: now,
@@ -289,18 +379,28 @@ async function assignTo(
               notes: 'Assigned from master data for the day',
             })),
           });
-          const idByCode = new Map(leads.map((l) => [l.lead_code, l.id]));
-          for (const r of fresh) {
-            await tx.masterLead.update({
-              where: { id: Number(r.id) },
-              data: {
-                status: 'ASSIGNED',
-                lead_id: idByCode.get(leadCodeFor(Number(r.id))),
-                assigned_to_id: employee.id,
-                assigned_at: now,
-              },
-            });
-          }
+          const freshIds = fresh.map((r) => Number(r.id));
+          // One statement for the step: a row-by-row loop is what makes big days slow.
+          await tx.$executeRawUnsafe(
+            `UPDATE MasterLead m JOIN Lead l ON l.lead_code = CONCAT('RRH-LD-M', m.id)
+             SET m.status = 'ASSIGNED', m.lead_id = l.id, m.assigned_to_id = ?, m.assigned_at = ?,
+                 m.last_assignee_id = ?, m.times_assigned = m.times_assigned + 1
+             WHERE m.id IN (${freshIds.map(() => '?').join(',')})`,
+            employee.id,
+            now,
+            employee.id,
+            ...freshIds,
+          );
+          await tx.masterLeadEvent.createMany({
+            data: freshIds.map((id) => ({
+              company_id: user.companyId,
+              master_lead_id: id,
+              group_id: group.id,
+              employee_id: employee.id,
+              event: 'ASSIGNED',
+              by_id: user.employeeId,
+            })),
+          });
         }
         for (const r of stale) {
           const lead = existingBy.get(r.phone)!;
@@ -333,15 +433,60 @@ async function assignTo(
   return { given, skipped, empty };
 }
 
-export async function assignDaily(
-  user: TokenPayload,
-  input: { batch_id?: number; assignments: { employee_id: number; count: number }[] },
-) {
+type AssignInput = {
+  request_id: string;
+  group_id: number;
+  batch_id?: number;
+  assignments: { employee_id: number; count: number }[];
+};
+
+export async function assignDaily(user: TokenPayload, input: AssignInput) {
   for (const a of input.assignments) {
     if (a.count > MAX_PER_PERSON) {
       throw new AppError(400, `At most ${MAX_PER_PERSON} numbers per person at a time`);
     }
   }
+  const group = await activeGroup(user, input.group_id);
+
+  let run: { id: number };
+  try {
+    run = await p.masterLeadAssignRun.create({
+      data: { request_id: input.request_id, company_id: user.companyId, by_id: user.employeeId },
+    });
+  } catch (e) {
+    if (!isDuplicateKey(e)) throw e;
+    const earlier = await p.masterLeadAssignRun.findUnique({
+      where: { request_id: input.request_id },
+    });
+    if (earlier?.company_id === user.companyId && earlier.status === 'DONE') {
+      return earlier.result as unknown as Awaited<ReturnType<typeof runAssign>>;
+    }
+    throw new AppError(
+      409,
+      earlier?.status === 'FAILED'
+        ? 'That assignment stopped part-way. Check the counts below, then assign the rest.'
+        : 'That assignment is still running. Check the counts below in a minute.',
+    );
+  }
+
+  try {
+    const result = await runAssign(user, input, group);
+    await p.masterLeadAssignRun.update({
+      where: { id: run.id },
+      data: { status: 'DONE', result },
+    });
+    return result;
+  } catch (e) {
+    await p.masterLeadAssignRun.update({ where: { id: run.id }, data: { status: 'FAILED' } });
+    throw e;
+  }
+}
+
+async function runAssign(
+  user: TokenPayload,
+  input: AssignInput,
+  group: { id: number; name: string },
+) {
   const employees = await p.employee.findMany({
     where: {
       id: { in: input.assignments.map((a) => a.employee_id) },
@@ -357,7 +502,7 @@ export async function assignDaily(
   for (const a of input.assignments) {
     const employee = employees.find((e) => e.id === a.employee_id);
     if (!employee) throw new AppError(404, 'That telecaller was not found or has left');
-    const r = await assignTo(user, employee, a.count, input.batch_id);
+    const r = await assignTo(user, employee, a.count, group, input.batch_id);
     skipped += r.skipped;
     results.push({
       employee_id: employee.id,
@@ -389,60 +534,196 @@ export async function assignDaily(
       action: 'MASTER_LEADS_ASSIGNED',
       entity_type: 'MASTER_LEAD_BATCH',
       entity_id: input.batch_id ?? 0,
-      new_value: JSON.stringify({ results, skipped }),
+      new_value: JSON.stringify({ group_id: group.id, results, skipped }),
     },
   });
   return { results, skipped };
 }
 
-/**
- * Uncalled numbers go back to master data. Only leads nothing has happened on are
- * removed; anything with a call, task, visit or opportunity stays with the person.
- */
-export async function takeBack(user: TokenPayload, employeeId: number) {
-  const leads = await p.lead.findMany({
-    where: {
-      company_id: user.companyId,
-      ...uncalledAssigned(employeeId),
-      follow_up_tasks: { none: {} },
-      site_visits: { none: {} },
-      opportunities: { none: {} },
-    },
-    select: { id: true, lead_code: true },
-  });
-  if (!leads.length) return { returned: 0 };
+// ---- Looking inside one group (MD and Admin only; read only, no export) ----
 
-  const ids = leads.map((l) => l.id);
-  await p.$transaction(
-    async (tx) => {
-      const masters = await tx.masterLead.findMany({
-        where: { lead_id: { in: ids } },
-        select: { id: true, batch_id: true },
-      });
-      await tx.masterLead.updateMany({
-        where: { id: { in: masters.map((m) => m.id) } },
-        data: { status: 'NEW', lead_id: null, assigned_to_id: null, assigned_at: null },
-      });
-      for (const batchId of new Set(masters.map((m) => m.batch_id))) {
-        await tx.masterLeadBatch.update({
-          where: { id: batchId },
-          data: {
-            assigned_count: { decrement: masters.filter((m) => m.batch_id === batchId).length },
-          },
-        });
-      }
-      await tx.lead.deleteMany({ where: { id: { in: ids } } });
-      await tx.auditEvent.create({
+export const CONTACT_STATUSES = ['NEW', 'ASSIGNED', 'ALREADY_LEAD', 'DO_NOT_CALL'] as const;
+
+/**
+ * One page of the people in a group, oldest first, 50 at a time by default.
+ * `after` is the last id of the previous page (cheap on a very large group);
+ * `q` matches the start of a phone number or of a name. Opening the first page is
+ * written to the audit trail, since these are customer phone numbers.
+ */
+export async function listGroupContacts(
+  user: TokenPayload,
+  groupId: number,
+  opts: { after?: number; limit?: number; q?: string; status?: string },
+) {
+  const group = await p.masterLeadGroup.findFirst({
+    where: { id: groupId, company_id: user.companyId },
+    select: { id: true, name: true, is_active: true },
+  });
+  if (!group) throw new AppError(404, 'That group was not found');
+
+  const limit = Math.min(Math.max(Math.floor(opts.limit || 50), 1), 100);
+  const status = (CONTACT_STATUSES as readonly string[]).includes(opts.status || '')
+    ? (opts.status as string)
+    : undefined;
+  const q = text(opts.q, 40);
+  const digits = q.replace(/\D/g, '');
+
+  const base = { company_id: user.companyId, group_id: groupId };
+  const where: Record<string, unknown> = { ...base };
+  if (status) where.status = status;
+  if (q) {
+    where.OR = [
+      ...(digits.length >= 3 ? [{ phone: { startsWith: digits } }] : []),
+      { name: { startsWith: q } },
+    ];
+  }
+  if (opts.after) where.id = { gt: Math.floor(opts.after) };
+
+  const [rows, counts] = await Promise.all([
+    p.masterLead.findMany({
+      where,
+      orderBy: { id: 'asc' },
+      take: limit + 1,
+      select: {
+        id: true,
+        phone: true,
+        name: true,
+        email: true,
+        location: true,
+        notes: true,
+        status: true,
+        assigned_to_id: true,
+        assigned_at: true,
+        returned_at: true,
+        times_assigned: true,
+        batch_id: true,
+      },
+    }),
+    opts.after
+      ? Promise.resolve(null)
+      : p.masterLead.groupBy({ by: ['status'], where: base, _count: { _all: true } }),
+  ]);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+
+  const staffIds = [...new Set(page.map((r) => r.assigned_to_id).filter((x): x is number => !!x))];
+  const batchIds = [...new Set(page.map((r) => r.batch_id))];
+  const [staff, batches] = await Promise.all([
+    staffIds.length
+      ? p.employee.findMany({
+          where: { id: { in: staffIds }, company_id: user.companyId },
+          select: { id: true, full_name: true, employee_code: true },
+        })
+      : Promise.resolve([]),
+    p.masterLeadBatch.findMany({
+      where: { id: { in: batchIds }, company_id: user.companyId },
+      select: { id: true, file_name: true },
+    }),
+  ]);
+  const staffName = new Map(staff.map((s) => [s.id, s.full_name || s.employee_code]));
+  const fileName = new Map(batches.map((b) => [b.id, b.file_name]));
+
+  if (!opts.after) {
+    await p.auditEvent
+      .create({
         data: {
-          actor_id: user.employeeId,
-          action: 'MASTER_LEADS_TAKEN_BACK',
-          entity_type: 'EMPLOYEE',
-          entity_id: employeeId,
-          new_value: JSON.stringify({ lead_codes: leads.map((l) => l.lead_code) }),
+          actor_id: user.employeeId!,
+          action: 'VIEW_MASTER_GROUP_CONTACTS',
+          entity_type: 'MASTER_LEAD_GROUP',
+          entity_id: groupId,
+          new_value: JSON.stringify({ group: group.name, status: status || 'ALL', search: !!q }),
         },
-      });
-    },
-    { timeout: 30_000 },
-  );
-  return { returned: ids.length };
+      })
+      .catch((err: unknown) => logger.error('Could not record the master group view:', err));
+  }
+
+  const byStatus: Record<string, number> = {};
+  for (const row of counts || []) byStatus[row.status] = row._count._all;
+
+  return {
+    group,
+    counts: counts ? byStatus : undefined,
+    has_more: hasMore,
+    next_after: hasMore ? page[page.length - 1].id : null,
+    contacts: page.map((r) => ({
+      id: r.id,
+      phone: r.phone,
+      name: r.name,
+      email: r.email,
+      location: r.location,
+      notes: r.notes,
+      status: r.status,
+      times_assigned: r.times_assigned,
+      assigned_at: r.assigned_at,
+      returned_at: r.returned_at,
+      assigned_to: r.assigned_to_id
+        ? { id: r.assigned_to_id, name: staffName.get(r.assigned_to_id) || 'Former employee' }
+        : null,
+      file_name: fileName.get(r.batch_id) || null,
+    })),
+  };
+}
+
+// ---- Moving one uploaded file to another group ----
+
+/** Rows moved per call: small enough that the shared database is never held for long. */
+export const MOVE_STEP_ROWS = 20000;
+
+/**
+ * Moves every number of one upload (a batch) to another group, for an upload that went
+ * into the wrong group. Numbers already given to telecallers move too, so the group
+ * totals stay right; the leads themselves are not touched. Call it again with the same
+ * arguments until `done` is true: each call moves one slice, and the upload's own group
+ * is switched only after its last number moved, so an interrupted move can be resumed.
+ */
+export async function moveBatchToGroup(
+  user: TokenPayload,
+  batchId: number,
+  targetGroupId: number,
+  stepRows = MOVE_STEP_ROWS,
+) {
+  const batch = await p.masterLeadBatch.findFirst({
+    where: { id: batchId, company_id: user.companyId },
+  });
+  if (!batch) throw new AppError(404, 'That upload was not found');
+  if (!batch.completed_at) {
+    throw new AppError(409, 'This upload has not finished. Finish or continue it first.');
+  }
+  const target = await activeGroup(user, targetGroupId);
+  const from = await p.masterLeadGroup.findFirst({
+    where: { id: batch.group_id, company_id: user.companyId },
+    select: { id: true, name: true },
+  });
+
+  const moved = await p.$executeRaw`
+    UPDATE MasterLead SET group_id = ${target.id}
+    WHERE company_id = ${user.companyId} AND batch_id = ${batch.id} AND group_id <> ${target.id}
+    LIMIT ${stepRows}`;
+
+  const left = await p.masterLead.count({
+    where: { company_id: user.companyId, batch_id: batch.id, group_id: { not: target.id } },
+  });
+  if (left > 0) return { done: false, moved, left, group: target };
+
+  if (batch.group_id !== target.id) {
+    await p.masterLeadBatch.update({ where: { id: batch.id }, data: { group_id: target.id } });
+    await p.auditEvent
+      .create({
+        data: {
+          actor_id: user.employeeId!,
+          action: 'MASTER_BATCH_MOVED',
+          entity_type: 'MASTER_LEAD_BATCH',
+          entity_id: batch.id,
+          new_value: JSON.stringify({
+            file: batch.file_name,
+            from_group: from?.name ?? batch.group_id,
+            to_group: target.name,
+            numbers: batch.added,
+          }),
+        },
+      })
+      .catch((err: unknown) => logger.error('Could not record the master upload move:', err));
+  }
+  return { done: true, moved, left: 0, group: target };
 }

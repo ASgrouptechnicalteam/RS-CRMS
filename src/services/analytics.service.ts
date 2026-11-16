@@ -44,6 +44,8 @@ import {
 } from '../utils/time';
 import { TokenPayload } from '../utils/jwt';
 import { IntegrationMetricsResponse } from '../shared';
+import { conversion, conversionOf, lifetimeDeals, outstanding } from './counts/metrics';
+import { periodContaining } from './counts/period';
 
 const p = prisma;
 
@@ -122,7 +124,7 @@ export interface ExecutiveMetricsResponse {
   activeCustomersCount: number;
   salesValue: number;
   duePayments: number;
-  /** (totalClosedDeals / totalLeadsCount) * 100, rounded to 1 decimal; 0 when there are no leads. */
+  /** This IST month's new leads that reached BOOKED, percent to 1 decimal (counts/metrics.ts). */
   leadConversionRate: number;
 }
 
@@ -217,7 +219,8 @@ export class AnalyticsService {
    * No status filtering is applied (the KPI is a total booking count).
    */
   private static async countBookings(companyId: number): Promise<number> {
-    return await p.booking.count({ where: { company_id: companyId } });
+    // A booking is a deal (CONFIRMED, REGISTERED or COMPLETED): counts/metrics.ts.
+    return (await lifetimeDeals([companyId])).count;
   }
 
   /**
@@ -225,11 +228,8 @@ export class AnalyticsService {
    * CONFIRMED bookings only, scoped to company — represents closed deal value.
    */
   private static async bookingSalesValue(companyId: number): Promise<number> {
-    const res = await p.booking.aggregate({
-      _sum: { agreed_price: true },
-      where: { company_id: companyId, status: 'CONFIRMED' },
-    });
-    return res._sum.agreed_price || 0;
+    // Every deal, also after it moves on to REGISTERED or COMPLETED (counts/metrics.ts).
+    return (await lifetimeDeals([companyId])).value;
   }
 
   /**
@@ -240,14 +240,7 @@ export class AnalyticsService {
    * hazard documented in this file's header comment.
    */
   private static async duePayments(companyId: number): Promise<number> {
-    const res: any = await p.$queryRaw`
-      SELECT COALESCE(SUM(i.expected_amount - i.received_amount), 0) as due
-      FROM Installment i
-      JOIN Booking b ON b.id = i.booking_id
-      WHERE b.company_id = ${companyId}
-        AND i.status NOT IN ('CANCELLED', 'RECEIVED')
-    `;
-    return Number(res[0]?.due || 0);
+    return (await outstanding([companyId])).amount;
   }
 
   /**
@@ -256,7 +249,7 @@ export class AnalyticsService {
    *   check-in AttendanceLog today). "Today" uses the same server startOfDay
    *   (local midnight) window as md.ts executive-metrics.
    */
-  private static async attendanceExceptionsToday(
+  static async attendanceExceptionsToday(
     companyId: number,
   ): Promise<{ exceptions: number; active: number }> {
     // IST midnight (setHours used the server's UTC clock -> 05:30 IST).
@@ -530,6 +523,8 @@ export class AnalyticsService {
       activeCustomersCount,
       salesValue,
       duePayments,
+      deals,
+      monthConversion,
     ] = await Promise.all([
       this.countLeads(companyId),
       this.countWonLeads(companyId),
@@ -545,11 +540,14 @@ export class AnalyticsService {
       this.countActiveCustomers(companyId),
       this.bookingSalesValue(companyId),
       this.duePayments(companyId),
+      this.countBookings(companyId),
+      conversion([companyId], periodContaining('MONTH')),
     ]);
+    void wonLeads;
 
     return {
       totalLeadsCount,
-      totalClosedDeals: wonLeads,
+      totalClosedDeals: deals,
       siteVisitsScheduled,
       totalPropertiesCount: property.total,
       livePropertiesCount: property.live,
@@ -566,8 +564,8 @@ export class AnalyticsService {
       activeCustomersCount,
       salesValue,
       duePayments,
-      leadConversionRate:
-        totalLeadsCount > 0 ? Math.round((wonLeads / totalLeadsCount) * 1000) / 10 : 0,
+      // This month's new leads that reached BOOKED (counts/metrics.ts).
+      leadConversionRate: monthConversion.rate,
     };
   }
 
@@ -725,10 +723,8 @@ export class AnalyticsService {
       qualified: allLeads.filter((l: any) => l.status === 'QUALIFIED').length,
       siteVisits: allLeads.filter((l: any) => l.status === 'SITE_VISIT_SCHEDULED').length,
       won: allLeads.filter((l: any) => l.status === 'BOOKED').length,
-      conversionRate:
-        allLeads.length > 0
-          ? (allLeads.filter((l: any) => l.status === 'BOOKED').length / allLeads.length) * 100
-          : 0,
+      // This month's new leads that reached BOOKED, as everywhere (counts/metrics.ts).
+      conversionRate: (await conversion([companyId], periodContaining('MONTH'))).rate,
     };
 
     const pipelineCounts = allLeads.reduce((acc: any, lead: any) => {
@@ -787,7 +783,8 @@ export class AnalyticsService {
 
     const overdueTasksQuery = await p.task.findMany({
       where: {
-        status: 'PENDING',
+        // The sweep flips past-due tasks to OVERDUE, so PENDING alone was nearly always empty.
+        status: { in: ['PENDING', 'IN_PROGRESS', 'OVERDUE'] },
         target_date: { lt: today },
         assignee: { company_id: companyId },
       },
@@ -949,9 +946,7 @@ export class AnalyticsService {
     ]);
 
     const conversionRate = (leads: { status: string }[]) =>
-      leads.length > 0
-        ? (leads.filter((l) => l.status === 'BOOKED').length / leads.length) * 100
-        : 0;
+      conversionOf(leads.length, leads.filter((l) => l.status === 'BOOKED').length).rate;
 
     const calculateLeaveValue = (proposals: { leave_type: string }[]) => {
       return proposals.reduce((acc, p) => acc + (p.leave_type === 'FULL_DAY' ? 1 : 0.5), 0);

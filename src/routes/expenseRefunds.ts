@@ -1,6 +1,8 @@
+import { num, round2 } from '../utils/money';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest, requirePermission } from '../middleware/auth';
-import { requireAuthz } from '../middleware/authz';
+import { requireAuthz, hasEffectivePermission } from '../middleware/authz';
+import { z } from 'zod';
 import { validateRequestBody } from '../middleware/validate';
 import {
   ExpenseRefundCreateSchema,
@@ -79,7 +81,20 @@ router.post(
   validateRequestBody(ExpenseRefundCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next) => {
     try {
-      const { purpose, amount } = req.body;
+      const { purpose, amount, category, spend_date, bill_no } = req.body;
+      if (category === 'Other' && String(purpose || '').trim().length < 10) {
+        return res.status(400).json({
+          error: 'For "Other", describe the expense in the purpose (10 letters or more).',
+        });
+      }
+      if (spend_date) {
+        const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+        if (Number.isNaN(Date.parse(spend_date)) || spend_date > today) {
+          return res
+            .status(400)
+            .json({ error: 'The date of the expense cannot be in the future.' });
+        }
+      }
       let proofImageUrl: string | null = null;
       if (req.file) {
         const storageService = getStorageService('expense-proofs');
@@ -91,10 +106,62 @@ router.post(
       }
       const refund = await ExpenseRefundService.createRefund(
         req.user!,
-        { purpose, amount },
+        { purpose, amount, category, spend_date, bill_no },
         proofImageUrl,
       );
       return res.status(201).json({ message: 'Refund request submitted.', refund });
+    } catch (error: any) {
+      next(error);
+    }
+  },
+);
+
+// POST /api/v1/expense-refunds/bulk-approve - approve several refunds at once
+// (item 6 #5, 2026-11-15): { stage: 'ACCOUNTANT' | 'MD', ids, note? }. Each id
+// goes through the same review as a single approval (same checks, audit and
+// notifications), one after another; the answer says which went through.
+const BulkApproveSchema = z.object({
+  stage: z.enum(['ACCOUNTANT', 'MD']),
+  ids: z.array(z.number().int().positive()).min(1).max(50),
+  note: z.string().trim().max(500).optional(),
+});
+router.post(
+  '/bulk-approve',
+  authenticateToken,
+  validateRequestBody(BulkApproveSchema),
+  async (req: AuthenticatedRequest, res: Response, next) => {
+    try {
+      const { stage, ids, note } = req.body as z.infer<typeof BulkApproveSchema>;
+      const permission =
+        stage === 'MD' ? Permissions.EXPENSES_MD_APPROVE : Permissions.EXPENSES_REVIEW;
+      if (!(await hasEffectivePermission(req.user!, permission))) {
+        return res
+          .status(403)
+          .json({ error: `Forbidden: Missing required permission (${permission})` });
+      }
+      const results: { id: number; ok: boolean; amount?: number; error?: string }[] = [];
+      for (const id of [...new Set(ids)]) {
+        try {
+          const updated =
+            stage === 'MD'
+              ? await ExpenseRefundService.mdReview(req.user!, id, 'APPROVE', note)
+              : await ExpenseRefundService.accountantReview(req.user!, id, 'APPROVE', note);
+          results.push({
+            id,
+            ok: true,
+            amount: num((updated as { amount?: unknown } | null)?.amount),
+          });
+        } catch (err: any) {
+          results.push({ id, ok: false, error: err?.message || 'Could not approve' });
+        }
+      }
+      const approved = results.filter((r) => r.ok);
+      return res.status(200).json({
+        approved: approved.length,
+        failed: results.length - approved.length,
+        total_amount: round2(approved.reduce((n, r) => n + (r.amount || 0), 0)),
+        results,
+      });
     } catch (error: any) {
       next(error);
     }

@@ -7,7 +7,7 @@ import { WorkflowEngine } from '../../workflows/workflowEngine';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { AppError } from './errors';
-import { CALL_BACK_TITLE_PREFIX } from './callBacks';
+import { moveCallBackTasks } from './callBacks';
 
 const p = prisma;
 
@@ -174,17 +174,7 @@ export async function moveLeadOwnership(
   if (previousOwnerId) {
     // Move (not cancel) the previous owner's open call-backs: the customer
     // still expects that call, from the new owner.
-    movedCallBacks = (
-      await tx.task.updateMany({
-        where: {
-          lead_id: lead.id,
-          assignee_id: previousOwnerId,
-          title: { startsWith: CALL_BACK_TITLE_PREFIX },
-          status: { in: ['PENDING', 'IN_PROGRESS', 'OVERDUE'] },
-        },
-        data: { assignee_id: toEmployeeId },
-      })
-    ).count;
+    movedCallBacks = await moveCallBackTasks(tx, lead.id, previousOwnerId, toEmployeeId);
     movedOpportunities = (
       await tx.opportunity.updateMany({
         where: { lead_id: lead.id, owner_id: previousOwnerId },

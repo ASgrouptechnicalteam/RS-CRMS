@@ -8,6 +8,8 @@ import { buildPropertyScope, loadPropertyInScope } from '../../authz/dataScope';
 import { validateRequestBody } from '../../middleware/validate';
 import { propertyImageUpload, getPropertyImageStorage } from '../../services/storage.service';
 import { Prisma } from '@prisma/client';
+import { PropertyPolicy } from '../../policies/property.policy';
+import { recordApprovedEdit } from '../../services/approvedRecordEdit';
 
 const router = Router();
 
@@ -25,12 +27,6 @@ router.post(
       const propertyId = parseInt(req.params.id, 10);
       if (isNaN(propertyId))
         return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId))
-        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId))
-        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
-      if (isNaN(propertyId))
-        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const propertyScope = await buildPropertyScope(req.user!);
 
       // Verify property exists and belongs to a company the user can access
@@ -46,7 +42,21 @@ router.post(
       }
 
       const storage = getPropertyImageStorage();
-      const imageUrl = await storage.upload(req.file.buffer, propertyId);
+      let imageUrl: string;
+      try {
+        imageUrl = await storage.upload(req.file.buffer, propertyId);
+      } catch (e: any) {
+        // sharp throws "Input buffer contains unsupported image format" for
+        // HEIC/corrupt files: that is the user's file, not a server fault.
+        if (
+          /unsupported image format|Input buffer|corrupt|VipsJpeg|bad seek/i.test(e?.message || '')
+        ) {
+          return res.status(400).json({
+            error: 'That photo format is not supported. Please use a JPG, PNG or WebP image.',
+          });
+        }
+        throw e;
+      }
       const { alt_text, sort_order, is_primary } = req.body;
       const isPrimaryBool = is_primary === 'true' || is_primary === true;
 
@@ -273,10 +283,28 @@ router.post(
           property_id: propertyId,
           property: propertyScope,
         },
+        include: {
+          property: {
+            select: {
+              company_id: true,
+              status: true,
+              created_by_id: true,
+              digital_marketing_executive_id: true,
+            },
+          },
+        },
       });
       if (!image) {
         return res.status(404).json({ error: 'Image not found' });
       }
+      // An Executive may not change the photos of an approved (LIVE) listing.
+      if (!PropertyPolicy.canReviewImage(req.user!, image.property)) {
+        return res.status(403).json({
+          error: 'This property is already approved. Ask the Digital Marketing Head or the MD.',
+          code: 'FORBIDDEN',
+        });
+      }
+      await recordApprovedEdit(req, 'PROPERTY', propertyId, image.property.status);
 
       const updated = await p.propertyImage.update({
         where: { id: imageId },
@@ -328,10 +356,28 @@ router.post(
           property_id: propertyId,
           property: propertyScope,
         },
+        include: {
+          property: {
+            select: {
+              company_id: true,
+              status: true,
+              created_by_id: true,
+              digital_marketing_executive_id: true,
+            },
+          },
+        },
       });
       if (!image) {
         return res.status(404).json({ error: 'Image not found' });
       }
+      // An Executive may not change the photos of an approved (LIVE) listing.
+      if (!PropertyPolicy.canReviewImage(req.user!, image.property)) {
+        return res.status(403).json({
+          error: 'This property is already approved. Ask the Digital Marketing Head or the MD.',
+          code: 'FORBIDDEN',
+        });
+      }
+      await recordApprovedEdit(req, 'PROPERTY', propertyId, image.property.status);
 
       const updated = await p.propertyImage.update({
         where: { id: imageId },

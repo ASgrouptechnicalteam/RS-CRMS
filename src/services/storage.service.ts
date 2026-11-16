@@ -15,8 +15,19 @@ export const UPLOAD_DIR =
 
 const MAX_SIZE = 10 * 1024 * 1024; // 10MB
 
-const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
-const ALLOWED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+// Phones/browsers report variants such as image/jpg, image/pjpeg or .jfif, and
+// some send an empty or generic type; processImageBuffer (sharp) is the real
+// check that the bytes are an image, so the filter only needs to reject the
+// obviously wrong (html/svg/js) rather than every unusual spelling.
+const ALLOWED_IMAGE_MIME = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/pjpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+const ALLOWED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.jfif', '.png', '.webp', '.gif']);
 
 /**
  * Image-only uploader. Rejects anything whose declared type OR extension is not
@@ -30,7 +41,12 @@ export const imageOnlyUpload = multer({
   limits: { fileSize: MAX_SIZE },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
-    if (ALLOWED_IMAGE_MIME.has(file.mimetype) && ALLOWED_IMAGE_EXT.has(ext)) {
+    const mimeOk = ALLOWED_IMAGE_MIME.has(file.mimetype);
+    const extOk = ALLOWED_IMAGE_EXT.has(ext);
+    // Either a known image type, or a known image extension with a generic /
+    // missing type (application/octet-stream). Never a non-image type + image name.
+    const genericType = !file.mimetype || file.mimetype === 'application/octet-stream';
+    if ((mimeOk && (extOk || !ext)) || (extOk && genericType)) {
       cb(null, true);
     } else {
       // statusCode lets the global error handler answer 400, not 500.

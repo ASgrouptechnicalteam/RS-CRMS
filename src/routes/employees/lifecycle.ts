@@ -272,6 +272,7 @@ router.post(
         req.body.to_employee_id,
         req.user!,
         req.body.reason || 'resigned',
+        { onlyContacted: req.body.only_contacted === true },
       );
       return res.status(200).json({ message: 'Work handed over', ...result });
     } catch (error) {

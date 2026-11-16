@@ -279,16 +279,27 @@ router.post(
 
       let newTarget: any = null;
       if (p.dailyTarget) {
+        // A number that was not sent keeps its current value: saving the form questions
+        // must not wipe the targets.
+        const current = await p.dailyTarget.findFirst({
+          where: {
+            company_id: req.user!.companyId,
+            role_name,
+            employee_id: employee_id || null,
+          },
+          orderBy: { created_at: 'desc' },
+        });
+        const value = (sent: unknown, kept?: number | null) =>
+          sent === undefined || sent === null || sent === '' ? kept || 0 : Number(sent) || 0;
         newTarget = await p.dailyTarget.create({
           data: {
             company_id: req.user!.companyId,
             role_name,
             employee_id: employee_id || null,
-            // A number that was not given means "no target" (0), not 50 / 3 / 1:
-            // those defaults used to be judged against roles that never do that work.
-            calls_target: Number(targets_json?.callsMade) || 0,
-            site_visits_target: Number(targets_json?.siteVisits) || 0,
-            closed_deals_target: Number(targets_json?.closedDeals) || 0,
+            calls_target: value(targets_json?.callsMade, current?.calls_target),
+            followups_target: value(targets_json?.followupCalls, current?.followups_target),
+            site_visits_target: value(targets_json?.siteVisits, current?.site_visits_target),
+            closed_deals_target: value(targets_json?.closedDeals, current?.closed_deals_target),
             form_schema_json: form_schema_json || null,
           },
         });

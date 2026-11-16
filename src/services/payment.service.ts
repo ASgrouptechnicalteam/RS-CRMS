@@ -1,3 +1,4 @@
+import { pmScope, pmMaySee } from '../authz/pmScope';
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { PrismaClient, Payment } from '@prisma/client';
@@ -5,7 +6,9 @@ import { TokenPayload } from '../utils/jwt';
 import { PaymentPolicy } from '../policies/payment.policy';
 import { BookingPolicy } from '../policies/booking.policy';
 import { NotificationService } from './notification.service';
-import { PAYMENT_EVENT_TYPE, INSTALLMENT_EVENT_TYPE } from '../shared';
+import { PAYMENT_EVENT_TYPE, INSTALLMENT_EVENT_TYPE, Roles } from '../shared';
+import { notifyEmployee } from '../utils/notifyEmployee';
+import { inr, num, round2 } from '../utils/money';
 
 const p = prisma;
 
@@ -58,6 +61,10 @@ export class PaymentService {
       whereCondition.recorded_by_id = user.employeeId;
     }
 
+    // PM narrowing (switch): only payments of bookings linked to this PM.
+    const pmWhere = pmScope.payment(user);
+    if (pmWhere.OR) whereCondition.AND = [pmWhere];
+
     // A work queue (to verify / to refund) is worked oldest first.
     const isQueue = !!opts.statuses?.length && opts.statuses.every((st) => st !== 'SUCCESS');
     return await p.payment.findMany({
@@ -73,7 +80,7 @@ export class PaymentService {
         },
         recorded_by: { select: { id: true, full_name: true } },
       },
-      orderBy: { payment_date: isQueue ? 'asc' : 'desc' },
+      orderBy: { payment_date: 'desc' }, // latest first, queue too (owner, 2026-11-14)
       take: Math.min(Math.max(opts.limit ?? 500, 1), 1000),
     });
   }
@@ -105,7 +112,7 @@ export class PaymentService {
       throw new AppError(404, 'Booking not found');
     }
 
-    if (!BookingPolicy.canView(user, booking)) {
+    if (!BookingPolicy.canView(user, booking) || !(await pmMaySee(user, 'booking', booking.id))) {
       throw new AppError(403, 'You do not have access to record a payment for this booking');
     }
 
@@ -116,7 +123,9 @@ export class PaymentService {
       if (!installment) {
         throw new AppError(404, 'Installment not found or does not belong to this booking');
       }
-      if (dto.amount > installment.expected_amount - installment.received_amount) {
+      if (
+        dto.amount > round2(num(installment.expected_amount) - num(installment.received_amount))
+      ) {
         throw new AppError(400, 'Collection amount exceeds remaining installment balance');
       }
       if (dto.amount <= 0) {
@@ -130,28 +139,63 @@ export class PaymentService {
 
     const paymentCode = await this.generateNextPaymentCode();
 
-    return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
-      const payment = await tx.payment.create({
-        data: {
-          payment_code: paymentCode,
-          company_id: user.companyId || 1,
-          booking_id: booking.id,
-          amount: dto.amount,
-          payment_method: dto.payment_method,
-          reference_number: dto.reference_number,
-          notes: dto.notes,
-          status: 'PENDING', // All new payments require Finance verification
-          recorded_by_id: user.employeeId || 1,
-          installment_id: dto.installment_id || null,
-        },
-      });
+    const created = await p.$transaction(
+      async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+        const payment = await tx.payment.create({
+          data: {
+            payment_code: paymentCode,
+            company_id: user.companyId || 1,
+            booking_id: booking.id,
+            amount: dto.amount,
+            payment_method: dto.payment_method,
+            reference_number: dto.reference_number,
+            notes: dto.notes,
+            status: 'PENDING', // All new payments require Finance verification
+            recorded_by_id: user.employeeId || 1,
+            installment_id: dto.installment_id || null,
+          },
+        });
 
-      // Update booking balance assuming payment will be verified?
-      // Strictly, we only reduce balance when status is SUCCESS.
-      // For now, we just create the payment record.
+        // Update booking balance assuming payment will be verified?
+        // Strictly, we only reduce balance when status is SUCCESS.
+        // For now, we just create the payment record.
 
-      return payment;
+        return payment;
+      },
+    );
+
+    // Tell Finance there is a payment to verify (it was silent before, 2026-11-15).
+    await PaymentService.notifyFinance(user.companyId, user.employeeId, {
+      type: 'PAYMENT_TO_VERIFY',
+      title: 'Payment to verify',
+      message: `${inr(created.amount)} was recorded on booking ${booking.booking_code} (${created.payment_method}). Please verify it.`,
+      link: '/finance',
+      entity_type: 'PAYMENT',
+      entity_id: created.id,
     });
+    return created;
+  }
+
+  /** Notify the company's accountants, except the person who did the action. */
+  private static async notifyFinance(
+    companyId: number,
+    actorId: number,
+    payload: import('../utils/notifyEmployee').NotifyPayload,
+  ) {
+    try {
+      const finance = await p.employee.findMany({
+        where: {
+          company_id: companyId,
+          status: 'ACTIVE',
+          roles: { some: { role: { name: Roles.FINANCE } } },
+        },
+        select: { id: true },
+      });
+      const ids = finance.map((f) => f.id).filter((x) => x !== actorId);
+      if (ids.length) await notifyEmployee(ids, payload);
+    } catch (e) {
+      logger.warn('Payment notification failed: ' + (e as Error).message);
+    }
   }
 
   static async verifyPayment(
@@ -169,7 +213,7 @@ export class PaymentService {
       throw new AppError(404, 'Payment not found');
     }
 
-    if (!PaymentPolicy.canMutate(user, payment)) {
+    if (!PaymentPolicy.canMutate(user, payment) || !(await pmMaySee(user, 'payment', payment.id))) {
       throw new AppError(403, 'Permission denied');
     }
 
@@ -249,7 +293,10 @@ export class PaymentService {
             const installment = await tx.installment.findUniqueOrThrow({
               where: { id: payment.installment_id },
             });
-            const newReceived = Math.max(0, installment.received_amount - payment.amount);
+            const newReceived = Math.max(
+              0,
+              round2(num(installment.received_amount) - num(payment.amount)),
+            );
             await tx.installment.update({
               where: { id: installment.id },
               data: {
@@ -261,7 +308,9 @@ export class PaymentService {
           } else {
             await tx.booking.update({
               where: { id: payment.booking.id },
-              data: { balance_amount: payment.booking.balance_amount + payment.amount },
+              data: {
+                balance_amount: round2(num(payment.booking.balance_amount) + num(payment.amount)),
+              },
             });
           }
           await tx.auditEvent.create({
@@ -283,16 +332,23 @@ export class PaymentService {
               where: { id: payment.installment_id },
             });
 
-            if (payment.amount > installment.expected_amount - installment.received_amount) {
+            if (
+              num(payment.amount) >
+              round2(num(installment.expected_amount) - num(installment.received_amount))
+            ) {
               throw new AppError(
                 400,
                 'Verification failed: Payment amount exceeds remaining installment balance',
               );
             }
 
-            const newReceivedAmount = installment.received_amount + payment.amount;
+            const newReceivedAmount = round2(
+              num(installment.received_amount) + num(payment.amount),
+            );
             const newStatus =
-              newReceivedAmount >= installment.expected_amount ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
+              newReceivedAmount >= num(installment.expected_amount)
+                ? 'RECEIVED'
+                : 'PARTIALLY_RECEIVED';
 
             const updateResult = await tx.installment.updateMany({
               where: { id: installment.id, received_amount: installment.received_amount },
@@ -351,7 +407,10 @@ export class PaymentService {
                     status: newStatus,
                     expected_amount: installment.expected_amount,
                     received_amount: newReceivedAmount,
-                    remaining_amount: Math.max(0, installment.expected_amount - newReceivedAmount),
+                    remaining_amount: Math.max(
+                      0,
+                      round2(num(installment.expected_amount) - newReceivedAmount),
+                    ),
                     changed_at: new Date().toISOString(),
                   }),
                   status: 'CREATED',
@@ -363,7 +422,10 @@ export class PaymentService {
             }
           } else {
             // Legacy logic: Reduce the booking balance
-            const newBalance = Math.max(0, payment.booking.balance_amount - payment.amount);
+            const newBalance = Math.max(
+              0,
+              round2(num(payment.booking.balance_amount) - num(payment.amount)),
+            );
 
             await tx.booking.update({
               where: { id: payment.booking.id },
@@ -440,6 +502,34 @@ export class PaymentService {
       // §7: receipt generation has moved to the customer portal (the document
       // module was removed from CRM). No-op here — the portal owns agreement/receipt docs.
       logger.info('Payment ' + id + ' succeeded; receipt generation is portal-owned (§7).');
+    }
+
+    // Tell the person who recorded the payment, and the booking's owner, what
+    // Finance decided (nobody was told before, 2026-11-15).
+    try {
+      const people = new Set<number>(
+        [payment.recorded_by_id, payment.booking.assigned_employee_id].filter(
+          (x): x is number => !!x && x !== user.employeeId,
+        ),
+      );
+      const WORD: Record<string, string> = {
+        SUCCESS: 'verified',
+        FAILED: 'marked failed',
+        REFUNDED: 'refunded',
+      };
+      if (people.size && WORD[status]) {
+        const note = extra.note?.trim();
+        await notifyEmployee([...people], {
+          type: `PAYMENT_${status}`,
+          title: `Payment ${WORD[status]}`,
+          message: `${inr(payment.amount)} on booking ${payment.booking.booking_code} was ${WORD[status]} by Finance.${note ? ` Note: ${note}` : ''}`,
+          link: `/bookings/${payment.booking.id}`,
+          entity_type: 'PAYMENT',
+          entity_id: id,
+        });
+      }
+    } catch (e) {
+      logger.warn('Payment notification failed: ' + (e as Error).message);
     }
 
     return result;

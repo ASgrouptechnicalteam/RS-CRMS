@@ -5,6 +5,7 @@ import { can } from '../../authz/authorization';
 import { WorkflowEngine } from '../../workflows/workflowEngine';
 import { WorkflowDomain } from '../../workflows/types';
 import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
+import { buildSiteVisitScope } from '../../authz/dataScope';
 import { generateNextBookingCode, resolveVisitProject } from './shared';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
@@ -15,7 +16,7 @@ export async function listVisits(
   user: TokenPayload,
   filters: { status?: string; leadId?: string; escalated?: boolean },
 ) {
-  const whereCondition: any = SiteVisitPolicy.canList(user);
+  const whereCondition: any = await buildSiteVisitScope(user);
 
   if (filters.escalated) {
     whereCondition.status = {
@@ -90,8 +91,8 @@ export async function listVisits(
       reassignments: {
         orderBy: { created_at: 'asc' },
         include: {
-          from_employee: { select: { id: true, full_name: true } },
-          to_employee: { select: { id: true, full_name: true } },
+          from_employee: { select: { id: true, full_name: true, employee_code: true } },
+          to_employee: { select: { id: true, full_name: true, employee_code: true } },
         },
       },
       escalation: true,
@@ -100,8 +101,8 @@ export async function listVisits(
   });
 
   // §2: reassignment `reason` visibility is restricted to executive-department
-  // roles (MD, Admin, HR Manager, Marketing Director, Project Manager per the
-  // SiteVisitPolicy.isManagement set). Telecallers/Agents see only who was
+  // roles (MD, Admin, Marketing Director per
+  // SiteVisitPolicy.canViewReassignmentReason). Telecallers/Agents see only who was
   // involved, never the reason behind a reassignment hop.
   if (!SiteVisitPolicy.canViewReassignmentReason(user)) {
     for (const v of visits) {
@@ -200,6 +201,10 @@ export async function bookVisit(user: TokenPayload, data: any) {
         scheduled_date: new Date(data.scheduled_date),
         status: 'REQUESTED',
         verification_call_notes: data.notes || 'Site visit booked by telecaller.',
+        customer_brief: data.customer_brief?.trim() || null,
+        pick_up_requested: data.pick_up_requested === true,
+        pick_up_address:
+          data.pick_up_requested === true ? data.pick_up_address?.trim() || null : null,
       };
 
       if (data.opportunity_id) bookingData.opportunity = { connect: { id: data.opportunity_id } };
@@ -324,29 +329,31 @@ export async function bookVisit(user: TokenPayload, data: any) {
         await tx.siteVisitEscalation.create({
           data: {
             site_visit_booking_id: booking.id,
-            marketing_director_notified_at: new Date(),
+            managing_director_notified_at: new Date(),
           },
         });
 
-        const marketingDirectors = await tx.employee.findMany({
+        // No PM could be found: the MD(s) of the lead's company sort it out.
+        const mds = await tx.employee.findMany({
           where: {
-            roles: { some: { role: { name: Roles.MARKETING_DIRECTOR } } },
+            roles: { some: { role: { name: Roles.MD } } },
             status: 'ACTIVE',
+            company_id: lead.company_id,
           },
           select: { id: true },
         });
 
-        if (marketingDirectors.length > 0) {
+        if (mds.length > 0) {
           await tx.notification.createMany({
-            data: marketingDirectors.map((md: any) => ({
+            data: mds.map((md: any) => ({
               employee_id: md.id,
               type: 'SYSTEM_ALERT',
               title: 'Unassigned Site Visit',
               message: `Site visit ${updatedBooking.booking_code} has no active project PM. Please reassign manually.`,
             })),
           });
-          // Web push to marketing directors (outside transaction)
-          for (const md of marketingDirectors) {
+          // Web push to the MD(s) (outside transaction)
+          for (const md of mds) {
             notifyEmployee(
               md.id,
               {

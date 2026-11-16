@@ -158,7 +158,9 @@ router.get(
         p.project.count({
           where: {
             ...company,
-            verification_status: { in: ['PENDING_DM_POLISH', 'PENDING_MD_APPROVAL'] },
+            verification_status: {
+              in: ['PENDING_DM_POLISH', 'PENDING_DM_EXEC', 'PENDING_MD_APPROVAL'],
+            },
           },
         }),
         p.complaint.count({
@@ -327,6 +329,24 @@ router.get(
     } catch (error) {
       logger.error('Tech overview error:', error);
       return res.status(500).json({ error: 'Could not load the overview' });
+    }
+  },
+);
+
+// GET /api/v1/admin/system-health - database size against the plan's cap,
+// table sizes, our own connections, slow queries and the server (item 9,
+// 2026-11-15). Admin (and the Technical Manager, who signs in as Admin) and MD.
+router.get(
+  '/system-health',
+  authenticateToken,
+  requireRole([Roles.ADMIN, Roles.MD]),
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { systemHealth } = await import('../../services/systemHealth');
+      return res.status(200).json(await systemHealth());
+    } catch (error) {
+      logger.error({ error }, 'System health error');
+      return res.status(500).json({ error: 'Failed to load system health' });
     }
   },
 );

@@ -24,8 +24,14 @@ import authRoutes from './routes/auth';
 import attendanceRoutes from './routes/attendance';
 import mdRoutes from './routes/md';
 import workLogRoutes from './routes/workLog';
+import financeExportRoutes from './routes/financeExport';
+import cpRoutes from './routes/cp';
+import pettyCashRoutes from './routes/pettyCash';
+import workUpdateRoutes from './routes/workUpdates';
+import assetRoutes from './routes/assets';
 import masterLeadRoutes from './routes/masterLeads';
 import dayPlanRoutes from './routes/dayPlans';
+import myDayRoutes from './routes/myDay';
 import reportRoutes from './routes/reports';
 import taskRoutes from './routes/tasks';
 import performanceRoutes from './routes/performance';
@@ -50,8 +56,11 @@ import customerRoutes from './routes/customers';
 import publicRoutes from './routes/public';
 import publicWebsiteRoutes from './routes/publicWebsite';
 import myPropertyRoutes from './routes/myProperty';
+import associateRoutes from './routes/associates';
+import associatePortalRoutes from './routes/associatePortal';
 import adminRoutes from './routes/admin';
 import expenseRefundRoutes from './routes/expenseRefunds';
+import draftRoutes from './routes/drafts';
 import pushRoutes from './routes/pushSubscriptions';
 import announcementRoutes from './routes/announcement';
 import offerRoutes from './routes/offers';
@@ -293,7 +302,9 @@ if (mountInternal) {
   app.use('/api/v1/md', mdRoutes);
   app.use('/api/v1/work-log', workLogRoutes);
   app.use('/api/v1/master-leads', masterLeadRoutes);
+  app.use('/api/v1/associates', associateRoutes);
   app.use('/api/v1/day-plans', dayPlanRoutes);
+  app.use('/api/v1/my-day', myDayRoutes);
   app.use('/api/v1/reports', reportRoutes);
   app.use('/api/v1/tasks', taskRoutes);
   app.use('/api/v1/performance', performanceRoutes);
@@ -312,6 +323,14 @@ if (mountInternal) {
   app.use('/api/v1/demos', demoRoutes);
   app.use('/api/v1/admin', adminRoutes);
   app.use('/api/v1/expense-refunds', expenseRefundRoutes);
+  app.use('/api/v1/finance', financeExportRoutes);
+  // External channel partners: their own sign-in and token (item 5).
+  app.use('/api/v1/cp', cpRoutes);
+  // Petty cash and the monthly budget (item 4).
+  app.use('/api/v1/petty-cash', pettyCashRoutes);
+  app.use('/api/v1/work-updates', workUpdateRoutes);
+  app.use('/api/v1/assets', assetRoutes);
+  app.use('/api/v1/drafts', draftRoutes);
   app.use('/api/v1/push', pushRoutes);
   app.use('/api/v1/announcement', auditWrites('ANNOUNCEMENT'), announcementRoutes);
   app.use('/api/v1/offers', auditWrites('OFFER'), offerRoutes);
@@ -338,6 +357,8 @@ if (mountPortal) {
   // My Property portal (customers). Kept separate from `mountInternal` so a
   // portal-only process doesn't also carry the full internal CRM surface.
   app.use('/api/v1/customer', myPropertyRoutes);
+  // Associate app (read only): 404 unless ASSOCIATE_PORTAL_ENABLED=true.
+  app.use('/api/v1/associate', associatePortalRoutes);
 }
 
 // Fallback for unknown API routes
@@ -363,6 +384,14 @@ app.get('*', (req, res) => {
 
 // Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err && err.name === 'MulterError') {
+    const tooBig = err.code === 'LIMIT_FILE_SIZE';
+    return res.status(tooBig ? 413 : 400).json({
+      error: tooBig
+        ? 'That photo is too large. Maximum size is 10 MB.'
+        : 'Upload failed: ' + err.message,
+    });
+  }
   if (err && (err.name === 'AppError' || err.statusCode || err.status)) {
     return res.status(err.statusCode || err.status || 400).json({ error: err.message });
   }

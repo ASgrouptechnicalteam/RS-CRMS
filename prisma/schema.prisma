@@ -215,19 +215,20 @@ model Company {
   code                String @unique
   property_type_group String @default("RADHA_REAL_HOMES")
 
-  branches        Branch[]
-  employees       Employee[]
-  employee_access EmployeeCompanyAccess[]
-  holidays        CompanyHoliday[]
-  leads           Lead[]
-  opportunities   Opportunity[]
-  customers       Customer[]
-  properties      Property[]
-  projects        Project[]
-  daily_targets   DailyTarget[]
-  bookings        Booking[]
-  payments        Payment[]
-  complaints      Complaint[]
+  branches          Branch[]
+  draft_submissions DraftSubmission[]
+  employees         Employee[]
+  employee_access   EmployeeCompanyAccess[]
+  holidays          CompanyHoliday[]
+  leads             Lead[]
+  opportunities     Opportunity[]
+  customers         Customer[]
+  properties        Property[]
+  projects          Project[]
+  daily_targets     DailyTarget[]
+  bookings          Booking[]
+  payments          Payment[]
+  complaints        Complaint[]
 
   kiosk_credentials KioskCredential[]
 
@@ -279,6 +280,101 @@ model Offer {
   @@index([company_id, active])
 }
 
+// ─────────────────────────────────────────────────────────────
+// DRAFT SUBMISSIONS — rough property/project drafts handed to the digital
+// team (PM, external CP). Separate from Property/Project: the digital team
+// creates the real record through the normal endpoints, then links it here.
+// ─────────────────────────────────────────────────────────────
+
+enum DraftType {
+  PROPERTY
+  PROJECT
+}
+
+enum DraftStatus {
+  SUBMITTED
+  IN_PROGRESS
+  NEEDS_INFO
+  READY_IN_CRM
+}
+
+enum DraftAttachmentKind {
+  PHOTO
+  VIDEO
+  PRICE_SHEET
+  DOCUMENT
+}
+
+model DraftSubmission {
+  id          Int         @id @default(autoincrement())
+  company_id  Int
+  type        DraftType
+  status      DraftStatus @default(SUBMITTED)
+  status_note String?     @db.Text
+
+  submitted_by Int
+  picked_by    Int?
+  picked_at    DateTime?
+  ready_at     DateTime?
+
+  // Mandatory in every draft (property: title; project: name).
+  title    String @db.VarChar(255)
+  location String @db.VarChar(255)
+  city     String @db.VarChar(120)
+
+  // Mandatory for PROPERTY drafts only (checked by the draft Zod schema).
+  brand_type String? @db.VarChar(40)
+  category   String? @db.VarChar(40)
+  area_sqft  Float?
+
+  // Mandatory for PROJECT drafts only.
+  project_type   String? @db.VarChar(40)
+  developer_name String? @db.VarChar(255)
+
+  // Optional owner contact (resale listings), PROPERTY drafts.
+  owner_contact_name  String? @db.VarChar(255)
+  owner_contact_phone String? @db.VarChar(20)
+
+  // Every other optional lite field, validated per type before saving.
+  extra Json?
+
+  linked_project_id  Int? @unique
+  linked_property_id Int? @unique
+
+  company         Company           @relation(fields: [company_id], references: [id])
+  submitter       Employee          @relation("DraftsSubmitted", fields: [submitted_by], references: [id])
+  picker          Employee?         @relation("DraftsPicked", fields: [picked_by], references: [id])
+  linked_project  Project?          @relation("DraftLinkedProject", fields: [linked_project_id], references: [id], onDelete: SetNull)
+  linked_property Property?         @relation("DraftLinkedProperty", fields: [linked_property_id], references: [id], onDelete: SetNull)
+  attachments     DraftAttachment[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([company_id, status])
+  @@index([submitted_by, created_at])
+  @@index([picked_by, picked_at])
+}
+
+model DraftAttachment {
+  id            Int                 @id @default(autoincrement())
+  draft_id      Int
+  kind          DraftAttachmentKind
+  // Storage key, never sent to a client; files are read back only through
+  // GET /drafts/:id/attachments/:attachmentId.
+  storage_path  String              @db.Text
+  original_name String              @db.VarChar(255)
+  mime          String              @db.VarChar(100)
+  size          Int
+  uploaded_by   Int
+  created_at    DateTime            @default(now())
+
+  draft    DraftSubmission @relation(fields: [draft_id], references: [id], onDelete: Cascade)
+  uploader Employee        @relation("DraftAttachmentsUploaded", fields: [uploaded_by], references: [id])
+
+  @@index([draft_id])
+}
+
 model Branch {
   id         Int    @id @default(autoincrement())
   company_id Int
@@ -308,21 +404,21 @@ model Branch {
 }
 
 model Employee {
-  id                  Int     @id @default(autoincrement())
-  employee_code       String  @unique
+  id                  Int       @id @default(autoincrement())
+  employee_code       String    @unique
   company_id          Int
   branch_id           Int?
   password_hash       String
-  status              String  @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED, RESIGNED
-  token_version       Int     @default(1)
-  attendance_required Boolean @default(true)
-  first_login_done    Boolean @default(false)
+  status              String    @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED, RESIGNED
+  token_version       Int       @default(1)
+  attendance_required Boolean   @default(true)
+  first_login_done    Boolean   @default(false)
   // 2-step login with an authenticator app (required for MD, Admin, Finance).
   // Secret is encrypted (encryptData); last_step stops one code being used twice.
   totp_secret         String?   @db.Text
   totp_enabled_at     DateTime?
   totp_last_step      Int?
-  report_required    Boolean @default(true) // derived from employment_type at create; overridable per employee
+  report_required     Boolean   @default(true) // derived from employment_type at create; overridable per employee
 
   // Printed badge + PIN at the kiosk (F-12, decision D2): for staff with no phone or
   // data. Off for everyone; HR turns it on one person at a time. Kiosk-only.
@@ -347,8 +443,8 @@ model Employee {
   profile_image_url String?
 
   // 2. Address & Emergency Contacts
-  current_address            String?
-  permanent_address          String?
+  current_address            String? @db.Text
+  permanent_address          String? @db.Text
   emergency_contact_name     String?
   emergency_contact_relation String?
   emergency_contact_phone    String?
@@ -386,6 +482,9 @@ model Employee {
   qr_codes                      EmployeeQrCode[]
   attendance_logs               AttendanceLog[]
   daily_reports                 DailyReport[]
+  work_updates                  WorkUpdate[]
+  asset_assignments             AssetAssignment[]            @relation("AssetHolder")
+  assets_holding                Asset[]                      @relation("AssetCurrentHolder")
   kiosk_credentials_created     KioskCredential[]            @relation("KioskCredentialsCreated")
   assigned_tasks                Task[]                       @relation("AssignedTasks")
   notifications                 Notification[]
@@ -403,6 +502,9 @@ model Employee {
   assigned_projects             Project[]                    @relation("AssignedPMProjects")
   verified_projects             Project[]                    @relation("ProjectVerifier")
   dm_executive_projects         Project[]                    @relation("DMExecutiveProjects")
+  drafts_submitted              DraftSubmission[]            @relation("DraftsSubmitted")
+  drafts_picked                 DraftSubmission[]            @relation("DraftsPicked")
+  draft_attachments_uploaded    DraftAttachment[]            @relation("DraftAttachmentsUploaded")
   created_projects              Project[]                    @relation("CreatedProjects")
   assigned_properties           Property[]                   @relation("AssignedPMProperties")
   dm_executive_properties       Property[]                   @relation("DMExecutiveProperties")
@@ -450,6 +552,8 @@ model Employee {
   complaints                 Complaint[]             @relation("AssignedComplaints")
   webauthn_credentials       WebAuthnCredential[]
   received_feedback          SiteVisitFeedback[]     @relation("RatedInFeedback")
+  owned_associates           Associate[]             @relation("AssociateOwner")
+  associate_follow_ups       AssociateFollowUp[]
 
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt
@@ -644,7 +748,7 @@ model AttendanceLog {
   status                   String // PRESENT, LATE, HALF_DAY, ABSENT, APPROVED_LATE
   source                   String    @default("QR_SCAN") // QR_SCAN, SYSTEM_AUTO, MANUAL
   branch_id                Int? // which branch kiosk performed this scan (kiosk flow only; personal QR has none)
-  notes                    String?
+  notes                    String?   @db.Text
 
   employee Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
@@ -674,7 +778,7 @@ model AttendanceCheckinProof {
   review_status     String    @default("PENDING") // AUTO_OK | PENDING | ACCEPTED | REJECTED
   reviewed_by       Int?
   reviewed_at       DateTime?
-  review_note       String?
+  review_note       String?   @db.Text
   created_at        DateTime  @default(now())
 
   @@index([employee_id, created_at])
@@ -725,7 +829,7 @@ model AttendanceProposal {
   type        String // LATE_CHECKIN, LEAVE_DAY
   leave_type  String    @default("FULL_DAY") // FULL_DAY, FIRST_HALF, SECOND_HALF
   target_date DateTime
-  reason      String
+  reason      String    @db.Text
   status      String    @default("PENDING") // PENDING, APPROVED, REJECTED
   reviewed_by Int?
   reviewed_at DateTime?
@@ -739,7 +843,7 @@ model CompanyHoliday {
   company_id Int
   date       DateTime @db.Date // Store IST date representation
   name       String
-  notes      String?
+  notes      String?  @db.Text
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -753,7 +857,7 @@ model CompanyHoliday {
 model Task {
   id             Int       @id @default(autoincrement())
   title          String
-  description    String?
+  description    String?   @db.Text
   assignee_id    Int
   target_date    DateTime
   status         String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, OVERDUE, CANCELLED, NOT_COMPLETED, BLOCKED
@@ -790,17 +894,18 @@ model DailyReport {
   id                  Int      @id @default(autoincrement())
   employee_id         Int
   submitted_at        DateTime @default(now())
-  summary             String
+  summary             String   @db.Text
   call_count          Int      @default(0)
   site_visit_count    Int      @default(0)
   closed_deal_count   Int      @default(0)
   target_met          Boolean  @default(true)
-  below_target_reason String?
+  below_target_reason String?  @db.Text
   metrics_json        Json? // Stores the submitted dynamic Google-Form-style metrics
 
   employee Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
   @@index([employee_id])
+  @@index([submitted_at])
 }
 
 model AuditEvent {
@@ -827,12 +932,28 @@ model AuditEvent {
   @@index([company_id, created_at])
 }
 
+/// One number per day for the Technical Manager's growth history (item 9,
+/// 2026-11-15): database and table sizes (bytes), estimated and exact row
+/// counts. company_id is NULL for system-wide numbers (a table's size has no
+/// company). Written by the 03:30 IST snapshot job; kept 400 days.
+model SystemMetricSnapshot {
+  id            Int      @id @default(autoincrement())
+  snapshot_date DateTime @db.Date
+  company_id    Int?
+  metric        String   @db.VarChar(120)
+  value         BigInt
+  created_at    DateTime @default(now())
+
+  @@unique([snapshot_date, company_id, metric])
+  @@index([metric, snapshot_date])
+}
+
 model Notification {
   id           Int       @id @default(autoincrement())
   employee_id  Int
   type         String // TARGET_ASSIGNED, TASK_OVERDUE, PROPOSAL_APPROVED, SYSTEM_ALERT
   title        String
-  message      String
+  message      String    @db.Text
   is_read      Boolean   @default(false)
   is_dismissed Boolean   @default(false)
   dismissed_at DateTime?
@@ -876,6 +997,7 @@ model DailyTarget {
   employee_id         Int?
   target_date         DateTime @default(now())
   calls_target        Int      @default(0)
+  followups_target    Int      @default(0)
   site_visits_target  Int      @default(0)
   closed_deals_target Int      @default(0)
 
@@ -889,6 +1011,25 @@ model DailyTarget {
 
   @@index([role_name])
   @@index([employee_id])
+}
+
+// A closed week's or month's report (services/reports), saved the first time it
+// is read or made, so its numbers never change when older data is corrected.
+// scope: COMPANY, TECHNICAL, HR, FINANCE (company-wide), SALES:<manager id>,
+// PM:<id>, CHANNEL:<id>, PERSONAL:<id>; "@1,2" is added when the viewer sees
+// several companies. JOB rows mark the "report ready" notification run.
+model ReportSnapshot {
+  id           Int       @id @default(autoincrement())
+  company_id   Int
+  scope        String    @db.VarChar(120)
+  period_type  String    @db.VarChar(10) // WEEK | MONTH
+  period_start DateTime // IST midnight of the first day
+  version      Int       @default(1)
+  data         Json
+  generated_at DateTime  @default(now())
+  notified_at  DateTime?
+
+  @@unique([company_id, scope, period_type, period_start])
 }
 
 model PerformanceSnapshot {
@@ -942,6 +1083,9 @@ model Lead {
   referral_person_name String?
   referral_employee_id Int?
   previous_lead_id     Int?
+  // Handed over when its owner left: who keeps the credit, and the stage it had then.
+  handed_over_from_id  Int?
+  handover_status      String?   @db.VarChar(30)
 
   // Phase-19 audit #9: Channel Partner Manager leads originate from an
   // external agent who works for a partner company, not an internal
@@ -951,6 +1095,10 @@ model Lead {
   external_agent_phone        String?
   external_agent_associate_id String?
   external_agent_company      String?
+  // The associate who brought the lead (filled when the CPM adds it, or by
+  // the backfill from the external_agent_* columns above, which are kept).
+  associate_id                Int?
+  associate                   Associate? @relation(fields: [associate_id], references: [id])
 
   company           Company   @relation(fields: [company_id], references: [id])
   branch            Branch?   @relation(fields: [branch_id], references: [id])
@@ -972,7 +1120,7 @@ model Lead {
   // Free-text detail captured only when exit_reason = OTHER — kept separate
   // from the general `notes` field so "why was this actually dropped" stays
   // queryable/reportable on its own, not buried in a mixed-purpose notes blob.
-  exit_reason_detail String?
+  exit_reason_detail String?         @db.Text
   exited_from_status String? // snapshot of Lead.status at the moment of DROPPED (for reporting)
 
   activities           LeadActivity[]
@@ -1001,8 +1149,97 @@ model Lead {
   @@index([assigned_to_id, status])
   @@index([company_id, status])
   @@index([created_by_id])
+  @@index([handed_over_from_id])
   @@index([source])
   @@index([email])
+  @@index([associate_id])
+}
+
+/// An associate (freelance agent) who brings leads, per company. The Channel
+/// Partner Manager follows them up. No PAN, Aadhaar or bank details are kept
+/// here. `designation` is plain text from the portal and never maps to a CRM
+/// role. Pipeline: INVITED, CONTACTED, DOCUMENTS, ENROLLED, ACTIVE, DORMANT, LEFT.
+model Associate {
+  id                  Int       @id @default(autoincrement())
+  company_id          Int
+  associate_code      String?   @db.VarChar(40) // the portal's RS- code when known
+  portal_user_id      String?   @db.VarChar(64)
+  full_name           String    @db.VarChar(120)
+  phone               String    @db.VarChar(15) // 10 digits
+  email               String?   @db.VarChar(254)
+  designation         String?   @db.VarChar(80)
+  upline_id           Int?
+  owner_cpm_id        Int?
+  pipeline            String    @default("INVITED") @db.VarChar(12)
+  pipeline_changed_at DateTime  @default(now())
+  enrolled_at         DateTime?
+  notes               String?   @db.Text
+  next_follow_up_at   DateTime?
+  last_contacted_at   DateTime?
+  source              String?   @db.VarChar(20) // MANUAL, PORTAL_EXPORT, SPREADSHEET
+  created_by_id       Int?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  upline     Associate?           @relation("AssociateUpline", fields: [upline_id], references: [id])
+  downline   Associate[]          @relation("AssociateUpline")
+  owner      Employee?            @relation("AssociateOwner", fields: [owner_cpm_id], references: [id])
+  follow_ups AssociateFollowUp[]
+  leads      Lead[]
+  credential AssociateCredential?
+
+  @@unique([company_id, phone])
+  @@unique([company_id, associate_code])
+  @@index([company_id, pipeline])
+  @@index([owner_cpm_id])
+  @@index([upline_id])
+  @@index([company_id, next_follow_up_at])
+}
+
+/// One follow-up with an associate (a call, WhatsApp or visit). These are
+/// associate follow-ups, never customer calls: nothing here writes CALL_LOGGED.
+model AssociateFollowUp {
+  id                Int       @id @default(autoincrement())
+  company_id        Int
+  associate_id      Int
+  employee_id       Int
+  channel           String    @default("CALL") @db.VarChar(12) // CALL, WHATSAPP, OFFICE_VISIT, SITE_VISIT
+  outcome           String    @db.VarChar(12) // REACHED, NO_ANSWER, BUSY, WRONG_NUMBER, CALL_BACK
+  notes             String?   @db.Text
+  next_follow_up_at DateTime?
+  created_at        DateTime  @default(now())
+
+  associate Associate @relation(fields: [associate_id], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employee_id], references: [id])
+
+  @@index([associate_id, created_at])
+  @@index([employee_id, created_at])
+}
+
+/// Login for the read-only associate app (off unless ASSOCIATE_PORTAL_ENABLED).
+/// Kept apart from Associate so the record itself carries no login columns.
+model AssociateCredential {
+  associate_id          Int       @id
+  password_hash         String    @db.VarChar(100)
+  force_password_change Boolean   @default(true)
+  temp_password_expiry  DateTime?
+  set_by_id             Int?
+  last_login_at         DateTime?
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+
+  associate Associate @relation(fields: [associate_id], references: [id], onDelete: Cascade)
+}
+
+/// Per-company limits for the associate follow-up queue and escalation.
+model AssociateSetting {
+  company_id    Int      @id
+  quiet_days    Int      @default(3) // no update on their leads for this long: call them
+  stale_days    Int      @default(7) // one lead silent this long: on the queue
+  escalate_days Int      @default(14) // one lead silent this long: the CPM's manager is told
+  dormant_days  Int      @default(60) // no lead or update this long: ACTIVE becomes DORMANT
+  updated_by_id Int?
+  updated_at    DateTime @updatedAt
 }
 
 /// Full list of a lead's preferred locations (§ Phase 2). `Lead.preferred_location`
@@ -1043,6 +1280,7 @@ model LeadActivity {
   @@index([actor_id])
   @@index([lead_id, activity_type])
   @@index([actor_id, created_at])
+  @@index([activity_type, created_at])
 }
 
 model LeadMatchingRequirement {
@@ -1086,24 +1324,25 @@ model LeadPropertyInterest {
 /// to all of them — address, developer, approvals, amenities, pricing rules — so
 /// a unit never repeats them (spec section 28: don't duplicate common data).
 model Project {
-  id             Int          @id @default(autoincrement())
-  project_code   String       @unique
-  company_id     Int
-  branch_id      Int?
-  name           String
-  description    String?      @db.Text
-  project_type   ProjectType?
-  developer_name String?
-  location       String
-  total_area     String? // Deprecated: free text, unusable for maths. Use total_area_value/unit.
-  total_units    Int? // Planned target only — live counts are aggregated from units.
-  launch_date    DateTime?
-  status         String       @default("PLANNING") // PLANNING, UNDER_CONSTRUCTION, COMPLETED, CANCELLED
-  project_phase  String?
-  rera_number    String?
-  amenities      Json? // Deprecated: superseded by ProjectAmenity. Retained for old rows.
-  assigned_pm_id Int?
-  slug           String       @default(uuid()) // WR-6: SEO-friendly public identifier (overridden by service layer)
+  draft_submission DraftSubmission? @relation("DraftLinkedProject")
+  id               Int              @id @default(autoincrement())
+  project_code     String           @unique
+  company_id       Int
+  branch_id        Int?
+  name             String
+  description      String?          @db.Text
+  project_type     ProjectType?
+  developer_name   String?
+  location         String
+  total_area       String? // Deprecated: free text, unusable for maths. Use total_area_value/unit.
+  total_units      Int? // Planned target only — live counts are aggregated from units.
+  launch_date      DateTime?
+  status           String           @default("PLANNING") // PLANNING, UNDER_CONSTRUCTION, COMPLETED, CANCELLED
+  project_phase    String?
+  rera_number      String?
+  amenities        Json? // Deprecated: superseded by ProjectAmenity. Retained for old rows.
+  assigned_pm_id   Int?
+  slug             String           @default(uuid()) // WR-6: SEO-friendly public identifier (overridden by service layer)
 
   // Scale
   total_area_value Float?
@@ -1285,7 +1524,7 @@ model ProjectUnit {
   charges_total              Float             @default(0)
   taxes_total                Float             @default(0)
   discount_amount            Float             @default(0)
-  discount_reason            String?
+  discount_reason            String?           @db.Text
   /// What the rules produce. Never overwritten by an override (spec section 20).
   calculated_price           Float             @default(0)
   override_price             Float?
@@ -1818,47 +2057,48 @@ model PropertyLayoutRegion {
 }
 
 model Property {
-  id                             Int       @id @default(autoincrement())
-  property_code                  String    @unique
+  draft_submission               DraftSubmission? @relation("DraftLinkedProperty")
+  id                             Int              @id @default(autoincrement())
+  property_code                  String           @unique
   project_id                     Int?
   company_id                     Int
   branch_id                      Int?
   title                          String
-  description                    String?   @db.Text
-  brand_type                     String    @default("SONTHILLU") // SONTHILLU (Residential), RADHA_REAL_HOMES (Commercial/Plots)
-  category                       String    @default("VILLA") // APARTMENT, INDEPENDENT_HOUSE, DUPLEX, INDEPENDENT_FLOOR, VILLA, PENTHOUSE, STUDIO, PLOT, FARM_HOUSE, AGRICULTURAL_LAND
+  description                    String?          @db.Text
+  brand_type                     String           @default("SONTHILLU") // SONTHILLU (Residential), RADHA_REAL_HOMES (Commercial/Plots)
+  category                       String           @default("VILLA") // APARTMENT, INDEPENDENT_HOUSE, DUPLEX, INDEPENDENT_FLOOR, VILLA, PENTHOUSE, STUDIO, PLOT, FARM_HOUSE, AGRICULTURAL_LAND
   // § Phase 3: removed the standalone manually-typed listing price. It could
   // silently diverge from the pricing engine's `final_price` (the two were
   // never actually kept in sync). `final_price` is now the only authoritative
   // price for a Property; `base_rate` below is the required engine input.
   area_sqft                      Float
   location                       String
-  address                        String?   @db.Text
+  address                        String?          @db.Text
   bedrooms                       Int?
   bathrooms                      Int?
   facing                         String? // EAST, WEST, NORTH, SOUTH, NORTH_EAST, SOUTH_EAST
-  status                         String    @default("PENDING_VERIFICATION") // PENDING_VERIFICATION, PENDING_DM_POLISH, PENDING_MD_APPROVAL, LIVE, REJECTED, LOCKED, BOOKED, SOLD
+  status                         String           @default("PENDING_VERIFICATION") // PENDING_VERIFICATION, PENDING_DM_POLISH, PENDING_MD_APPROVAL, LIVE, REJECTED, LOCKED, BOOKED, SOLD
   assigned_pm_id                 Int?
   digital_marketing_executive_id Int? // Set by DMH when choosing "Needs Polish"
   created_by_id                  Int?
   verified_by_pm_at              DateTime?
-  location_confirmed_by_pm       Boolean   @default(false) // PM must explicitly confirm on-site location before verification is allowed
+  location_confirmed_by_pm       Boolean          @default(false) // PM must explicitly confirm on-site location before verification is allowed
   dm_polished_at                 DateTime?
   md_approved_at                 DateTime?
-  rejection_reason               String?   @db.Text
+  rejection_reason               String?          @db.Text
   seo_title                      String?
   seo_keywords                   String?
-  amenities                      String?   @db.Text
+  amenities                      String?          @db.Text
   state                          String? // Telangana, Andhra Pradesh, etc.
   city                           String? // Hyderabad, Vijayawada, etc.
   locality                       String? // Miyapur, Gachibowli, etc.
   pincode                        String? // 500049, etc.
   latitude                       Float? // Internal only — NOT public
   longitude                      Float? // Internal only — NOT public
-  listing_type                   String?   @default("NEW") // NEW, RESALE
+  listing_type                   String?          @default("NEW") // NEW, RESALE
   possession_status              String? // READY_TO_MOVE, UNDER_CONSTRUCTION
   slug                           String?
-  source                         String    @default("INTERNAL") // INTERNAL, WEBSITE_SELLER
+  source                         String           @default("INTERNAL") // INTERNAL, WEBSITE_SELLER
 
   // ---- Sales status -------------------------------------------------------
   // `status` above remains the listing/publication pipeline (PENDING_VERIFICATION
@@ -1908,7 +2148,7 @@ model Property {
   charges_total     Float             @default(0)
   taxes_total       Float             @default(0)
   discount_amount   Float             @default(0)
-  discount_reason   String?
+  discount_reason   String?           @db.Text
   calculated_price  Float             @default(0)
   override_price    Float?
   override_reason   String?           @db.Text
@@ -2045,6 +2285,10 @@ model SiteVisitBooking {
   completed_at                    DateTime?
   visit_type                      String          @default("SCHEDULED") // SCHEDULED | WALK_IN (customer came on their own; recorded afterwards by the telecaller)
   opportunity_id                  Int?
+  // Optional "Tell the PM" note from the telecaller, and the pick-up request. Shown in the visit brief.
+  customer_brief                  String?         @db.Text
+  pick_up_requested               Boolean         @default(false)
+  pick_up_address                 String?         @db.Text
 
   lead                         Lead         @relation(fields: [lead_id], references: [id], onDelete: Cascade)
   opportunity                  Opportunity? @relation(fields: [opportunity_id], references: [id], onDelete: SetNull)
@@ -2072,6 +2316,8 @@ model SiteVisitBooking {
   @@index([project_manager_id])
   @@index([assigned_agent_id])
   @@index([status])
+  @@index([scheduled_date])
+  @@index([completed_at])
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2083,7 +2329,7 @@ model SiteVisitProperty {
   visit_id        Int
   property_id     Int?
   project_unit_id Int?
-  outcome         String? // INTERESTED, NOT_INTERESTED — null until captured
+  outcome         String? @db.Text // INTERESTED, NOT_INTERESTED — null until captured
   outcome_reason  String? @db.Text // required when outcome = NOT_INTERESTED
 
   visit        SiteVisitBooking @relation(fields: [visit_id], references: [id], onDelete: Cascade)
@@ -2144,22 +2390,27 @@ model MessageTemplate {
 // ─────────────────────────────────────────────────────────────
 
 model ExpenseRefund {
-  id              Int     @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   employee_id     Int
   company_id      Int
-  purpose         String  @db.Text
-  amount          Float
+  purpose         String    @db.Text
+  amount          Decimal   @db.Decimal(14, 2)
   proof_image_url String? // Relative path on server e.g. /uploads/expense-proofs/123.jpg
-  status          String  @default("PENDING")
+  // Item 6 #4 (2026-11-15): the same category list as petty cash, the day the
+  // money was spent, and the bill number. All optional (older rows have none).
+  category        String?   @db.VarChar(60)
+  spend_date      DateTime? @db.Date
+  bill_no         String?   @db.VarChar(60)
+  status          String    @default("PENDING")
   // PENDING → ACCOUNTANT_APPROVED → MD_APPROVED → REFUNDED
   // REJECTED_BY_ACCOUNTANT | REJECTED_BY_MD
 
   accountant_id          Int? // Finance / Accountant employee id
-  accountant_note        String?
+  accountant_note        String?   @db.Text
   accountant_reviewed_at DateTime?
 
   md_id          Int? // MD employee id
-  md_note        String?
+  md_note        String?   @db.Text
   md_reviewed_at DateTime?
 
   refunded_at DateTime?
@@ -2229,16 +2480,16 @@ model Complaint {
   property_id            Int? // nullable — optional linkage; derivable from Booking.property_id
   project_unit_id        Int? // nullable — set instead of property_id when the complaint is about a project unit
   title                  String
-  description            String? // nullable Text
+  description            String?   @db.Text // nullable Text
   category               String? // nullable
   priority               String    @default("MEDIUM") // LOW | MEDIUM | HIGH
   status                 String    @default("OPEN") // OPEN | IN_PROGRESS | RESOLVED | CLOSED | REOPENED
   assigned_employee_id   Int? // nullable — foreign key to Employee
-  resolution_description String? // nullable Text
+  resolution_description String?   @db.Text // nullable Text
   resolved_by            Int? // nullable — foreign key to Employee (who resolved)
   resolved_at            DateTime? // nullable — when complaint was resolved
   closed_at              DateTime? // nullable — when complaint was closed
-  closure_reason         String? // nullable — controlled vocabulary: RESOLVED, CUSTOMER_UNSATISFIED, NOT_APPLICABLE, CUSTOMER_WITHDRAWN
+  closure_reason         String?   @db.Text // nullable — controlled vocabulary: RESOLVED, CUSTOMER_UNSATISFIED, NOT_APPLICABLE, CUSTOMER_WITHDRAWN
   created_at             DateTime  @default(now())
   updated_at             DateTime  @updatedAt
 
@@ -2335,9 +2586,9 @@ model Booking {
 
   status String @default("PENDING") // DRAFT, FORM_SUBMITTED, PENDING_MD_APPROVAL, CONFIRMED, REGISTERED, COMPLETED, CANCELLED
 
-  agreed_price   Float
-  booking_amount Float
-  balance_amount Float
+  agreed_price   Decimal  @db.Decimal(14, 2)
+  booking_amount Decimal  @db.Decimal(14, 2)
+  balance_amount Decimal  @db.Decimal(14, 2)
   booking_date   DateTime @default(now())
 
   source       String?
@@ -2356,13 +2607,13 @@ model Booking {
   plot_no              String? // "Plot No"
   area_sqyd            Float? // "Area" in Sq.Yds
   facing               String? // "Sq.Yds Focusing" (North/South/East/West/Corner/Main Road)
-  price_per_sqyd       Float? // "Price/Sq.Yd"
-  sale_price_per_sqyd  Float? // "Sale Price/Sq.Yd"
-  charges_per_sqyd     Float? // "Charges/Sq Yd"
+  price_per_sqyd       Decimal?  @db.Decimal(14, 2) // "Price/Sq.Yd"
+  sale_price_per_sqyd  Decimal?  @db.Decimal(14, 2) // "Sale Price/Sq.Yd"
+  charges_per_sqyd     Decimal?  @db.Decimal(14, 2) // "Charges/Sq Yd"
   emi_months           Int? // "EMI months"
-  emi_charges          Float? // "EMI Charges" (monthly installment amount, auto-calculated by the standard reducing-balance formula unless overridden)
+  emi_charges          Decimal?  @db.Decimal(14, 2) // "EMI Charges" (monthly installment amount, auto-calculated by the standard reducing-balance formula unless overridden)
   emi_interest_rate    Float? // Annual interest rate (%) used for the EMI schedule; 0/null = interest-free installment plan (interest then applies only as the T&C's 24% p.a. late-payment penalty)
-  total_cost           Float? // "Total Cost" computed: area × sale_price_per_sqyd + charges
+  total_cost           Decimal?  @db.Decimal(14, 2) // "Total Cost" computed: area × sale_price_per_sqyd + charges
   total_cost_words     String? // "In words" for total cost
   receipt_no           String? // "Receipt No" for the booking amount receipt
   receipt_date         DateTime? // Date of the booking receipt
@@ -2426,7 +2677,7 @@ model Payment {
   booking_id     Int
   installment_id Int?
 
-  amount           Float
+  amount           Decimal  @db.Decimal(14, 2)
   payment_method   String // CASH, CHEQUE, BANK_TRANSFER, ONLINE
   reference_number String? // Cheque number or transaction ID
   payment_date     DateTime @default(now())
@@ -2459,14 +2710,15 @@ model Payment {
   @@index([booking_id])
   @@index([status])
   @@index([portal_payment_id]) // Phase 11 Packet 3F — scoped dedup lookup
+  @@index([company_id, payment_date])
 }
 
 model Installment {
   id                 Int       @id @default(autoincrement())
   booking_id         Int
   installment_number Int
-  expected_amount    Float
-  received_amount    Float     @default(0)
+  expected_amount    Decimal   @db.Decimal(14, 2)
+  received_amount    Decimal   @default(0) @db.Decimal(14, 2)
   due_date           DateTime
   received_date      DateTime?
   status             String    @default("PENDING") // PENDING, PARTIALLY_RECEIVED, RECEIVED, OVERDUE, CANCELLED
@@ -2598,7 +2850,7 @@ model CustomerNotification {
   booking_id   Int?
   type         String // PORTAL_ACTIVATED, KYC_STATUS_UPDATED
   title        String
-  message      String
+  message      String    @db.Text
   is_read      Boolean   @default(false)
   is_dismissed Boolean   @default(false)
   dismissed_at DateTime?
@@ -2971,46 +3223,97 @@ model PerformanceAdjustment {
 
 /// One file uploaded as master data. The counters are kept here because counting
 /// a table of 1 crore rows on every page view would be slow.
+/// A named part of master data (government employees, housing leads...). Numbers are
+/// assigned from one group at a time.
+model MasterLeadGroup {
+  id            Int      @id @default(autoincrement())
+  company_id    Int
+  name          String   @db.VarChar(80)
+  is_active     Boolean  @default(true)
+  created_by_id Int?
+  created_at    DateTime @default(now())
+
+  @@unique([company_id, name])
+}
+
 model MasterLeadBatch {
-  id             Int      @id @default(autoincrement())
-  company_id     Int
-  file_name      String   @db.VarChar(200)
-  file_size      BigInt   @default(0)
-  source         String   @default("BULK_UPLOAD") @db.VarChar(40)
-  source_detail  String?  @db.VarChar(80)
-  uploaded_by_id Int
-  rows_received  Int      @default(0)
-  added          Int      @default(0)
-  duplicates     Int      @default(0)
-  failed         Int      @default(0)
-  assigned_count Int      @default(0)
-  skipped_count  Int      @default(0) // already a lead in the CRM, or marked do not call
-  completed_at   DateTime?
-  created_at     DateTime @default(now())
+  id               Int       @id @default(autoincrement())
+  company_id       Int
+  group_id         Int
+  file_name        String    @db.VarChar(200)
+  file_size        BigInt    @default(0)
+  source           String    @default("BULK_UPLOAD") @db.VarChar(40)
+  source_detail    String?   @db.VarChar(80)
+  uploaded_by_id   Int
+  rows_received    Int       @default(0)
+  added            Int       @default(0)
+  duplicates       Int       @default(0)
+  failed           Int       @default(0)
+  assigned_count   Int       @default(0)
+  skipped_count    Int       @default(0) // already a lead in the CRM, or marked do not call
+  repeats_by_group Json? // { "<group id>": numbers in this file already held by that group }
+  completed_at     DateTime?
+  created_at       DateTime  @default(now())
 
   @@index([company_id, created_at])
+  @@index([group_id])
 }
 
 /// Numbers nobody has been given yet. Kept apart from Lead, on purpose, so a crore
 /// of rows never slows the lead screens: a row becomes a real Lead only when it is
 /// assigned to a telecaller, and only MD / Admin / Technical Manager see totals.
 model MasterLead {
-  id             Int       @id @default(autoincrement())
-  company_id     Int
-  batch_id       Int
-  phone          String    @db.VarChar(15)
-  name           String?   @db.VarChar(100)
-  email          String?   @db.VarChar(120)
-  location       String?   @db.VarChar(100)
-  notes          String?   @db.VarChar(255)
-  status         String    @default("NEW") @db.VarChar(12) // NEW, ASSIGNED, ALREADY_LEAD, DO_NOT_CALL
-  lead_id        Int?
-  assigned_to_id Int?
-  assigned_at    DateTime?
+  id               Int       @id @default(autoincrement())
+  company_id       Int
+  group_id         Int // Copied from the batch: the daily pick filters on it without a join
+  batch_id         Int
+  phone            String    @db.VarChar(15)
+  name             String?   @db.VarChar(100)
+  email            String?   @db.VarChar(120)
+  location         String?   @db.VarChar(100)
+  notes            String?   @db.VarChar(255)
+  status           String    @default("NEW") @db.VarChar(12) // NEW, ASSIGNED, ALREADY_LEAD, DO_NOT_CALL
+  lead_id          Int?
+  assigned_to_id   Int?
+  assigned_at      DateTime?
+  last_assignee_id Int?
+  returned_at      DateTime?
+  times_assigned   Int       @default(0) @db.SmallInt
 
   @@unique([company_id, phone])
   @@index([company_id, status, id])
+  @@index([company_id, group_id, status, id])
   @@index([batch_id, status, id])
+}
+
+/// Survives the Lead row: who was given a number and who gave it back. A return also
+/// keeps the removed lead in `snapshot`, so it can be restored by hand.
+model MasterLeadEvent {
+  id             BigInt   @id @default(autoincrement())
+  company_id     Int
+  master_lead_id Int
+  group_id       Int
+  employee_id    Int
+  event          String   @db.VarChar(12) // ASSIGNED, RETURNED
+  by_id          Int
+  reason         String?  @db.VarChar(200)
+  snapshot       Json?
+  created_at     DateTime @default(now())
+
+  @@index([employee_id, created_at])
+  @@index([master_lead_id])
+}
+
+/// One press of Assign. A repeat of the same request (a retry after a timeout, a double
+/// tap) is answered from here and never assigns twice.
+model MasterLeadAssignRun {
+  id         Int      @id @default(autoincrement())
+  request_id String   @unique @db.VarChar(64)
+  company_id Int
+  by_id      Int
+  status     String   @default("RUNNING") @db.VarChar(10) // RUNNING, DONE, FAILED
+  result     Json?
+  created_at DateTime @default(now())
 }
 
 /// A person's plan for one working day, written before logging out the day before.
@@ -3023,4 +3326,171 @@ model DayPlan {
   updated_at  DateTime @updatedAt
 
   @@unique([employee_id, plan_date])
+}
+
+// Manual ticks on the My Day checklist (SOPs are guidance). One row per person,
+// IST day and item; removing the tick deletes the row.
+model SopChecklistTick {
+  id          Int      @id @default(autoincrement())
+  employee_id Int
+  tick_date   String   @db.VarChar(10) // IST date, YYYY-MM-DD
+  item_key    String   @db.VarChar(64)
+  created_at  DateTime @default(now())
+
+  @@unique([employee_id, tick_date, item_key])
+}
+
+/// Petty cash per company (item 4, 2026-11-15). Never deleted: a mistake is
+/// corrected with an ADJUSTMENT (signed, reason required). EXPENSE and TOP_UP
+/// amounts are positive. A month's opening balance is the sum of everything
+/// before it, so it always equals the previous month's closing.
+model PettyCashEntry {
+  id            Int      @id @default(autoincrement())
+  company_id    Int
+  entry_date    DateTime @db.Date
+  type          String   @db.VarChar(12) // EXPENSE | TOP_UP | ADJUSTMENT
+  amount        Decimal  @db.Decimal(12, 2)
+  category      String?  @db.VarChar(40) // EXPENSE only, from the fixed list
+  source        String?  @db.VarChar(12) // TOP_UP only: BANK | UPI | CASH | CHEQUE | OTHER
+  note          String?  @db.Text // required for Other and ADJUSTMENT
+  paid_to       String?  @db.VarChar(120)
+  bill_no       String?  @db.VarChar(60)
+  proof_url     String?  @db.Text
+  entered_by_id Int
+  created_at    DateTime @default(now())
+
+  @@index([company_id, entry_date])
+}
+
+/// A company's budget for one month: the accountant submits, the MD approves.
+model MonthlyBudget {
+  id              Int                 @id @default(autoincrement())
+  company_id      Int
+  month           String              @db.VarChar(7) // YYYY-MM
+  status          String              @default("DRAFT") @db.VarChar(12) // DRAFT | SUBMITTED | APPROVED | REJECTED
+  note            String?             @db.Text
+  submitted_by_id Int?
+  submitted_at    DateTime?
+  decided_by_id   Int?
+  decided_at      DateTime?
+  decision_note   String?             @db.Text
+  created_at      DateTime            @default(now())
+  updated_at      DateTime            @updatedAt
+  lines           MonthlyBudgetLine[]
+
+  @@unique([company_id, month])
+}
+
+model MonthlyBudgetLine {
+  id        Int           @id @default(autoincrement())
+  budget_id Int
+  category  String        @db.VarChar(40)
+  amount    Decimal       @db.Decimal(12, 2)
+  budget    MonthlyBudget @relation(fields: [budget_id], references: [id], onDelete: Cascade)
+
+  @@unique([budget_id, category])
+}
+
+/// Work updates (2026-11-16): the digital team's tasks outside the CRM, logged
+/// as they happen (Start / Pause / Done). Finished ones fill the day-end report.
+model WorkUpdate {
+  id             Int       @id @default(autoincrement())
+  employee_id    Int
+  company_id     Int
+  kind           String    @db.VarChar(40)
+  title          String    @db.VarChar(255)
+  note           String?   @db.Text
+  link           String?   @db.VarChar(1000)
+  count          Int       @default(1)
+  project_id     Int?
+  property_id    Int?
+  /// WORKING, PAUSED, DONE, DROPPED
+  status         String    @default("WORKING") @db.VarChar(12)
+  started_at     DateTime  @default(now())
+  /// when the running spell began (null unless WORKING)
+  resumed_at     DateTime?
+  finished_at    DateTime?
+  /// minutes of earlier spells; the running spell is added on read
+  worked_minutes Int       @default(0)
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  employee Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@index([employee_id, started_at])
+  @@index([employee_id, status])
+  @@index([status])
+  @@index([finished_at])
+}
+
+/// Asset management (2026-11-16): every company item with its price; laptops,
+/// systems, mobiles, SIMs and tablets also record who holds them.
+model Asset {
+  id              Int       @id @default(autoincrement())
+  asset_code      String    @unique @db.VarChar(30)
+  company_id      Int
+  branch_id       Int?
+  category        String    @db.VarChar(30)
+  name            String    @db.VarChar(255)
+  /// IN_USE, IN_STOCK, UNDER_REPAIR, LOST, SCRAPPED
+  status          String    @default("IN_STOCK") @db.VarChar(15)
+  status_note     String?   @db.Text
+  /// more than 1 only for untracked items (chairs, tables...)
+  quantity        Int       @default(1)
+  location        String?   @db.VarChar(255)
+  purchase_price  Decimal?  @db.Decimal(14, 2)
+  purchase_date   DateTime? @db.Date
+  vendor          String?   @db.VarChar(255)
+  invoice_no      String?   @db.VarChar(100)
+  invoice_path    String?   @db.Text
+  warranty_until  DateTime? @db.Date
+  brand_model     String?   @db.VarChar(255)
+  serial_no       String?   @unique @db.VarChar(100)
+  imei            String?   @unique @db.VarChar(30)
+  specs           String?   @db.VarChar(500)
+  licence         String?   @db.VarChar(255)
+  sim_number      String?   @unique @db.VarChar(20)
+  sim_operator    String?   @db.VarChar(20)
+  /// PREPAID or POSTPAID
+  sim_plan_type   String?   @db.VarChar(10)
+  sim_plan_cost   Decimal?  @db.Decimal(10, 2)
+  /// next recharge (prepaid) or bill (postpaid) date
+  sim_due_date    DateTime? @db.Date
+  /// the phone the SIM is in (another asset)
+  sim_in_asset_id Int?
+  notes           String?   @db.Text
+  holder_id       Int?
+  created_by_id   Int
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  holder      Employee?         @relation("AssetCurrentHolder", fields: [holder_id], references: [id])
+  assignments AssetAssignment[]
+
+  @@index([company_id, category])
+  @@index([status])
+  @@index([holder_id])
+  @@index([warranty_until])
+  @@index([sim_due_date])
+}
+
+/// Who held an asset, from when to when.
+model AssetAssignment {
+  id             Int       @id @default(autoincrement())
+  asset_id       Int
+  employee_id    Int
+  assigned_at    DateTime  @default(now())
+  assigned_by_id Int
+  condition_out  String?   @db.VarChar(10)
+  note_out       String?   @db.Text
+  returned_at    DateTime?
+  returned_by_id Int?
+  condition_in   String?   @db.VarChar(10)
+  note_in        String?   @db.Text
+
+  asset    Asset    @relation(fields: [asset_id], references: [id], onDelete: Cascade)
+  employee Employee @relation("AssetHolder", fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@index([asset_id, assigned_at])
+  @@index([employee_id, returned_at])
 }

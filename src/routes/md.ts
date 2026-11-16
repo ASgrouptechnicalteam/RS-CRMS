@@ -1,11 +1,15 @@
+import { asWorkLogEntry, isWorkUpdateRole, minutesOf } from '../services/workUpdates';
+import { num } from '../utils/money';
 import type { Prisma } from '@prisma/client';
 import { logger } from '../utils/logger';
 import { Router, Response, NextFunction } from 'express';
+import { TokenPayload } from '../utils/jwt';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
 import { getAccessibleCompanyIds, buildEmployeeScope } from '../authz/dataScope';
 import { getISTComponents, getISTMidnightInstant } from '../utils/time';
-import { WORK_LOG_ACTION, parseWorkLog, WorkLogEntry } from './workLog';
+import { WORK_LOG_ACTION, parseWorkLog, WorkLogEntry, platformCounts } from './workLog';
+import { progressFor, PLATFORM_METRICS } from '../services/targets.service';
 import { CRM_ACTION, crmActionLabel } from '../middleware/recordCrmAction';
 import { requireAuthz } from '../middleware/authz';
 import { Roles, Permissions } from '../shared';
@@ -13,6 +17,7 @@ import { AnalyticsService } from '../services/analytics.service';
 import { OPEN_TASK_STATUSES } from '../services/taskOverdue';
 
 import { dayInfoMany } from '../services/workCalendar';
+import { listTeamPlans } from '../services/dayPlan.service';
 
 const router = Router();
 
@@ -61,8 +66,17 @@ const dayOfPeople =
       const inDay = { gte: start, lt: end };
 
       const scope = await who(req);
+      // Someone who left still shows on a day they did work, so totals add up.
+      const worked = await p.leadActivity.findMany({
+        where: { created_at: inDay },
+        select: { actor_id: true },
+        distinct: ['actor_id'],
+      });
       const employees = await p.employee.findMany({
-        where: { ...scope, status: 'ACTIVE' },
+        where: {
+          ...scope,
+          OR: [{ status: 'ACTIVE' }, { id: { in: worked.map((w) => w.actor_id) } }],
+        },
         select: {
           id: true,
           full_name: true,
@@ -91,7 +105,7 @@ const dayOfPeople =
             where: {
               actor_id: { in: ids },
               created_at: inDay,
-              activity_type: { notIn: ['LEAD_CREATED', 'ASSIGNED_TO_AGENT'] },
+              activity_type: { notIn: ['LEAD_CREATED', 'ASSIGNED_TO_AGENT', 'ASSOCIATE_REPORT'] },
             },
             _min: { created_at: true },
             _max: { created_at: true },
@@ -125,7 +139,7 @@ const dayOfPeople =
             where: {
               actor_id: { in: ids },
               created_at: inDay,
-              activity_type: { notIn: ['LEAD_CREATED', 'ASSIGNED_TO_AGENT'] },
+              activity_type: { notIn: ['LEAD_CREATED', 'ASSIGNED_TO_AGENT', 'ASSOCIATE_REPORT'] },
             },
             select: { actor_id: true, lead_id: true },
             distinct: ['actor_id', 'lead_id'],
@@ -148,6 +162,10 @@ const dayOfPeople =
         earlyExits,
         leaveRequests,
         crmActionRows,
+        draftsSubmitted,
+        draftsPicked,
+        draftsReady,
+        workUpdateRows,
       ] = await Promise.all([
         p.siteVisitBooking.groupBy({
           by: ['project_manager_id'],
@@ -229,6 +247,38 @@ const dayOfPeople =
           orderBy: { created_at: 'asc' },
           take: 5000,
         }),
+        // Draft submissions (DraftSubmission module). Three separate numbers:
+        //  submitted   - drafts this person handed in today
+        //  in progress - drafts this person picked up today
+        //  ready       - drafts this person finished today (real record linked)
+        p.draftSubmission.groupBy({
+          by: ['submitted_by'],
+          where: { submitted_by: { in: ids }, created_at: inDay },
+          _count: { _all: true },
+        }),
+        p.draftSubmission.groupBy({
+          by: ['picked_by'],
+          where: { picked_by: { in: ids }, picked_at: inDay },
+          _count: { _all: true },
+        }),
+        p.draftSubmission.groupBy({
+          by: ['picked_by'],
+          where: { picked_by: { in: ids }, status: 'READY_IN_CRM', ready_at: inDay },
+          _count: { _all: true },
+        }),
+        // Work updates (digital team, 2026-11-16): today's tasks, and any
+        // still open from before.
+        p.workUpdate.findMany({
+          where: {
+            employee_id: { in: ids },
+            OR: [
+              { started_at: inDay },
+              { finished_at: inDay },
+              { status: { in: ['WORKING', 'PAUSED'] } },
+            ],
+          },
+          orderBy: { updated_at: 'desc' },
+        }),
       ]);
       const countOf = (rows: any[], key: string, empId: number) =>
         rows.find((r) => r[key] === empId)?._count._all || 0;
@@ -256,10 +306,50 @@ const dayOfPeople =
 
         const roleNames = e.roles.map((r) => r.role.name);
         const kind = workKind(roleNames);
-        const workLog = workLogRows
-          .filter((w) => w.actor_id === e.id)
-          .map(parseWorkLog)
-          .filter((w): w is WorkLogEntry => !!w);
+        const myUpdates = workUpdateRows.filter((u) => u.employee_id === e.id);
+        const workLog = [
+          ...workLogRows
+            .filter((w) => w.actor_id === e.id)
+            .map(parseWorkLog)
+            .filter((w): w is WorkLogEntry => !!w),
+          // Finished work updates count like work log entries.
+          ...myUpdates
+            .filter(
+              (u) =>
+                u.status === 'DONE' &&
+                u.finished_at &&
+                u.finished_at >= inDay.gte &&
+                u.finished_at < inDay.lt,
+            )
+            .map(asWorkLogEntry),
+        ];
+        const nowRow = myUpdates.find((u) => u.status === 'WORKING') || null;
+        const workUpdates = {
+          now: nowRow
+            ? {
+                id: nowRow.id,
+                kind: nowRow.kind,
+                title: nowRow.title,
+                since: nowRow.resumed_at || nowRow.started_at,
+                minutes: minutesOf(nowRow),
+              }
+            : null,
+          paused: myUpdates
+            .filter((u) => u.status === 'PAUSED')
+            .map((u) => ({ id: u.id, kind: u.kind, title: u.title, minutes: u.worked_minutes })),
+          done: myUpdates
+            .filter((u) => u.status === 'DONE')
+            .map((u) => ({
+              id: u.id,
+              kind: u.kind,
+              title: u.title,
+              link: u.link,
+              count: u.count,
+              minutes: u.worked_minutes,
+              finished_at: u.finished_at,
+            })),
+          last_update_at: myUpdates[0]?.updated_at || null,
+        };
         const site = {
           visits_today: countOf(pmVisitsToday, 'project_manager_id', e.id),
           visits_completed: countOf(pmVisitsCompleted, 'project_manager_id', e.id),
@@ -271,15 +361,22 @@ const dayOfPeople =
             countOf(unitsAdded, 'created_by_id', e.id) +
             countOf(propertiesAdded, 'created_by_id', e.id),
         };
+        const drafts = {
+          submitted: countOf(draftsSubmitted, 'submitted_by', e.id),
+          in_progress: countOf(draftsPicked, 'picked_by', e.id),
+          ready_in_crm: countOf(draftsReady, 'picked_by', e.id),
+        };
         const crmActions = crmActionRows
           .filter((a) => a.actor_id === e.id)
           .map((a) => ({ at: a.created_at, label: crmActionLabel(a.new_value) }));
         const anyWork =
           crmActions.length > 0 ||
+          drafts.submitted + drafts.in_progress + drafts.ready_in_crm > 0 ||
           workActions > 0 ||
           tasks > 0 ||
           visits > 0 ||
           workLog.length > 0 ||
+          myUpdates.length > 0 ||
           site.visits_completed > 0 ||
           site.inventory_updates > 0 ||
           count(e.id, ['LEAD_CREATED']) > 0;
@@ -357,7 +454,13 @@ const dayOfPeople =
           roles: roleNames,
           kind,
           site,
+          drafts,
           work_log: workLog,
+          // Digital team: what they are on now, paused and finished (Work updates).
+          work_updates: isWorkUpdateRole(roleNames) ? workUpdates : null,
+          // Digital team: posts per platform today, from the work log (item 1).
+          platform_counts: kind === 'DIGITAL' ? platformCounts(workLog) : null,
+          platform_targets: [] as Awaited<ReturnType<typeof progressFor>>,
           // Everything they changed in the CRM today, oldest first.
           crm_actions: crmActions,
           attendance: att
@@ -374,7 +477,7 @@ const dayOfPeople =
           duty_today: !!today?.duty,
           calls_logged: calls,
           leads_worked: leads,
-          contacted: count(e.id, ['STATUS_CHANGED']),
+          contacted: count(e.id, ['CONTACTED']),
           qualified: count(e.id, ['QUALIFIED']),
           dropped: count(e.id, ['LEAD_DROPPED']),
           site_visit_actions: byType
@@ -403,6 +506,21 @@ const dayOfPeople =
         };
       });
 
+      // Digital team: their per-platform targets with progress (item 1, MD view).
+      await Promise.all(
+        rows
+          .filter((r) => r.kind === 'DIGITAL')
+          .map(async (r) => {
+            const e = employees.find((x) => x.id === r.id)!;
+            const all = await progressFor({
+              id: e.id,
+              company_id: e.company_id,
+              roles: r.roles,
+            });
+            r.platform_targets = all.filter((t) => PLATFORM_METRICS[t.metric]);
+          }),
+      );
+
       return res.status(200).json({ date: dateString, employees: rows });
     } catch (error) {
       logger.error('Team today error:', error);
@@ -417,6 +535,24 @@ router.get(
   dayOfPeople((req) => buildEmployeeScope(req.user!)),
 );
 
+// GET /api/v1/md/tomorrow-plans - what each person plans to do on their next working day
+// (the plan they must write before logging out); ?day=today shows today's plan instead,
+// with what has been ticked off. MD, Admin and HR; read only.
+router.get(
+  '/tomorrow-plans',
+  authenticateToken,
+  requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const day = req.query.day === 'today' ? 'today' : 'tomorrow';
+      return res.json(await listTeamPlans(await buildEmployeeScope(req.user!), day));
+    } catch (error) {
+      logger.error('Tomorrow plans error:', error);
+      return res.status(500).json({ error: "Could not load tomorrow's plans" });
+    }
+  },
+);
+
 // GET /api/v1/md/my-work?date=YYYY-MM-DD - the same record, for the person's own
 // day only. Anyone signed in; it never returns anybody else.
 router.get(
@@ -425,123 +561,138 @@ router.get(
   dayOfPeople(async (req) => ({ id: req.user!.employeeId })),
 );
 
-// GET /api/v1/md/approvals-inbox — everything waiting on the MD, in one place.
-// The MD's pending work used to be spread over six screens (Action Center,
-// Payments & Refunds, PM Approvals, HR Approvals, Complaints, dashboard
-// escalations) with no counts, so he had to open each one to find out if
-// anything was waiting. Each section returns a count, its 5 oldest items,
-// and the screen where it's acted on.
-router.get(
-  '/approvals-inbox',
-  authenticateToken,
-  requireRole([Roles.MD, Roles.ADMIN]),
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const isAdmin = req.user!.roles.includes(Roles.ADMIN);
-      const companyIds = await getAccessibleCompanyIds(req.user!);
-      const co = isAdmin ? {} : { company_id: { in: companyIds } };
-      // AttendanceProposal has no employee relation -- filter by employee ids.
-      const companyEmployees = await p.employee.findMany({
-        where: isAdmin ? {} : { company_id: { in: companyIds } },
-        select: { id: true, full_name: true, employee_code: true },
-      });
-      const nameOf = new Map(companyEmployees.map((e) => [e.id, e.full_name || e.employee_code]));
-      const empCo = isAdmin ? {} : { employee_id: { in: companyEmployees.map((e) => e.id) } };
-      const leadCo = isAdmin ? {} : { lead: { company_id: { in: companyIds } } };
-      const now = new Date();
-      const take = 5;
-      const visitWhere = { status: { in: ['REQUESTED', 'PENDING_ACCEPTANCE'] as any }, ...leadCo };
+/**
+ * Everything waiting on the MD, in one place: per section a count, its five
+ * oldest items and the screen where it is acted on. Shared by the Approvals
+ * page and the MD dashboard (GET /md/overview), so the numbers always match.
+ */
+export async function buildApprovalsInbox(user: TokenPayload) {
+  const isAdmin = user.roles.includes(Roles.ADMIN);
+  const companyIds = await getAccessibleCompanyIds(user);
+  const co = isAdmin ? {} : { company_id: { in: companyIds } };
+  // AttendanceProposal has no employee relation -- filter by employee ids.
+  const companyEmployees = await p.employee.findMany({
+    where: isAdmin ? {} : { company_id: { in: companyIds } },
+    select: { id: true, full_name: true, employee_code: true },
+  });
+  const nameOf = new Map(companyEmployees.map((e) => [e.id, e.full_name || e.employee_code]));
+  const empCo = isAdmin ? {} : { employee_id: { in: companyEmployees.map((e) => e.id) } };
+  const leadCo = isAdmin ? {} : { lead: { company_id: { in: companyIds } } };
+  const now = new Date();
+  const take = 5;
+  const visitWhere = { status: { in: ['REQUESTED', 'PENDING_ACCEPTANCE'] as any }, ...leadCo };
 
-      const [
-        properties,
-        propertiesN,
-        projects,
-        projectsN,
-        bookings,
-        bookingsN,
-        refunds,
-        refundsN,
-        proposals,
-        proposalsN,
-        visits,
-        visitsN,
-        complaints,
-        complaintsN,
-      ] = await Promise.all([
-        p.property.findMany({
-          where: { ...co, status: 'PENDING_MD_APPROVAL' },
-          select: { id: true, title: true, property_code: true, updated_at: true },
-          orderBy: { updated_at: 'asc' },
-          take,
-        }),
-        p.property.count({ where: { ...co, status: 'PENDING_MD_APPROVAL' } }),
-        p.project.findMany({
-          where: { ...co, verification_status: 'PENDING_MD_APPROVAL' },
-          select: { id: true, name: true, project_code: true, updated_at: true },
-          orderBy: { updated_at: 'asc' },
-          take,
-        }),
-        p.project.count({ where: { ...co, verification_status: 'PENDING_MD_APPROVAL' } }),
-        p.booking.findMany({
-          where: { ...co, form_status: 'SUBMITTED' },
-          select: { id: true, booking_code: true, updated_at: true },
-          orderBy: { updated_at: 'asc' },
-          take,
-        }),
-        p.booking.count({ where: { ...co, form_status: 'SUBMITTED' } }),
-        p.expenseRefund.findMany({
-          where: { ...co, status: 'ACCOUNTANT_APPROVED' },
-          select: {
-            id: true,
-            amount: true,
-            purpose: true,
-            created_at: true,
-            employee: { select: { full_name: true } },
-          },
-          orderBy: { created_at: 'asc' },
-          take,
-        }),
-        p.expenseRefund.count({ where: { ...co, status: 'ACCOUNTANT_APPROVED' } }),
-        p.attendanceProposal.findMany({
-          where: { status: 'PENDING', ...empCo },
-          select: {
-            id: true,
-            type: true,
-            target_date: true,
-            created_at: true,
-            employee_id: true,
-          },
-          orderBy: [{ created_at: 'asc' }, { target_date: 'asc' }],
-          // All pending rows: a multi-day leave is one row per day and is
-          // grouped below so it counts (and shows) as one request.
-        }),
-        Promise.resolve(0),
-        // Visits nobody on the PM side has accepted yet, including ones whose
-        // date has already gone by (production: every visit ever booked).
-        p.siteVisitBooking.findMany({
-          where: visitWhere,
-          select: {
-            id: true,
-            booking_code: true,
-            scheduled_date: true,
-            lead: { select: { customer_name: true } },
-            project_manager: { select: { full_name: true } },
-          },
-          orderBy: { scheduled_date: 'asc' },
-          take,
-        }),
-        p.siteVisitBooking.count({ where: visitWhere }),
-        p.complaint.findMany({
-          where: { ...co, status: { in: ['OPEN', 'REOPENED'] } },
-          select: { id: true, title: true, created_at: true },
-          orderBy: { created_at: 'asc' },
-          take,
-        }),
-        p.complaint.count({ where: { ...co, status: { in: ['OPEN', 'REOPENED'] } } }),
-      ]);
+  const [
+    properties,
+    propertiesN,
+    projects,
+    projectsN,
+    bookings,
+    bookingsN,
+    refunds,
+    refundsN,
+    proposals,
+    proposalsN,
+    visits,
+    visitsN,
+    complaints,
+    complaintsN,
+    budgets,
+  ] = await Promise.all([
+    p.property.findMany({
+      where: { ...co, status: 'PENDING_MD_APPROVAL' },
+      select: { id: true, title: true, property_code: true, updated_at: true },
+      orderBy: { updated_at: 'asc' },
+      take,
+    }),
+    p.property.count({ where: { ...co, status: 'PENDING_MD_APPROVAL' } }),
+    p.project.findMany({
+      where: { ...co, verification_status: 'PENDING_MD_APPROVAL' },
+      select: { id: true, name: true, project_code: true, updated_at: true },
+      orderBy: { updated_at: 'asc' },
+      take,
+    }),
+    p.project.count({ where: { ...co, verification_status: 'PENDING_MD_APPROVAL' } }),
+    p.booking.findMany({
+      where: { ...co, form_status: 'SUBMITTED' },
+      select: { id: true, booking_code: true, updated_at: true },
+      orderBy: { updated_at: 'asc' },
+      take,
+    }),
+    p.booking.count({ where: { ...co, form_status: 'SUBMITTED' } }),
+    p.expenseRefund.findMany({
+      where: { ...co, status: 'ACCOUNTANT_APPROVED' },
+      select: {
+        id: true,
+        amount: true,
+        purpose: true,
+        created_at: true,
+        employee: { select: { full_name: true } },
+      },
+      orderBy: { created_at: 'asc' },
+      take,
+    }),
+    p.expenseRefund.count({ where: { ...co, status: 'ACCOUNTANT_APPROVED' } }),
+    p.attendanceProposal.findMany({
+      where: { status: 'PENDING', ...empCo },
+      select: {
+        id: true,
+        type: true,
+        target_date: true,
+        created_at: true,
+        employee_id: true,
+      },
+      orderBy: [{ created_at: 'asc' }, { target_date: 'asc' }],
+      // All pending rows: a multi-day leave is one row per day and is
+      // grouped below so it counts (and shows) as one request.
+    }),
+    Promise.resolve(0),
+    // Visits nobody on the PM side has accepted yet, including ones whose
+    // date has already gone by (production: every visit ever booked).
+    p.siteVisitBooking.findMany({
+      where: visitWhere,
+      select: {
+        id: true,
+        booking_code: true,
+        scheduled_date: true,
+        lead: { select: { customer_name: true } },
+        project_manager: { select: { full_name: true } },
+      },
+      orderBy: { scheduled_date: 'asc' },
+      take,
+    }),
+    p.siteVisitBooking.count({ where: visitWhere }),
+    p.complaint.findMany({
+      where: { ...co, status: { in: ['OPEN', 'REOPENED'] } },
+      select: { id: true, title: true, created_at: true },
+      orderBy: { created_at: 'asc' },
+      take,
+    }),
+    p.complaint.count({ where: { ...co, status: { in: ['OPEN', 'REOPENED'] } } }),
+    // Petty cash budgets the accountant sent for approval (2026-11-16).
+    p.monthlyBudget.findMany({
+      where: { ...co, status: 'SUBMITTED' },
+      select: {
+        id: true,
+        month: true,
+        submitted_at: true,
+        created_at: true,
+        lines: { select: { amount: true } },
+      },
+      orderBy: { submitted_at: 'asc' },
+    }),
+  ]);
 
-      // Tasks past their deadline (count only; the Tasks page lists them).
-      const overdueTasksN = await p.task.count({
+  // Tasks past their deadline (count only; the Tasks page lists them).
+  const overdueTasksN = await p.task.count({
+    where: {
+      ...(isAdmin ? {} : { assignee: { company_id: { in: companyIds } } }),
+      OR: [{ status: 'OVERDUE' }, { status: { in: OPEN_TASK_STATUSES }, target_date: { lt: now } }],
+    },
+  });
+
+  const oldestOverdue = overdueTasksN
+    ? await p.task.findFirst({
         where: {
           ...(isAdmin ? {} : { assignee: { company_id: { in: companyIds } } }),
           OR: [
@@ -549,149 +700,243 @@ router.get(
             { status: { in: OPEN_TASK_STATUSES }, target_date: { lt: now } },
           ],
         },
-      });
+        select: { target_date: true },
+        orderBy: { target_date: 'asc' },
+      })
+    : null;
 
-      // Early logouts approved on the spot that nobody has looked at yet.
-      const earlyWhere = {
-        type: 'EARLY_CHECKOUT',
-        status: 'APPROVED',
-        reviewed_by: null,
-        ...empCo,
-      };
-      const [earlyReviews, earlyReviewsN] = await Promise.all([
-        p.attendanceProposal.findMany({
-          where: earlyWhere,
-          select: { id: true, target_date: true, employee_id: true, reason: true },
-          orderBy: { target_date: 'desc' },
-          take,
-        }),
-        p.attendanceProposal.count({ where: earlyWhere }),
-      ]);
+  // Early logouts approved on the spot that nobody has looked at yet.
+  const earlyWhere = {
+    type: 'EARLY_CHECKOUT',
+    status: 'APPROVED',
+    reviewed_by: null,
+    ...empCo,
+  };
+  const [earlyReviews, earlyReviewsN] = await Promise.all([
+    p.attendanceProposal.findMany({
+      where: earlyWhere,
+      select: { id: true, target_date: true, employee_id: true, reason: true },
+      orderBy: { target_date: 'desc' },
+      take,
+    }),
+    p.attendanceProposal.count({ where: earlyWhere }),
+  ]);
 
-      type ProposalRow = (typeof proposals)[number];
-      const proposalGroups: { first: ProposalRow; last: ProposalRow; days: number }[] = [];
-      const groupIndex = new Map<string, number>();
-      for (const x of proposals) {
-        const key =
-          x.type === 'LEAVE' ? `${x.employee_id}:${x.created_at.getTime()}` : `id:${x.id}`;
-        const at = groupIndex.get(key);
-        if (at === undefined) {
-          groupIndex.set(key, proposalGroups.length);
-          proposalGroups.push({ first: x, last: x, days: 1 });
-        } else {
-          proposalGroups[at].last = x;
-          proposalGroups[at].days++;
-        }
-      }
-      void proposalsN;
+  type ProposalRow = (typeof proposals)[number];
+  const proposalGroups: { first: ProposalRow; last: ProposalRow; days: number }[] = [];
+  const groupIndex = new Map<string, number>();
+  for (const x of proposals) {
+    const key = x.type === 'LEAVE' ? `${x.employee_id}:${x.created_at.getTime()}` : `id:${x.id}`;
+    const at = groupIndex.get(key);
+    if (at === undefined) {
+      groupIndex.set(key, proposalGroups.length);
+      proposalGroups.push({ first: x, last: x, days: 1 });
+    } else {
+      proposalGroups[at].last = x;
+      proposalGroups[at].days++;
+    }
+  }
+  void proposalsN;
 
-      const sections = [
-        {
-          key: 'properties',
-          label: 'Properties to approve',
-          link: '/action-center',
-          count: propertiesN,
-          items: properties.map((x) => ({
-            id: x.id,
-            title: x.title,
-            subtitle: x.property_code,
-            since: x.updated_at,
-          })),
-        },
-        {
-          key: 'projects',
-          label: 'Projects to approve',
-          link: '/action-center',
-          count: projectsN,
-          items: projects.map((x) => ({
-            id: x.id,
-            title: x.name,
-            subtitle: x.project_code,
-            since: x.updated_at,
-          })),
-        },
-        {
-          key: 'bookings',
-          label: 'Booking forms to approve',
-          link: '/action-center',
-          count: bookingsN,
-          items: bookings.map((x) => ({ id: x.id, title: x.booking_code, since: x.updated_at })),
-        },
-        {
-          key: 'refunds',
-          label: 'Expense refunds (checked by accountant)',
-          link: '/finance',
-          count: refundsN,
-          items: refunds.map((x) => ({
-            id: x.id,
-            title: `Rs ${x.amount.toLocaleString('en-IN')} - ${x.employee?.full_name || ''}`,
-            subtitle: x.purpose,
-            since: x.created_at,
-          })),
-        },
-        {
-          key: 'leave',
-          label: 'Leave & attendance requests',
-          link: '/approvals',
-          count: proposalGroups.length,
-          items: proposalGroups.slice(0, take).map((g) => ({
-            id: g.first.id,
-            title: `${nameOf.get(g.first.employee_id) || ''} - ${g.first.type.replace(/_/g, ' ').toLowerCase()}`,
-            subtitle:
-              g.days > 1
-                ? `${getISTComponents(g.first.target_date).dateString} to ${getISTComponents(g.last.target_date).dateString} (${g.days} days)`
-                : `for ${getISTComponents(g.first.target_date).dateString}`,
-            since: g.first.created_at,
-          })),
-        },
-        {
-          key: 'early_reviews',
-          label: 'Early logouts approved automatically, to review',
-          link: '/approvals',
-          count: earlyReviewsN,
-          items: earlyReviews.map((x) => ({
-            id: x.id,
-            title: `${nameOf.get(x.employee_id) || ''} - left early`,
-            subtitle: `${getISTComponents(x.target_date).dateString}: ${(x.reason || '').slice(0, 60)}`,
-            since: x.target_date,
-          })),
-        },
-        {
-          key: 'site_visits',
-          label: 'Site visits not accepted by PM',
-          link: '/site-visits',
-          count: visitsN,
-          items: visits.map((x) => ({
-            id: x.id,
-            title: `${x.booking_code} - ${x.lead?.customer_name || ''}`,
-            subtitle: `PM: ${x.project_manager?.full_name || 'none'}`,
-            since: x.scheduled_date,
-            overdue: x.scheduled_date < now,
-          })),
-        },
-        {
-          key: 'complaints',
-          label: 'Open complaints',
-          link: '/complaints',
-          count: complaintsN,
-          items: complaints.map((x) => ({ id: x.id, title: x.title, since: x.created_at })),
-        },
-        {
-          key: 'overdue_tasks',
-          label: 'Overdue tasks',
-          link: '/tasks',
-          count: overdueTasksN,
-          items: [],
-        },
-      ];
+  const sections = [
+    {
+      key: 'properties',
+      label: 'Properties to approve',
+      link: '/action-center',
+      count: propertiesN,
+      items: properties.map((x) => ({
+        id: x.id,
+        title: x.title,
+        subtitle: x.property_code,
+        since: x.updated_at,
+      })),
+    },
+    {
+      key: 'projects',
+      label: 'Projects to approve',
+      link: '/action-center',
+      count: projectsN,
+      items: projects.map((x) => ({
+        id: x.id,
+        title: x.name,
+        subtitle: x.project_code,
+        since: x.updated_at,
+      })),
+    },
+    {
+      key: 'bookings',
+      label: 'Booking forms to approve',
+      link: '/action-center',
+      count: bookingsN,
+      items: bookings.map((x) => ({ id: x.id, title: x.booking_code, since: x.updated_at })),
+    },
+    {
+      key: 'refunds',
+      label: 'Expense refunds (checked by accountant)',
+      link: '/finance',
+      count: refundsN,
+      items: refunds.map((x) => ({
+        id: x.id,
+        title: `Rs ${num(x.amount).toLocaleString('en-IN')} - ${x.employee?.full_name || ''}`,
+        subtitle: x.purpose,
+        since: x.created_at,
+      })),
+    },
+    {
+      key: 'leave',
+      label: 'Leave & attendance requests',
+      link: '/approvals',
+      count: proposalGroups.length,
+      items: proposalGroups.slice(0, take).map((g) => ({
+        id: g.first.id,
+        title: `${nameOf.get(g.first.employee_id) || ''} - ${g.first.type.replace(/_/g, ' ').toLowerCase()}`,
+        subtitle:
+          g.days > 1
+            ? `${getISTComponents(g.first.target_date).dateString} to ${getISTComponents(g.last.target_date).dateString} (${g.days} days)`
+            : `for ${getISTComponents(g.first.target_date).dateString}`,
+        since: g.first.created_at,
+      })),
+    },
+    {
+      key: 'early_reviews',
+      label: 'Early logouts approved automatically, to review',
+      link: '/approvals',
+      count: earlyReviewsN,
+      items: earlyReviews.map((x) => ({
+        id: x.id,
+        title: `${nameOf.get(x.employee_id) || ''} - left early`,
+        subtitle: `${getISTComponents(x.target_date).dateString}: ${(x.reason || '').slice(0, 60)}`,
+        since: x.target_date,
+      })),
+    },
+    {
+      key: 'site_visits',
+      label: 'Site visits not accepted by PM',
+      link: '/site-visits?focus=WAITING_PM',
+      count: visitsN,
+      items: visits.map((x) => ({
+        id: x.id,
+        title: `${x.booking_code} - ${x.lead?.customer_name || ''}`,
+        subtitle: `PM: ${x.project_manager?.full_name || 'none'}`,
+        since: x.scheduled_date,
+        overdue: x.scheduled_date < now,
+      })),
+    },
+    {
+      key: 'budgets',
+      label: 'Petty cash budgets to approve',
+      link: '/petty-cash',
+      count: budgets.length,
+      items: budgets.slice(0, take).map((x) => ({
+        id: x.id,
+        title: `Budget for ${x.month}`,
+        subtitle: `Rs ${num(x.lines.reduce((n, l) => n + num(l.amount), 0)).toLocaleString('en-IN')}`,
+        since: x.submitted_at || x.created_at,
+      })),
+    },
+    {
+      key: 'complaints',
+      label: 'Open complaints',
+      link: '/complaints',
+      count: complaintsN,
+      items: complaints.map((x) => ({ id: x.id, title: x.title, since: x.created_at })),
+    },
+    {
+      key: 'overdue_tasks',
+      label: 'Overdue tasks',
+      // Opens only the overdue tasks, not every task.
+      link: '/tasks?tab=team_tasks&status=OVERDUE',
+      count: overdueTasksN,
+      items: oldestOverdue
+        ? [{ id: 0, title: 'Oldest overdue task', since: oldestOverdue.target_date }]
+        : [],
+    },
+  ];
 
-      return res.status(200).json({
-        total: sections.reduce((n, sec) => n + sec.count, 0),
-        sections,
-      });
+  const withOldest = sections.map((sec) => ({
+    ...sec,
+    // Oldest waiting item (visits: the visit date), for "oldest 3 days".
+    oldest_at:
+      sec.items
+        .map((i: { since: Date }) => i.since)
+        .sort((x: Date, y: Date) => x.getTime() - y.getTime())[0] || null,
+  }));
+  // Overdue tasks are not approvals (owner, 2026-11-14): kept out of the
+  // approvals page and its count, still shown on the MD dashboard.
+  const approvals = withOldest.filter((sec) => sec.key !== 'overdue_tasks');
+  return {
+    total: approvals.reduce((n, sec) => n + sec.count, 0),
+    sections: approvals,
+    overdue_tasks: withOldest.find((sec) => sec.key === 'overdue_tasks')!,
+  };
+}
+
+// GET /api/v1/md/approvals-inbox — everything waiting on the MD, in one place.
+router.get(
+  '/approvals-inbox',
+  authenticateToken,
+  requireRole([Roles.MD, Roles.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      return res.status(200).json(await buildApprovalsInbox(req.user!));
     } catch (error) {
       logger.error('Approvals inbox error:', error);
       return res.status(500).json({ error: 'Failed to load approvals' });
+    }
+  },
+);
+
+// GET /api/v1/md/leads-no-activity - open leads with no activity for 2+ / 5+
+// days, by owner. Shown on the HR dashboard (HR follows up with the people),
+// no longer on the MD dashboard (owner, 2026-11-14).
+router.get(
+  '/leads-no-activity',
+  authenticateToken,
+  requireRole([Roles.MD, Roles.ADMIN, Roles.HR_MANAGER]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { leadsAtRisk } = await import('../services/counts/metrics');
+      const companyIds = await getAccessibleCompanyIds(req.user!);
+      const risk = await leadsAtRisk(companyIds);
+      const owners = await p.employee.findMany({
+        where: { id: { in: risk.by_owner.map((r) => r.owner_id) } },
+        select: { id: true, full_name: true, employee_code: true, status: true },
+      });
+      const byId = new Map(owners.map((o) => [o.id, o]));
+      return res.status(200).json({
+        stale_2: risk.stale_2,
+        stale_5: risk.stale_5,
+        by_owner: risk.by_owner.map((r) => {
+          const o = byId.get(r.owner_id);
+          return {
+            ...r,
+            name: o ? o.full_name || o.employee_code : `#${r.owner_id}`,
+            employee_code: o?.employee_code || null,
+            left: o ? o.status !== 'ACTIVE' : false,
+          };
+        }),
+      });
+    } catch (error) {
+      logger.error('Leads with no activity error:', error);
+      return res.status(500).json({ error: 'Failed to load leads with no activity' });
+    }
+  },
+);
+
+// GET /api/v1/md/overview?period=today|week|month|all - the MD dashboard in one
+// request (services/mdOverview.ts).
+router.get(
+  '/overview',
+  authenticateToken,
+  requireRole([Roles.MD, Roles.ADMIN]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { mdOverview } = await import('../services/mdOverview');
+      const period = typeof req.query.period === 'string' ? req.query.period : 'today';
+      return res.status(200).json(await mdOverview(req.user!, period));
+    } catch (error) {
+      logger.error('MD overview error:', error);
+      return res.status(500).json({ error: 'Failed to load the overview' });
     }
   },
 );

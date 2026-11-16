@@ -14,7 +14,15 @@ import {
   Roles,
 } from '../../shared';
 import { validateRequestBody } from '../../middleware/validate';
-import { ProjectService, notifyProjectReview } from '../../services/project.service';
+import {
+  ProjectService,
+  notifyProjectReview,
+  invalidateProjectListCache,
+} from '../../services/project.service';
+import { getProjectAttention, projectMissing } from '../../services/projectAttention.service';
+import { notifyEmployee } from '../../utils/notifyEmployee';
+import { ProjectPolicy } from '../../policies/project.policy';
+import { z } from 'zod';
 import {
   ProjectUpdateService,
   PROJECT_UPDATE_KINDS,
@@ -56,24 +64,18 @@ router.get(
         // approval" queue that has no other way to list itself.
         verification_status:
           typeof verification_status === 'string' ? verification_status : undefined,
+        search: typeof req.query.search === 'string' ? req.query.search : undefined,
+        project_type:
+          typeof req.query.project_type === 'string' ? req.query.project_type : undefined,
         unassigned: unassigned === 'true',
         dm_executive_id:
           typeof dm_executive_id === 'string' ? parseInt(dm_executive_id, 10) : undefined,
       };
 
-      // A plain DM Executive automatically sees only their own assigned-to-
-      // polish projects — mirrors properties/crud.ts's isDMExecutiveOnly.
-      const userRoles: string[] = req.user!.roles || [];
-      const isDMExecutiveOnly =
-        userRoles.includes(Roles.DIGITAL_MARKETING_EXECUTIVE) &&
-        !userRoles.some((r: string) =>
-          [Roles.DIGITAL_MARKETING_HEAD, Roles.MARKETING_DIRECTOR, Roles.MD, Roles.ADMIN].includes(
-            r as any,
-          ),
-        );
-      if (isDMExecutiveOnly && !filters.dm_executive_id) {
-        filters.dm_executive_id = req.user!.employeeId;
-      }
+      // A DM Executive must see every live (VERIFIED) project to market it —
+      // buildProjectScope already limits them to VERIFIED + their own polish
+      // assignments. Narrowing to "mine" is opt-in via ?dm_executive_id=.
+      // (Previously forced to assigned-only, so with 4 live projects she saw 1.)
 
       // Default was 50 with a 100 max and no `total` in the response, and
       // the frontend's own list fetches never pass a limit override — same
@@ -94,6 +96,59 @@ router.get(
         return res.status(error.status).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Failed to fetch projects' });
+    }
+  },
+);
+
+// Media and documents may be added by whoever may edit the project, and by the
+// Marketing Executive the project is currently with (their step is exactly this).
+const requireContentEdit = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: (err?: any) => void,
+) => {
+  try {
+    const project = await projectInScope()(req);
+    if (project && ProjectPolicy.canPolishContent(req.user!, project as any)) {
+      (req as any).authorizedResource = project;
+      return next();
+    }
+    return requireAuthz(Permissions.PROJECTS_UPDATE, projectInScope())(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/v1/projects/attention - projects that need THIS person to act now
+// (drives the Projects badge, the Projects page and the dashboards). Declared
+// before '/:id' so it is not read as a project id.
+router.get(
+  '/attention',
+  authenticateToken,
+  requireAuthz(Permissions.PROJECTS_READ),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      return res.status(200).json(await getProjectAttention(req.user!));
+    } catch (error: any) {
+      logger.error('Project attention error:', error);
+      return res.status(500).json({ error: 'Failed to load projects needing attention' });
+    }
+  },
+);
+
+// GET /api/v1/projects/:id/readiness - what is still missing before submitting
+router.get(
+  '/:id/readiness',
+  authenticateToken,
+  requireAuthz(Permissions.PROJECTS_READ, projectInScope()),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const missing = (await projectMissing([id])).get(id) || [];
+      return res.status(200).json({ missing });
+    } catch (error: any) {
+      logger.error('Project readiness error:', error);
+      return res.status(500).json({ error: 'Failed to check the project' });
     }
   },
 );
@@ -306,31 +361,140 @@ router.post(
       if (isNaN(projectId)) return res.status(400).json({ error: 'Invalid ID' });
       const project = await p.project.findFirst({ where: { id: projectId } });
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      if (project.verification_status !== 'PENDING_DM_POLISH') {
+      // Also allowed while it is with an executive, to hand it to someone else.
+      if (!['PENDING_DM_POLISH', 'PENDING_DM_EXEC'].includes(project.verification_status)) {
         return res.status(400).json({
           error: `Project is not pending DM polish (current: ${project.verification_status})`,
         });
       }
       const { digital_marketing_executive_id, seo_title, seo_keywords, notes } = req.body;
+      const exec = await p.employee.findFirst({
+        where: {
+          id: digital_marketing_executive_id,
+          company_id: project.company_id,
+          status: 'ACTIVE',
+          roles: { some: { role: { name: Roles.DIGITAL_MARKETING_EXECUTIVE } } },
+        },
+        select: { id: true },
+      });
+      if (!exec) {
+        return res
+          .status(400)
+          .json({ error: 'Choose an active Digital Marketing Executive of this company.' });
+      }
       const updated = await p.project.update({
         where: { id: projectId },
         data: {
-          verification_status: 'PENDING_MD_APPROVAL',
+          verification_status: 'PENDING_DM_EXEC',
           digital_marketing_executive_id,
           seo_title: seo_title || project.seo_title,
           seo_keywords: seo_keywords || project.seo_keywords,
           verification_notes: notes || null,
         },
       });
-      logger.info(`Project ${projectId} DM-polished by employee ${req.user!.employeeId}`);
-      await notifyProjectReview('TO_MD', updated, req.user!.employeeId);
+      logger.info(`Project ${projectId} handed to DM executive ${digital_marketing_executive_id}`);
+      // The Marketing executive picked for this project is told it is theirs.
+      if (
+        digital_marketing_executive_id &&
+        digital_marketing_executive_id !== req.user!.employeeId
+      ) {
+        await notifyEmployee(digital_marketing_executive_id, {
+          type: 'PROJECT_DM_ASSIGNED',
+          title: `Project assigned to you: ${updated.project_code}`,
+          message: `Project "${updated.name}" (${updated.project_code}) is assigned to you. Add the photos, brochure, SEO title/keywords and description, then submit it to the MD.`,
+          link: `/projects/${updated.id}`,
+          entity_type: 'PROJECT',
+          entity_id: updated.id,
+        }).catch((err) => logger.error('DM assignment notification failed:', err));
+      }
       return res.status(200).json({
-        message: `Project "${updated.name}" polished by DM team and submitted for MD Approval`,
+        message: `Project "${updated.name}" assigned to the Marketing Executive for content polish. It goes to the MD when they submit it.`,
         project: updated,
       });
     } catch (error: any) {
       logger.error('DM Polish project error:', error);
       return res.status(500).json({ error: 'Failed to execute DM polish step' });
+    }
+  },
+);
+
+// The Marketing step of a project is done by the assigned executive; the DM
+// Head (or MD/Admin) may also act for them.
+const canWorkMarketingStep = (user: NonNullable<AuthenticatedRequest['user']>, project: any) =>
+  ProjectPolicy.canPolishContent(user, project) ||
+  (['PENDING_DM_POLISH', 'PENDING_DM_EXEC'].includes(project.verification_status) &&
+    (user.roles || []).some((r) =>
+      [Roles.DIGITAL_MARKETING_HEAD, Roles.MD, Roles.ADMIN].includes(r as any),
+    ));
+
+// PUT /api/v1/projects/:id/marketing - SEO title/keywords and description
+// (core fields are locked in review, so the Marketing step has its own door).
+router.put(
+  '/:id/marketing',
+  authenticateToken,
+  requireAuthz(Permissions.PROJECTS_DM_POLISH, projectInScope()),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const projectId = parseInt(req.params.id, 10);
+      const project = (req as any).authorizedResource;
+      if (!canWorkMarketingStep(req.user!, project)) {
+        return res.status(403).json({ error: 'This project is not with you for marketing.' });
+      }
+      const parsed = z
+        .object({
+          seo_title: z.string().max(160).optional(),
+          seo_keywords: z.string().max(500).optional(),
+          description: z.string().max(5000).optional(),
+        })
+        .safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+      }
+      const updated = await p.project.update({ where: { id: projectId }, data: parsed.data });
+      invalidateProjectListCache();
+      return res.status(200).json({ message: 'Saved', project: updated });
+    } catch (error: any) {
+      logger.error('Project marketing save error:', error);
+      return res.status(500).json({ error: 'Failed to save the marketing details' });
+    }
+  },
+);
+
+// POST /api/v1/projects/:id/dm-submit - the executive is done: on to the MD.
+router.post(
+  '/:id/dm-submit',
+  authenticateToken,
+  requireAuthz(Permissions.PROJECTS_DM_POLISH, projectInScope()),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const projectId = parseInt(req.params.id, 10);
+      const project = (req as any).authorizedResource;
+      if (project.verification_status !== 'PENDING_DM_EXEC') {
+        return res.status(400).json({
+          error: `Project is not with the Marketing Executive (current: ${project.verification_status})`,
+        });
+      }
+      if (!canWorkMarketingStep(req.user!, project)) {
+        return res.status(403).json({ error: 'This project is not assigned to you.' });
+      }
+      const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim() : '';
+      const updated = await p.project.update({
+        where: { id: projectId },
+        data: {
+          verification_status: 'PENDING_MD_APPROVAL',
+          ...(notes ? { verification_notes: notes } : {}),
+        },
+      });
+      invalidateProjectListCache();
+      logger.info(`Project ${projectId} polish submitted by employee ${req.user!.employeeId}`);
+      await notifyProjectReview('TO_MD', updated, req.user!.employeeId);
+      return res.status(200).json({
+        message: `Project "${updated.name}" submitted to the MD for approval`,
+        project: updated,
+      });
+    } catch (error: any) {
+      logger.error('DM submit project error:', error);
+      return res.status(500).json({ error: 'Failed to submit the project to the MD' });
     }
   },
 );
@@ -624,7 +788,7 @@ router.delete(
 router.post(
   '/:id/media',
   authenticateToken,
-  requireAuthz(Permissions.PROJECTS_UPDATE, projectInScope()),
+  requireContentEdit,
   projectMediaUpload.single('file') as any,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
@@ -669,7 +833,7 @@ router.get(
 router.delete(
   '/:id/media/:mediaId',
   authenticateToken,
-  requireAuthz(Permissions.PROJECTS_UPDATE, projectInScope()),
+  requireContentEdit,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const projectId = parseInt(req.params.id, 10);
@@ -765,7 +929,7 @@ router.delete(
 router.post(
   '/:id/documents',
   authenticateToken,
-  requireAuthz(Permissions.PROJECTS_UPDATE, projectInScope()),
+  requireContentEdit,
   memoryUpload.single('file') as any,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
@@ -810,7 +974,7 @@ router.get(
 router.delete(
   '/:id/documents/:documentId',
   authenticateToken,
-  requireAuthz(Permissions.PROJECTS_UPDATE, projectInScope()),
+  requireContentEdit,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const projectId = parseInt(req.params.id, 10);

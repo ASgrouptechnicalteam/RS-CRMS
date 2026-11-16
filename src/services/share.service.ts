@@ -157,6 +157,8 @@ export interface ShareContent {
   address: string | null;
   rera_number: string | null;
   rera_applied: boolean;
+  /** Raw project status (APPROVED, APPLIED, NOT_APPLICABLE) or null. Staff-side only: the customer view never reads it. */
+  rera_status: string | null;
   cover: string | null;
   photos: string[];
   videos: string[];
@@ -269,6 +271,7 @@ export async function loadContent(
       address: joinAddress(project),
       rera_number: project.rera_number?.trim() || null,
       rera_applied: !!base.rera.applied,
+      rera_status: project.rera_status || null,
       ...base.media,
       cover: base.cover,
       blocked: base.blocked,
@@ -312,6 +315,7 @@ export async function loadContent(
       address: joinAddress(project),
       rera_number: project.rera_number?.trim() || null,
       rera_applied: !!base.rera.applied,
+      rera_status: project.rera_status || null,
       ...base.media,
       cover: unitPhotos[0] || base.cover,
       photos: [...unitPhotos, ...base.media.photos],
@@ -360,6 +364,7 @@ export async function loadContent(
     address: joinAddress(property),
     rera_number: parent?.rera_number?.trim() || null,
     rera_applied: !!rera.applied,
+    rera_status: parent?.rera_status || null,
     cover: photos[0] || null,
     photos,
     videos: [],

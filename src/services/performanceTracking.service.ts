@@ -1,46 +1,64 @@
 import { prisma } from '../lib/prisma';
 import { TokenPayload } from '../utils/jwt';
+import { measureMetric } from './targets.service';
 
 const p = prisma;
 
 export class PerformanceTrackingService {
-  
-  static async getTelecallerMetrics(user: TokenPayload, startDate: Date, endDate: Date, telecallerId?: number) {
+  static async getTelecallerMetrics(
+    user: TokenPayload,
+    startDate: Date,
+    endDate: Date,
+    telecallerId?: number,
+  ) {
     const targetUserId = telecallerId || user.employeeId;
+
+    // Leads handed over when their owner left stay with that first owner, at the stage they
+    // had reached. The new owner's numbers start from the leads they were given themselves.
+    const credited = (statusFilter: object = {}) => ({
+      created_at: { gte: startDate, lte: endDate },
+      OR: [
+        { assigned_to_id: targetUserId, handed_over_from_id: null, status: statusFilter },
+        { handed_over_from_id: targetUserId, handover_status: statusFilter },
+      ],
+    });
 
     // 1. Contact Rate
     // Leads Contacted or beyond / Total assigned to this telecaller in the period
     const totalAssigned = await p.lead.count({
       where: {
-        assigned_to_id: targetUserId,
         created_at: { gte: startDate, lte: endDate },
-      }
+        OR: [
+          { assigned_to_id: targetUserId, handed_over_from_id: null },
+          { handed_over_from_id: targetUserId },
+        ],
+      },
     });
 
     const contactedOrBeyond = await p.lead.count({
-      where: {
-        assigned_to_id: targetUserId,
-        created_at: { gte: startDate, lte: endDate },
-        status: { notIn: ['NEW', 'ASSIGNED', 'DROPPED'] } // Anything that has moved past ASSIGNED
-      }
+      // Anything that has moved past ASSIGNED
+      where: credited({ notIn: ['NEW', 'ASSIGNED', 'DROPPED'] }),
     });
 
     // 2. Qualification Rate
     const qualifiedOrBeyond = await p.lead.count({
-      where: {
-        assigned_to_id: targetUserId,
-        created_at: { gte: startDate, lte: endDate },
-        status: { notIn: ['NEW', 'ASSIGNED', 'CONTACTED', 'DROPPED'] } // Anything moved past CONTACTED
-      }
+      // Anything moved past CONTACTED
+      where: credited({ notIn: ['NEW', 'ASSIGNED', 'CONTACTED', 'DROPPED'] }),
     });
 
     // 3. Demos Booked
     const demosBooked = await p.lead.count({
-      where: {
-        assigned_to_id: targetUserId,
-        created_at: { gte: startDate, lte: endDate },
-        status: { in: ['DEMO_SCHEDULED', 'DEMO_COMPLETED', 'SITE_VISIT_SCHEDULED', 'SITE_VISIT_COMPLETED', 'NEGOTIATION', 'BOOKING_INITIATED', 'BOOKED'] }
-      }
+      where: credited({
+        in: [
+          'DEMO_SCHEDULED',
+          'DEMO_COMPLETED',
+          'SITE_VISIT_SCHEDULED',
+          'SITE_VISIT_COMPLETED',
+          'NEGOTIATION',
+          'BOOKING_INITIATED',
+          'BOOKED',
+        ],
+      }),
     });
 
     // 4. Site Visits Completed
@@ -48,18 +66,17 @@ export class PerformanceTrackingService {
       where: {
         telecaller_id: targetUserId,
         completed_at: { gte: startDate, lte: endDate },
-        status: 'COMPLETED'
-      }
+        status: 'COMPLETED',
+      },
     });
 
-    // 5. Bookings Closed
-    const bookingsClosed = await p.lead.count({
-      where: {
-        assigned_to_id: targetUserId,
-        updated_at: { gte: startDate, lte: endDate },
-        status: 'BOOKED'
-      }
-    });
+    // 5. Bookings Closed: deals credited to them, by the day each was confirmed (counts/metrics.ts).
+    const bookingsClosed = await measureMetric(
+      targetUserId,
+      'BOOKINGS_CONFIRMED',
+      startDate,
+      new Date(endDate.getTime() + 1),
+    );
 
     // 6. Reconfirmation Completion Rate
     // Numerator: site visits reaching CONFIRMED status
@@ -68,23 +85,25 @@ export class PerformanceTrackingService {
       where: {
         entity_type: 'SITE_VISIT',
         new_value: { contains: 'PENDING_CUSTOMER_RECONFIRMATION' },
-        created_at: { gte: startDate, lte: endDate }
+        created_at: { gte: startDate, lte: endDate },
       },
-      select: { entity_id: true }
+      select: { entity_id: true },
     });
-    const reconfirmationAttemptedVisitIds = [...new Set(reconfirmationEvents.map(e => e.entity_id))];
-    
+    const reconfirmationAttemptedVisitIds = [
+      ...new Set(reconfirmationEvents.map((e) => e.entity_id)),
+    ];
+
     let reconfirmationsCompleted = 0;
     if (reconfirmationAttemptedVisitIds.length > 0) {
       const confirmedVisits = await p.auditEvent.findMany({
         where: {
           entity_type: 'SITE_VISIT',
           entity_id: { in: reconfirmationAttemptedVisitIds },
-          new_value: { contains: 'CONFIRMED' }
+          new_value: { contains: 'CONFIRMED' },
         },
-        select: { entity_id: true }
+        select: { entity_id: true },
       });
-      reconfirmationsCompleted = new Set(confirmedVisits.map(e => e.entity_id)).size;
+      reconfirmationsCompleted = new Set(confirmedVisits.map((e) => e.entity_id)).size;
     }
 
     return {
@@ -98,7 +117,10 @@ export class PerformanceTrackingService {
       bookingsClosed,
       reconfirmationsAttempted: reconfirmationAttemptedVisitIds.length,
       reconfirmationsCompleted,
-      reconfirmationCompletionRate: reconfirmationAttemptedVisitIds.length > 0 ? reconfirmationsCompleted / reconfirmationAttemptedVisitIds.length : 0
+      reconfirmationCompletionRate:
+        reconfirmationAttemptedVisitIds.length > 0
+          ? reconfirmationsCompleted / reconfirmationAttemptedVisitIds.length
+          : 0,
     };
   }
 
@@ -110,21 +132,31 @@ export class PerformanceTrackingService {
       where: {
         project_manager_id: targetUserId,
         created_at: { gte: startDate, lte: endDate },
-        status: { in: ['ACCEPTED', 'REASSIGNED', 'PENDING_CUSTOMER_RECONFIRMATION', 'PENDING_PM_RECONFIRMATION', 'CONFIRMED', 'ACTIVE', 'COMPLETED'] }
-      }
+        status: {
+          in: [
+            'ACCEPTED',
+            'REASSIGNED',
+            'PENDING_CUSTOMER_RECONFIRMATION',
+            'PENDING_PM_RECONFIRMATION',
+            'CONFIRMED',
+            'ACTIVE',
+            'COMPLETED',
+          ],
+        },
+      },
     });
 
     // 2. Average Response Time
     const bookings = await p.siteVisitBooking.findMany({
       where: {
         project_manager_id: targetUserId,
-        created_at: { gte: startDate, lte: endDate }
+        created_at: { gte: startDate, lte: endDate },
       },
       select: {
         id: true,
         created_at: true,
-        escalation: true
-      }
+        escalation: true,
+      },
     });
 
     let totalResponseTimeMs = 0;
@@ -136,30 +168,27 @@ export class PerformanceTrackingService {
       if (b.escalation && b.escalation.marketing_director_notified_at) {
         escalationTime = b.escalation.marketing_director_notified_at;
       }
-      
+
       const firstResponse = await p.auditEvent.findFirst({
         where: {
           entity_type: 'SITE_VISIT',
           entity_id: b.id,
           action: 'STATUS_CHANGED',
-          OR: [
-            { new_value: { contains: 'ACCEPTED' } },
-            { new_value: { contains: 'REASSIGNED' } }
-          ]
+          OR: [{ new_value: { contains: 'ACCEPTED' } }, { new_value: { contains: 'REASSIGNED' } }],
         },
-        orderBy: { created_at: 'asc' }
+        orderBy: { created_at: 'asc' },
       });
 
       if (escalationTime) {
         if (firstResponse && firstResponse.created_at < escalationTime) {
-          totalResponseTimeMs += (firstResponse.created_at.getTime() - b.created_at.getTime());
+          totalResponseTimeMs += firstResponse.created_at.getTime() - b.created_at.getTime();
           responseCount++;
         } else {
           escalatedWithoutResponseCount++;
         }
       } else {
         if (firstResponse) {
-          totalResponseTimeMs += (firstResponse.created_at.getTime() - b.created_at.getTime());
+          totalResponseTimeMs += firstResponse.created_at.getTime() - b.created_at.getTime();
           responseCount++;
         }
       }
@@ -172,15 +201,15 @@ export class PerformanceTrackingService {
       where: {
         project_manager_id: targetUserId,
         completed_at: { gte: startDate, lte: endDate },
-        status: 'COMPLETED'
-      }
+        status: 'COMPLETED',
+      },
     });
 
     return {
       requestsHandled,
       averageResponseTimeMs,
       escalatedWithoutResponseCount,
-      visitsCompleted
+      visitsCompleted,
     };
   }
 }

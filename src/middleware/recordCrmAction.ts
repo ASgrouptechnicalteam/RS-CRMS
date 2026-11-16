@@ -14,12 +14,13 @@ export const CRM_ACTION = 'CRM_ACTION';
 // Not someone's work: signing in, reading notifications, searches, previews,
 // and the work log, which records itself as WORK_LOG.
 const SKIP =
-  /^\/(auth|push|notifications|search|ai|analytics|health|kiosk-auth|kiosk-credentials|work-log|public|customer|integration|feedback)(\/|$)|\/(preview|preview-price|search|read|parse|refresh|logout|unlock-options|unlock-verify|register-options|register-verify|rows|items)(\/|$)/;
+  /^\/(auth|push|notifications|search|ai|analytics|health|kiosk-auth|kiosk-credentials|work-log|work-updates|public|customer|associate|integration|feedback)(\/|$)|\/(preview|preview-price|search|read|parse|refresh|logout|unlock-options|unlock-verify|register-options|register-verify|rows|items)(\/|$)/;
 
 // What the record is, by the API path word (singular, lower case).
 const NOUNS: Record<string, string> = {
   leads: 'lead',
   'master-leads': 'master data',
+  associates: 'associate',
   'day-plans': 'plan',
   'site-visits': 'site visit',
   tasks: 'task',
@@ -68,6 +69,7 @@ const NOUNS: Record<string, string> = {
   'two-step': '2-step login',
   md: 'MD setting',
   admin: 'setting',
+  drafts: 'draft',
 };
 
 // What was done, by the last action word in the path.
@@ -171,6 +173,9 @@ const VERBS: Record<string, string> = {
   'make-direct': 'Made direct',
   clear: 'Cleared',
   'reset-score-history': 'Reset the score history of',
+  'needs-info': 'Asked for more information on',
+  link: 'Linked the CRM record to',
+  reply: 'Replied on',
 };
 
 const FALLBACK_VERB: Record<string, string> = {
@@ -185,6 +190,9 @@ const SPECIAL: Record<string, string> = {
   'POST /reports': 'Sent the daily report',
   'PUT /reports': 'Edited the daily report',
   'POST /share/links': 'Shared details with a customer',
+  // A draft is the start of a new project/property, so Team Today words it that way.
+  'POST /drafts/property': 'Submitted a new property (draft)',
+  'POST /drafts/project': 'Submitted a new project (draft)',
 };
 
 // Actions that read as a whole sentence without naming the record.

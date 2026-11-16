@@ -183,6 +183,15 @@ router.post(
         await p.employee.update({ where: { id: employee.id }, data: { totp_last_step: step } });
       }
 
+      // An external channel partner signs in to the partner app only
+      // (routes/cp.ts); checked after the password, so it reveals nothing.
+      if (employee.roles.some((r: any) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL)) {
+        return res.status(403).json({
+          error: 'Channel partners sign in at the partner page (/partner).',
+          code: 'USE_PARTNER_APP',
+        });
+      }
+
       const roleNames = withRoleAliases(employee.roles.map((r: any) => r.role.name));
       const permissionsSet = new Set<string>();
       employee.roles.forEach((r: any) => {

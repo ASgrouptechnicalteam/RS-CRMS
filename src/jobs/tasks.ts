@@ -848,21 +848,12 @@ export const backupVerificationJob = async () => {
   }
 };
 
-// 7. Report generation
-//
-// § Phase 5: STILL A STUB, DELIBERATELY. Which report(s) and what
-// "generated" actually means (emailed digest? stored for in-app download?
-// something else?) hasn't been decided yet. Building a report nobody asked
-// for is worse than leaving this honestly unimplemented — do not add real
-// logic here until the actual report(s) are specified.
-export const reportGenerationJob = async () => {
-  logger.info('Executing Report Generation...');
-  if (jobState['reportGen']) {
-    logger.info('Idempotency check: Reports already generated and sent. Skipping.');
-    return;
-  }
-  logger.info('Report generation skipped: no report(s) specified yet (stub, see comment above).');
-  jobState['reportGen'] = true;
+// 7. Report generation: saves last week's / month's reports and tells each
+// person theirs is ready, once, inside a window that survives a sleeping host
+// (services/reports/reportJob.ts). Safe to run any number of times.
+export const reportGenerationJob = async (now: Date = new Date()) => {
+  const { reportReadySweep } = await import('../services/reports/reportJob');
+  await reportReadySweep(now);
 };
 
 // 8. Site Visit Escalation & Notification

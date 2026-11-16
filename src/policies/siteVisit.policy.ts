@@ -3,45 +3,33 @@ import { Roles, Permissions } from '../shared';
 import { SiteVisitBooking, Lead, Employee } from '@prisma/client';
 
 export class SiteVisitPolicy {
+  /** The only roles that may act on any visit: MD and Admin. */
   private static isManagement(user: TokenPayload): boolean {
-    return user.roles.some((r) =>
-      [Roles.MD, Roles.ADMIN, Roles.HR_MANAGER, Roles.MARKETING_DIRECTOR].includes(r as any),
-    );
+    return user.roles.some((r) => [Roles.MD, Roles.ADMIN].includes(r as any));
   }
 
   /**
    * §2 / §8 item #1: "executive department" roles that may see the reassignment
-   * `reason`. Confirmed narrow set: MD, Admin, Marketing Director only
-   * (per spec §8 assumption, now ratified by user). Telecallers, PMs, Agents,
+   * `reason`. Narrow set: MD and Admin only (the company has no Marketing
+   * Director). Telecallers, PMs, Agents,
    * HR cannot inspect the reasoning behind a reassignment hop — same masking
    * pattern already used for employee PII.
    */
   static canViewReassignmentReason(user: TokenPayload): boolean {
-    return user.roles.some((r) =>
-      [Roles.MD, Roles.ADMIN, Roles.MARKETING_DIRECTOR].includes(r as any),
-    );
+    return user.roles.some((r) => [Roles.MD, Roles.ADMIN].includes(r as any));
   }
 
-  static canList(user: TokenPayload): any {
-    const isManagement = this.isManagement(user);
+  // Who may SEE a visit lives in authz/dataScope.ts (buildSiteVisitScope), like
+  // every other domain. Use that to list or look up visits.
 
-    // Unconditional tenant isolation via explicit AND
-    const whereCondition: any = {
-      AND: [{ lead: { company_id: user.companyId } }],
-    };
-
-    if (!isManagement) {
-      // Non-management restricted to their assigned visits, strictly within their company
-      whereCondition.AND.push({
-        OR: [
-          { telecaller_id: user.employeeId },
-          { assigned_agent_id: user.employeeId },
-          { project_manager_id: user.employeeId },
-        ],
-      });
-    }
-
-    return whereCondition;
+  /**
+   * Who may re-route or escalate a visit: the PM it is currently routed to, or
+   * MD/Admin. Holding site_visits.assign_agent alone is not enough -- that
+   * would let any PM take over a colleague's visit.
+   */
+  static canRouteVisit(user: TokenPayload, visit: { project_manager_id?: number | null }): boolean {
+    if (this.isManagement(user)) return true;
+    return !!visit.project_manager_id && visit.project_manager_id === user.employeeId;
   }
 
   static canCreate(user: TokenPayload, lead: { company_id: number }): boolean {
@@ -133,6 +121,19 @@ export class SiteVisitPolicy {
   ): boolean {
     const targetRoles: string[] = target.roles ? target.roles : target.role ? [target.role] : [];
     return targetRoles.includes(Roles.PROJECT_MANAGER) || targetRoles.includes(Roles.AGENT);
+  }
+
+  /**
+   * Who may RUN a visit (assigned_agent_id): a PM, an agent, or an external
+   * channel partner (item 5, 2026-11-15). A partner is never a routing target.
+   */
+  static canRunVisit(target: { roles?: string[] }): boolean {
+    const roles = target.roles || [];
+    return (
+      roles.includes(Roles.PROJECT_MANAGER) ||
+      roles.includes(Roles.AGENT) ||
+      roles.includes(Roles.CHANNEL_PARTNER_EXTERNAL)
+    );
   }
 
   /**

@@ -1,3 +1,4 @@
+import { isWorkUpdateRole, todaysWorkForReport } from '../services/workUpdates';
 import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { z } from 'zod';
@@ -6,6 +7,7 @@ import { authenticateToken, AuthenticatedRequest, requireRole } from '../middlew
 import { validateRequestBody } from '../middleware/validate';
 import { DailyReportSchema, Roles } from '../shared';
 import { getISTComponents } from '../utils/time';
+import periodReportsRouter from './periodReports';
 import { WORK_LOG_ACTION, parseWorkLog } from './workLog';
 import { CRM_ACTION, crmActionLabel } from '../middleware/recordCrmAction';
 import {
@@ -21,6 +23,9 @@ import {
 } from '../services/dailyReport';
 
 const router = Router();
+
+// Weekly and monthly reports (routes/periodReports.ts), before "/:id" below.
+router.use('/period', periodReportsRouter);
 
 const p = prisma;
 
@@ -164,6 +169,10 @@ router.post(
             verified_leads_worked: judged.verified.leads_worked,
             verified_visits: visits,
             verified_deals: deals,
+            // Digital team: what they finished today, from Work updates.
+            ...(isWorkUpdateRole(req.user!.roles)
+              ? { work_updates: await todaysWorkForReport(employeeId) }
+              : {}),
           },
         },
       });

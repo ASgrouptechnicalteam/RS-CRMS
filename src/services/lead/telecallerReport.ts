@@ -38,7 +38,7 @@ export async function listTelecallersForReport(user: TokenPayload) {
   const ids = telecallers.map((t) => t.id);
   const byStatus = await p.lead.groupBy({
     by: ['assigned_to_id', 'status'],
-    where: { assigned_to_id: { in: ids } },
+    where: { assigned_to_id: { in: ids }, company_id: user.companyId },
     _count: { _all: true },
   });
   const counts = new Map<

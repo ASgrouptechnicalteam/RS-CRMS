@@ -1,3 +1,4 @@
+import { num } from '../utils/money';
 import { prisma } from '../lib/prisma';
 import { TokenPayload } from '../utils/jwt';
 import { Roles, Permissions, ExpenseRefundStatus } from '../shared';
@@ -37,7 +38,7 @@ export class ExpenseRefundService {
         where: whereCondition,
         take,
         skip,
-        orderBy: { created_at: 'asc' },
+        orderBy: { created_at: 'desc' }, // latest first (owner, 2026-11-14)
         include: {
           employee: {
             select: { id: true, full_name: true, employee_code: true, department: true },
@@ -51,7 +52,13 @@ export class ExpenseRefundService {
 
   static async createRefund(
     user: TokenPayload,
-    data: { purpose: string; amount: number },
+    data: {
+      purpose: string;
+      amount: number;
+      category?: string;
+      spend_date?: string;
+      bill_no?: string;
+    },
     proofImageUrl: string | null,
   ) {
     if (!ExpenseRefundPolicy.canCreate(user)) {
@@ -65,6 +72,9 @@ export class ExpenseRefundService {
           company_id: user.companyId,
           purpose: data.purpose,
           amount: data.amount,
+          category: data.category || null,
+          spend_date: data.spend_date ? new Date(`${data.spend_date}T00:00:00Z`) : null,
+          bill_no: data.bill_no?.trim() || null,
           proof_image_url: proofImageUrl,
           status: ExpenseRefundStatus.PENDING,
         },
@@ -174,16 +184,23 @@ export class ExpenseRefundService {
             {
               type: 'EXPENSE_REFUND_AWAITING_MD',
               title: '\uD83D\uDCCB Expense Refund Awaits Your Approval',
-              message: `A refund of \u20B9${refund.amount.toLocaleString('en-IN')} has been verified by the accountant and needs your approval.`,
+              message: `A refund of \u20B9${num(refund.amount).toLocaleString('en-IN')} has been verified by the accountant and needs your approval.`,
               link: '/finance',
             },
           );
         }
+        // The employee was not told their request moved on (2026-11-15).
+        await notifyEmployee(refund.employee_id, {
+          type: 'EXPENSE_REFUND_VERIFIED',
+          title: 'Expense refund verified',
+          message: `Your refund request of ₹${num(refund.amount).toLocaleString('en-IN')} was verified by the accountant and is with the MD for approval.`,
+          link: '/finance',
+        });
       } else {
         await notifyEmployee(refund.employee_id, {
           type: 'EXPENSE_REFUND_REJECTED',
           title: '\u274C Expense Refund Rejected',
-          message: `Your refund request of \u20B9${refund.amount.toLocaleString('en-IN')} was rejected by the accountant.${note ? ` Reason: ${note}` : ''}`,
+          message: `Your refund request of \u20B9${num(refund.amount).toLocaleString('en-IN')} was rejected by the accountant.${note ? ` Reason: ${note}` : ''}`,
           link: '/finance',
         });
       }
@@ -241,7 +258,7 @@ export class ExpenseRefundService {
         await notifyEmployee(refund.employee_id, {
           type: 'EXPENSE_REFUND_MD_APPROVED',
           title: '\u2705 MD Approved Your Refund!',
-          message: `Your expense refund of \u20B9${refund.amount.toLocaleString('en-IN')} has been approved by the MD. The Finance team will process the payment shortly.`,
+          message: `Your expense refund of \u20B9${num(refund.amount).toLocaleString('en-IN')} has been approved by the MD. The Finance team will process the payment shortly.`,
           link: '/finance',
         });
 
@@ -252,7 +269,7 @@ export class ExpenseRefundService {
           await notifyEmployee(accountantsToNotify, {
             type: 'EXPENSE_REFUND_PROCESS_PAYMENT',
             title: '\uD83D\uDCB3 Please Process Refund Payment',
-            message: `MD has approved a refund of \u20B9${refund.amount.toLocaleString('en-IN')}. Please process the payment and mark it as refunded.`,
+            message: `MD has approved a refund of \u20B9${num(refund.amount).toLocaleString('en-IN')}. Please process the payment and mark it as refunded.`,
             link: '/finance',
           });
         }
@@ -260,7 +277,7 @@ export class ExpenseRefundService {
         await notifyEmployee(refund.employee_id, {
           type: 'EXPENSE_REFUND_REJECTED',
           title: '\u274C Expense Refund Rejected by MD',
-          message: `Your refund request of \u20B9${refund.amount.toLocaleString('en-IN')} was not approved.${note ? ` Reason: ${note}` : ''}`,
+          message: `Your refund request of \u20B9${num(refund.amount).toLocaleString('en-IN')} was not approved.${note ? ` Reason: ${note}` : ''}`,
           link: '/finance',
         });
       }
@@ -308,7 +325,7 @@ export class ExpenseRefundService {
       await notifyEmployee(refund.employee_id, {
         type: 'EXPENSE_REFUNDED',
         title: '\uD83C\uDF89 Your Expense Has Been Refunded!',
-        message: `\u20B9${refund.amount.toLocaleString('en-IN')} has been refunded to you. Please collect it from the Finance department.`,
+        message: `\u20B9${num(refund.amount).toLocaleString('en-IN')} has been refunded to you. Please collect it from the Finance department.`,
         link: '/finance',
       });
 

@@ -40,6 +40,8 @@ export interface LeadListFilters {
   q?: string;
   assigned_to_id?: number;
   created_by_id?: number;
+  /** Only leads the user owns (assigned to or created by). */
+  my_leads?: boolean;
   /** Only leads nobody owns yet. */
   unassigned?: boolean;
   /** Only leads created at or after this instant. */
@@ -57,13 +59,21 @@ async function buildFilteredLeadWhere(user: TokenPayload, filters: LeadListFilte
   const scope = await buildLeadScope(user);
   const extra: Record<string, unknown>[] = [];
   if (filters.status) {
-    const statuses = filters.status.split(',').filter(Boolean);
-    extra.push({ status: statuses.length > 1 ? { in: statuses } : statuses[0] });
+    if (filters.status === 'ACTIVE') {
+      extra.push({ status: { notIn: ['DROPPED', 'LOST'] } });
+    } else {
+      const statuses = filters.status.split(',').filter(Boolean);
+      extra.push({ status: statuses.length > 1 ? { in: statuses } : statuses[0] });
+    }
   }
   if (filters.source) extra.push({ source: filters.source });
   if (filters.exit_reason) extra.push({ exit_reason: filters.exit_reason });
   if (filters.assigned_to_id) extra.push({ assigned_to_id: filters.assigned_to_id });
   if (filters.created_by_id) extra.push({ created_by_id: filters.created_by_id });
+  if (filters.my_leads) {
+    // Current owner of the lead is the employee currently assigned to it
+    extra.push({ assigned_to_id: user.employeeId });
+  }
   if (filters.unassigned) extra.push({ assigned_to_id: null });
   if (filters.created_from) extra.push({ created_at: { gte: filters.created_from } });
   if (filters.created_to) extra.push({ created_at: { lt: filters.created_to } });
@@ -86,11 +96,15 @@ export async function getLeadSummary(user: TokenPayload, filters: LeadListFilter
   const rows = await p.lead.groupBy({ by: ['status'], where, _count: { _all: true } });
   const byStatus: Record<string, number> = {};
   let total = 0;
+  let active = 0;
   for (const r of rows) {
     byStatus[r.status] = r._count._all;
     total += r._count._all;
+    if (r.status !== 'DROPPED' && r.status !== 'LOST') {
+      active += r._count._all;
+    }
   }
-  return { total, byStatus };
+  return { total, active, byStatus };
 }
 
 export async function getLeads(

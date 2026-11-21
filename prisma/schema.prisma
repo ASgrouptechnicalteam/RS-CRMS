@@ -2582,6 +2582,9 @@ model Booking {
   /// constraint added in the migration.
   property_id          Int?
   project_unit_id      Int?
+  /// Name of a project or property that is not in the CRM (2026-11-20). When set,
+  /// property_id and project_unit_id are both empty and nothing is locked.
+  other_inventory      String?  @db.VarChar(160)
   assigned_employee_id Int?
 
   status String @default("PENDING") // DRAFT, FORM_SUBMITTED, PENDING_MD_APPROVAL, CONFIRMED, REGISTERED, COMPLETED, CANCELLED
@@ -2747,6 +2750,8 @@ model Opportunity {
   project_id      Int?
   property_id     Int?
   project_unit_id Int?
+  /// A project or property that is not in the CRM (2026-11-20); the booking carries it over.
+  other_inventory String? @db.VarChar(160)
   booking_id      Int? @unique
 
   expected_value      Float?

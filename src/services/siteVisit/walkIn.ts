@@ -22,7 +22,8 @@ export interface WalkInInput {
   /** ...or the customer's details, to create the lead together with the visit. */
   customer_name?: string;
   phone?: string;
-  project_id: number;
+  project_id?: number;
+  other_project?: string;
   /** When the customer came (ISO). Not in the future. */
   visit_date: string;
   rating: string;
@@ -69,11 +70,19 @@ export async function recordWalkIn(user: TokenPayload, input: WalkInInput) {
     );
   }
 
-  const project = await p.project.findFirst({
-    where: { id: input.project_id, company_id: user.companyId },
-    select: { id: true, name: true },
-  });
-  if (!project) throw new AppError(404, 'Project not found.');
+  const otherProjectNameClean = input.other_project?.trim() || null;
+  if (!input.project_id && !otherProjectNameClean) {
+    throw new AppError(400, 'Choose a project or enter the other project name.');
+  }
+
+  let project: { id: number; name: string } | null = null;
+  if (input.project_id) {
+    project = await p.project.findFirst({
+      where: { id: input.project_id, company_id: user.companyId },
+      select: { id: true, name: true },
+    });
+    if (!project) throw new AppError(404, 'Project not found.');
+  }
 
   // --- the lead: an existing one the user owns, or a new one made together with the visit
   let lead: any;
@@ -125,33 +134,43 @@ export async function recordWalkIn(user: TokenPayload, input: WalkInInput) {
       // Lock the lead's row first, so two people submitting the same walk-in at the same
       // moment run one after the other and the second one sees the first.
       await tx.$queryRaw`SELECT id FROM Lead WHERE id = ${lead.id} FOR UPDATE`;
-      const duplicate = await tx.siteVisitBooking.findFirst({
-        where: {
-          lead_id: lead.id,
-          project_id: project.id,
-          scheduled_date: { gte: dayStart, lt: dayEnd },
-          status: { not: 'CANCELLED' },
-        },
-        select: { booking_code: true },
-      });
-      if (duplicate) {
-        throw new AppError(
-          409,
-          `This customer already has a visit to ${project.name} on that day (${duplicate.booking_code}).`,
-        );
+      if (project) {
+        const duplicate = await tx.siteVisitBooking.findFirst({
+          where: {
+            lead_id: lead.id,
+            project_id: project.id,
+            scheduled_date: { gte: dayStart, lt: dayEnd },
+            status: { not: 'CANCELLED' },
+          },
+          select: { booking_code: true },
+        });
+        if (duplicate) {
+          throw new AppError(
+            409,
+            `This customer already has a visit to ${project.name} on that day (${duplicate.booking_code}).`,
+          );
+        }
       }
+      const projectName = project ? project.name : otherProjectNameClean!;
+      const feedbackNotesPrefix = otherProjectNameClean
+        ? `Other project: ${otherProjectNameClean}. `
+        : '';
       const created = await tx.siteVisitBooking.create({
         data: {
           booking_code: await generateNextBookingCode(),
           lead: { connect: { id: lead.id } },
           telecaller: { connect: { id: user.employeeId } },
-          project: { connect: { id: project.id } },
+          ...(project ? { project: { connect: { id: project.id } } } : {}),
           scheduled_date: visitDate,
           completed_at: visitDate,
           status: 'COMPLETED',
           visit_type: 'WALK_IN',
           rating: input.rating,
-          feedback_notes: `Walk-in, reported by the telecaller. ${notes}`,
+          feedback_notes:
+            `${feedbackNotesPrefix}Walk-in, reported by the telecaller. ${notes}`.slice(0, 1000),
+          verification_call_notes: otherProjectNameClean
+            ? `Other project: ${otherProjectNameClean}. Walk-in visit.`
+            : null,
         },
       });
       await tx.leadActivity.create({
@@ -160,7 +179,7 @@ export async function recordWalkIn(user: TokenPayload, input: WalkInInput) {
           actor: { connect: { id: user.employeeId } },
           activity_type: 'SITE_VISIT_COMPLETED',
           notes:
-            `Walk-in visit to ${project.name} recorded (${created.booking_code}). Interest: ${input.rating}. ${notes}`.slice(
+            `Walk-in visit to ${projectName} recorded (${created.booking_code}). Interest: ${input.rating}. ${notes}`.slice(
               0,
               1000,
             ),

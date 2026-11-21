@@ -227,6 +227,7 @@ export class OpportunityService {
       project_id?: number;
       property_id?: number;
       project_unit_id?: number;
+      other_inventory?: string | null;
       expected_value?: number;
       probability?: number;
       budget_min?: number;
@@ -271,17 +272,35 @@ export class OpportunityService {
       }
     }
 
+    const otherInventory =
+      typeof data.other_inventory === 'string' ? data.other_inventory.trim() : null;
+    if (otherInventory && otherInventory.length < 2) {
+      throw new AppError(400, 'Enter the project or property name.');
+    }
+    const choosingOther = !!otherInventory;
+
     return await prisma.opportunity.update({
       where: { id },
       data: {
-        project_id: data.project_id,
+        project_id: choosingOther ? null : data.project_id,
+        // An outside project replaces any CRM property or unit; picking a CRM
+        // one clears the outside name.
+        ...(choosingOther
+          ? {
+              other_inventory: otherInventory!.slice(0, 160),
+              property_id: null,
+              project_unit_id: null,
+            }
+          : data.property_id !== undefined || data.project_unit_id !== undefined
+            ? { other_inventory: null }
+            : {}),
         // Switching the target (property <-> unit) clears whichever one
         // wasn't just provided, so the record never ends up pointing at a
         // stale item from before the switch.
-        ...(data.property_id !== undefined
+        ...(!choosingOther && data.property_id !== undefined
           ? { property_id: data.property_id, project_unit_id: null }
           : {}),
-        ...(data.project_unit_id !== undefined
+        ...(!choosingOther && data.project_unit_id !== undefined
           ? { project_unit_id: data.project_unit_id, property_id: null }
           : {}),
         expected_value: data.expected_value,
@@ -608,7 +627,7 @@ export class OpportunityService {
       return existingBooking; // safely return existing booking
     }
 
-    if (!opp.property_id && !opp.project_unit_id) {
+    if (!opp.property_id && !opp.project_unit_id && !opp.other_inventory) {
       throw new AppError(
         400,
         'Opportunity must have a property or project unit assigned before booking',
@@ -627,6 +646,7 @@ export class OpportunityService {
         customer_id: customer.id,
         property_id: opp.property_id,
         project_unit_id: opp.project_unit_id,
+        other_inventory: opp.other_inventory,
         // Phase 12-1: propagate the Opportunity's attribution onto the Booking
         // (DTO overrides if explicitly provided, else inherit from the Opportunity).
         source: dto.source ?? opp.source ?? null,

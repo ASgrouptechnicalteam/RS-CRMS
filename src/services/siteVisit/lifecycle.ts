@@ -232,19 +232,29 @@ export async function reconfirmCustomer(user: TokenPayload, visitId: number) {
   );
 }
 
-/** Customer requests reschedule (new date/property/unit). */
+/** Customer or PM requests reschedule (new date/property/unit). */
 export async function rescheduleVisit(
   user: TokenPayload,
   visitId: number,
   data: { scheduled_date?: string; property_ids?: number[]; project_unit_ids?: number[] },
 ) {
   const visit = await findVisitForUser(user, visitId, { verifyAction: true });
-  if (!can(user, Permissions.SITE_VISITS_VERIFY, visit)) {
-    throw { status: 403, message: 'Forbidden: Missing site_visits.verify permission' };
+  const isAuthorized =
+    can(user, Permissions.SITE_VISITS_VERIFY, visit) ||
+    user.roles.includes(Roles.PROJECT_MANAGER) ||
+    (user.permissions || []).includes(Permissions.SITE_VISITS_ACCEPT) ||
+    (user.permissions || []).includes(Permissions.SITE_VISITS_COMPLETE) ||
+    visit.project_manager_id === user.employeeId;
+  if (!isAuthorized) {
+    throw { status: 403, message: 'Forbidden: Missing permission to reschedule this visit' };
   }
 
-  // Phase D: If superseding a cancellation, notify the PM.
-  if (visit.status === 'CANCELLATION_PENDING_PM_CONFIRMATION' && visit.project_manager_id) {
+  // Phase D: If superseding a cancellation, notify the PM (if not self).
+  if (
+    visit.status === 'CANCELLATION_PENDING_PM_CONFIRMATION' &&
+    visit.project_manager_id &&
+    visit.project_manager_id !== user.employeeId
+  ) {
     await p.notification.create({
       data: {
         employee_id: visit.project_manager_id,

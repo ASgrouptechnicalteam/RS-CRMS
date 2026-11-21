@@ -93,7 +93,14 @@ export async function findVisitForUser(
       AND: [
         { id: visitId },
         await buildSiteVisitScope(user),
-        { OR: [{ telecaller_id: user.employeeId }, { lead: { assigned_to_id: user.employeeId } }] },
+        {
+          OR: [
+            { telecaller_id: user.employeeId },
+            { lead: { assigned_to_id: user.employeeId } },
+            { project_manager_id: user.employeeId },
+            { assigned_agent_id: user.employeeId },
+          ],
+        },
       ],
     };
   } else {

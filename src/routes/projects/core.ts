@@ -336,6 +336,19 @@ router.post(
           verification_notes: null,
         },
       });
+      await p.auditEvent
+        .create({
+          data: {
+            actor_id: req.user!.employeeId!,
+            action: 'DETAILS_CHANGE:Review submission',
+            entity_type: 'PROJECT',
+            entity_id: projectId,
+            old_value: project.verification_status,
+            new_value: 'PENDING_DM_POLISH',
+            reason: 'Submitted for Marketing & MD review',
+          },
+        })
+        .catch((err) => logger.error('[AuditEvent] Project submit review failed:', err));
       logger.info(`Project ${projectId} submitted for review by employee ${req.user!.employeeId}`);
       await notifyProjectReview('SUBMITTED', updated, req.user!.employeeId);
       return res
@@ -485,6 +498,19 @@ router.post(
           ...(notes ? { verification_notes: notes } : {}),
         },
       });
+      await p.auditEvent
+        .create({
+          data: {
+            actor_id: req.user!.employeeId!,
+            action: 'DETAILS_CHANGE:Marketing review',
+            entity_type: 'PROJECT',
+            entity_id: projectId,
+            old_value: 'PENDING_DM_EXEC',
+            new_value: 'Marketing Polish Complete (Sent to MD)',
+            reason: notes || null,
+          },
+        })
+        .catch((err) => logger.error('[AuditEvent] DM submit review failed:', err));
       invalidateProjectListCache();
       logger.info(`Project ${projectId} polish submitted by employee ${req.user!.employeeId}`);
       await notifyProjectReview('TO_MD', updated, req.user!.employeeId);
@@ -538,6 +564,19 @@ router.post(
           verification_notes: notes || null,
         },
       });
+      await p.auditEvent
+        .create({
+          data: {
+            actor_id: req.user!.employeeId!,
+            action: 'DETAILS_CHANGE:Marketing review',
+            entity_type: 'PROJECT',
+            entity_id: projectId,
+            old_value: 'PENDING_DM_POLISH',
+            new_value: 'Verified as-is by DM Head (Sent to MD)',
+            reason: notes || null,
+          },
+        })
+        .catch((err) => logger.error('[AuditEvent] DM verify-as-is review failed:', err));
       logger.info(`Project ${projectId} DM-verified-as-is by employee ${req.user!.employeeId}`);
       await notifyProjectReview('TO_MD', updated, req.user!.employeeId);
       return res.status(200).json({

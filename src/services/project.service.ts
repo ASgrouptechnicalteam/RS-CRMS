@@ -408,6 +408,21 @@ export class ProjectService {
           },
         });
 
+        // Record creation in audit log
+        await p.auditEvent
+          .create({
+            data: {
+              actor_id: user.employeeId!,
+              action: 'PROJECT_CREATED',
+              entity_type: 'PROJECT',
+              entity_id: project.id,
+              old_value: null,
+              new_value: `${project.name} (${projectCode})`,
+              reason: 'Initial project creation',
+            },
+          })
+          .catch((err) => logger.error('[AuditEvent] Project creation log failed:', err));
+
         // Notify the assigned PM if one was set
         if (data.assigned_pm_id) {
           await p.notification.create({
@@ -565,20 +580,16 @@ export class ProjectService {
     const oldPmId = project.assigned_pm_id;
     const newPmId = pmChanged ? (data.assigned_pm_id ?? null) : null;
 
-    // An approved project can still be edited (owner, 2026-11-02); each field
-    // that really changed is kept in its history, before -> after.
-    let changes: FieldChange[] = [];
-    if (isApproved(project)) {
-      const { status: _status, assigned_pm_id: _pm, ...fields } = updateData;
-      changes = projectChanges(project, fields);
-      if (pmChanged) {
-        const pms = await p.employee.findMany({
-          where: { id: { in: [oldPmId, newPmId].filter((id): id is number => id != null) } },
-          select: { id: true, full_name: true },
-        });
-        const nameOf = (id: number | null) => pms.find((e) => e.id === id)?.full_name || '—';
-        changes.push({ field: 'Project manager', before: nameOf(oldPmId), after: nameOf(newPmId) });
-      }
+    // Every changed field is kept in history, before -> after.
+    const { status: _status, assigned_pm_id: _pm, ...fields } = updateData;
+    const changes: FieldChange[] = projectChanges(project, fields);
+    if (pmChanged) {
+      const pms = await p.employee.findMany({
+        where: { id: { in: [oldPmId, newPmId].filter((id): id is number => id != null) } },
+        select: { id: true, full_name: true },
+      });
+      const nameOf = (id: number | null) => pms.find((e) => e.id === id)?.full_name || '—';
+      changes.push({ field: 'Project manager', before: nameOf(oldPmId), after: nameOf(newPmId) });
     }
 
     // Every changed field, the status and the PM go in ONE write. The status
@@ -1229,67 +1240,144 @@ export class ProjectService {
   }
 
   /**
-   * The project's history as plain lines: field changes made after approval
-   * (see projectChangeLog.ts), status changes and PM reassignments. The raw
-   * request log (auditWrites, action "PUT /api/v1/...") is left out — its
-   * entity_id is whatever id ended the URL, so it does not belong to one
-   * project.
+   * The project's history as plain lines: creation, field changes, workflow
+   * milestones, status changes and PM reassignments.
    */
   static async listActivity(user: TokenPayload, projectId: number) {
     await this.assertProjectInScope(user, projectId);
-    const events = await p.auditEvent.findMany({
-      where: {
-        entity_type: 'PROJECT',
-        entity_id: projectId,
-        OR: [
-          { action: { in: ['STATUS_CHANGE', 'REASSIGNMENT'] } },
-          { action: { startsWith: 'DETAILS_CHANGE:' } },
-          { action: { startsWith: 'PRICING_CHANGE:' } },
-          { action: { startsWith: 'UNITS_CHANGE:' } },
-        ],
-      },
-      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
-      take: 500,
-    });
+
+    const [project, events] = await Promise.all([
+      p.project.findUnique({
+        where: { id: projectId },
+        select: {
+          id: true,
+          name: true,
+          project_code: true,
+          created_at: true,
+          created_by_id: true,
+          created_by: {
+            select: {
+              id: true,
+              full_name: true,
+              employee_code: true,
+              roles: { select: { role: { select: { name: true } } } },
+            },
+          },
+        },
+      }),
+      p.auditEvent.findMany({
+        where: {
+          entity_type: 'PROJECT',
+          entity_id: projectId,
+          OR: [
+            { action: { in: ['STATUS_CHANGE', 'REASSIGNMENT', 'PROJECT_CREATED'] } },
+            { action: { startsWith: 'DETAILS_CHANGE:' } },
+            { action: { startsWith: 'PRICING_CHANGE:' } },
+            { action: { startsWith: 'UNITS_CHANGE:' } },
+          ],
+        },
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        take: 500,
+      }),
+    ]);
+
     const pmIds = events
       .filter((e) => e.action === 'REASSIGNMENT')
       .flatMap((e) => [Number(e.old_value), Number(e.new_value)])
       .filter((n) => Number.isInteger(n) && n > 0);
-    const actorIds = [...new Set([...events.map((e) => e.actor_id), ...pmIds])];
+    const actorIds = [
+      ...new Set([
+        ...events.map((e) => e.actor_id),
+        ...pmIds,
+        ...(project?.created_by_id ? [project.created_by_id] : []),
+      ]),
+    ];
     const people = await p.employee.findMany({
       where: { id: { in: actorIds } },
-      select: { id: true, full_name: true },
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        roles: { select: { role: { select: { name: true } } } },
+      },
     });
     const nameById = new Map(people.map((a) => [a.id, a.full_name]));
+    const roleById = new Map(people.map((a) => [a.id, a.roles?.[0]?.role?.name || null]));
+    const codeById = new Map(people.map((a) => [a.id, a.employee_code || null]));
     const nameOf = (v: string | null) => (v && nameById.get(Number(v))) || v || '—';
-    return events.map((e) => {
+
+    const mappedEvents = events.map((e) => {
       const [kind, ...rest] = e.action.split(':');
       const field = rest.join(':');
-      const area = kind.replace('_CHANGE', '');
+      const area = (kind.replace('_CHANGE', '') as 'DETAILS' | 'PRICING' | 'UNITS') || 'DETAILS';
       const base = {
         id: e.id,
         created_at: e.created_at,
         actor_id: e.actor_id,
         actor_name: nameById.get(e.actor_id) || null,
+        actor_role: roleById.get(e.actor_id) || null,
+        actor_code: codeById.get(e.actor_id) || null,
         reason: e.reason,
       };
-      if (e.action === 'STATUS_CHANGE')
+      if (e.action === 'PROJECT_CREATED') {
         return {
           ...base,
-          area: 'DETAILS',
+          area: 'LIFECYCLE' as const,
+          field: 'Project created',
+          before: null,
+          after: e.new_value || `${project?.name} (${project?.project_code})`,
+        };
+      }
+      if (e.action === 'STATUS_CHANGE') {
+        return {
+          ...base,
+          area: 'DETAILS' as const,
           field: 'Construction status',
           before: e.old_value,
           after: e.new_value,
         };
-      if (e.action === 'REASSIGNMENT')
+      }
+      if (e.action === 'REASSIGNMENT') {
         return {
           ...base,
-          area: 'DETAILS',
+          area: 'DETAILS' as const,
           field: 'Project manager',
           before: nameOf(e.old_value),
           after: nameOf(e.new_value),
         };
+      }
+      if (field === 'Review submission' || field === 'Marketing review' || field === 'MD review') {
+        return {
+          ...base,
+          area: 'LIFECYCLE' as const,
+          field,
+          before: e.old_value,
+          after: e.new_value,
+        };
+      }
       return { ...base, area, field, before: e.old_value, after: e.new_value };
     });
+
+    // If no explicit PROJECT_CREATED event exists in the audit trail, synthesize one from the project record
+    const hasCreationEvent = mappedEvents.some(
+      (e) => e.field === 'Project created' || (e as any).action === 'PROJECT_CREATED',
+    );
+    if (!hasCreationEvent && project) {
+      mappedEvents.push({
+        id: 0,
+        created_at: project.created_at,
+        actor_id: project.created_by_id || 0,
+        actor_name: project.created_by?.full_name || 'System / Creator',
+        actor_role: project.created_by?.roles?.[0]?.role?.name || null,
+        actor_code: project.created_by?.employee_code || null,
+        reason: 'Initial project creation',
+        area: 'LIFECYCLE' as const,
+        field: 'Project created',
+        before: null,
+        after: `${project.name} (${project.project_code})`,
+      });
+    }
+
+    return mappedEvents;
   }
 }

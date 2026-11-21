@@ -17,14 +17,20 @@ const CreateBookingSchema = z
     customer_id: z.number().int().positive(),
     property_id: z.number().int().positive().optional(),
     project_unit_id: z.number().int().positive().optional(),
+    // A project or property that is not in the CRM (2026-11-20): nothing is locked.
+    other_inventory: z.string().trim().min(2).max(160).optional(),
     agreed_price: z.number().positive(),
     booking_amount: z.number().positive(),
     notes: z.string().optional(),
     assigned_employee_id: z.number().int().positive().optional(),
   })
-  .refine((data) => !!data.property_id !== !!data.project_unit_id, {
-    message: 'Provide exactly one of property_id or project_unit_id',
-  });
+  .refine(
+    (data) =>
+      [data.property_id, data.project_unit_id, data.other_inventory].filter(Boolean).length === 1,
+    {
+      message: 'Provide exactly one of property_id, project_unit_id or other_inventory',
+    },
+  );
 
 const UpdateBookingStatusSchema = z.object({
   status: z.enum(['TOKEN_RECEIVED', 'CONFIRMED', 'CANCELLED', 'COMPLETED']),
@@ -48,6 +54,7 @@ const InitiateBookingSchema = z
     // Inventory
     property_id: z.number().int().positive().optional().nullable(),
     project_unit_id: z.number().int().positive().optional().nullable(),
+    other_inventory: z.string().trim().min(2).max(160).optional(),
     assigned_employee_id: z.number().int().positive().optional(),
     // Financial
     agreed_price: z.number().positive(),

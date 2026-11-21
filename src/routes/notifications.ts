@@ -14,9 +14,11 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Respon
     const scope = req.query.scope as string;
     const isHistory = scope === 'history';
 
-    const whereClause: any = { employee_id: userId };
-    if (!isHistory) {
-      whereClause.is_dismissed = false;
+    const whereClause: any = { employee_id: userId, is_dismissed: false };
+    if (isHistory) {
+      whereClause.is_read = true;
+    } else {
+      whereClause.is_read = false;
     }
 
     const notifications = await p.notification.findMany({

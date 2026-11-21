@@ -103,11 +103,13 @@ export class SiteVisitWorkflow implements DomainWorkflow {
     RESCHEDULE_REQUESTED: {
       PM_CONFIRM: 'PENDING_PM_RECONFIRMATION',
       CANCEL: 'CANCELLED',
+      RESCHEDULE: 'RESCHEDULE_REQUESTED',
     },
     PENDING_PM_RECONFIRMATION: {
       PM_CONFIRM: 'ACCEPTED',
       PM_RELEASE: 'PENDING_ACCEPTANCE',
       CANCEL: 'CANCELLED',
+      RESCHEDULE: 'RESCHEDULE_REQUESTED',
     },
     CONFIRMED: {
       START: 'ACTIVE',
@@ -120,7 +122,9 @@ export class SiteVisitWorkflow implements DomainWorkflow {
       RESCHEDULE: 'RESCHEDULE_REQUESTED',
     },
     COMPLETED: {},
-    CANCELLED: {},
+    CANCELLED: {
+      RESCHEDULE: 'RESCHEDULE_REQUESTED',
+    },
   };
 
   canTransition(req: WorkflowTransitionRequest): WorkflowTransitionResult {

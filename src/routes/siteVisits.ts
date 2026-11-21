@@ -193,19 +193,23 @@ router.post(
 );
 
 // POST /api/v1/site-visits/walk-in - record a visit the customer made on their own
-// (already completed): { lead_id | customer_name + phone, project_id, visit_date, rating, feedback_notes }
+// (already completed): { lead_id | customer_name + phone, project_id | other_project, visit_date, rating, feedback_notes }
 const WalkInSchema = z
   .object({
     lead_id: z.number().int().positive().optional(),
     customer_name: z.string().trim().max(120).optional(),
     phone: z.string().trim().max(20).optional(),
-    project_id: z.number().int().positive(),
+    project_id: z.number().int().positive().optional(),
+    other_project: z.string().trim().min(2).max(120).optional(),
     visit_date: z.string().min(1),
     rating: z.string().min(1),
     feedback_notes: z.string().trim().max(1000),
   })
   .refine((v) => v.lead_id || (v.customer_name && v.phone), {
     message: 'Pick a lead, or enter the customer name and phone',
+  })
+  .refine((v) => v.project_id || (v.other_project && v.other_project.trim().length >= 2), {
+    message: 'Choose a project or enter the other project name',
   });
 
 router.post(
@@ -537,7 +541,11 @@ router.post(
 router.post(
   '/:id/reschedule',
   authenticateToken,
-  requirePermission([Permissions.SITE_VISITS_VERIFY]),
+  requirePermission([
+    Permissions.SITE_VISITS_VERIFY,
+    Permissions.SITE_VISITS_ACCEPT,
+    Permissions.SITE_VISITS_COMPLETE,
+  ]),
   validateRequestBody(SiteVisitRescheduleSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {

@@ -46,6 +46,7 @@ export interface StageDetails {
   contacted_at?: string;
   call_notes?: string;
   project_id?: number;
+  other_project?: string;
   visit_at?: string;
   visit_handled_by_id?: number;
   visit_rating?: 'HOT_INTERESTED' | 'WARM' | 'COLD' | 'NOT_INTERESTED';
@@ -125,8 +126,8 @@ export async function resolveInitialStage(
   }
 
   const isVisit = VISIT_STAGES.includes(stage);
-  if (isVisit && !details.project_id) {
-    throw new AppError(400, 'Choose the project of the site visit');
+  if (isVisit && !details.project_id && !details.other_project?.trim()) {
+    throw new AppError(400, 'Choose the project of the site visit or enter the other project name');
   }
   if (details.project_id && (isVisit || DEMO_STAGES.includes(stage))) {
     const project = await p.project.findFirst({
@@ -254,12 +255,13 @@ export async function applyInitialStage(
         accepted_by: user.employeeId,
       },
     });
+    const demoProjectName = r.project?.name || r.details.other_project?.trim() || null;
     await tx.leadActivity.create({
       data: {
         lead_id: lead.id,
         actor_id: user.employeeId,
         activity_type: completed ? 'DEMO_COMPLETED' : 'STATUS_CHANGED',
-        notes: `Demo${r.project ? ` of ${r.project.name}` : ''} on ${r.demoAt!.toDateString()}, handled by ${r.demoHandler.name}. ${summary}`,
+        notes: `Demo${demoProjectName ? ` of ${demoProjectName}` : ''} on ${r.demoAt!.toDateString()}, handled by ${r.demoHandler.name}. ${summary}`,
       },
     });
     if (r.demoHandler.id !== user.employeeId) {
@@ -275,24 +277,32 @@ export async function applyInitialStage(
   }
 
   if (VISIT_STAGES.includes(r.stage)) {
-    const pmId = r.project!.assigned_pm_id;
+    const pmId = r.project?.assigned_pm_id ?? null;
     const completed = r.stage !== 'SITE_VISIT_SCHEDULED';
+    const otherProject = r.details.other_project?.trim() || null;
+    const projectName = r.project?.name || otherProject || 'unlisted project';
+    const verificationNotes = otherProject
+      ? `Other project: ${otherProject}. Recorded when the lead was added.`
+      : 'Recorded when the lead was added.';
     const booking = await tx.siteVisitBooking.create({
       data: {
         booking_code: await generateNextBookingCode(),
         lead_id: lead.id,
         telecaller_id: user.employeeId,
-        project_id: r.project!.id,
+        project_id: r.project?.id ?? null,
         project_manager_id: pmId ?? r.handler!.id,
         assigned_agent_id: pmId && pmId !== r.handler!.id ? r.handler!.id : null,
         scheduled_date: r.visitAt!,
         status: completed ? 'COMPLETED' : 'CONFIRMED',
-        verification_call_notes: 'Recorded when the lead was added.',
+        verification_call_notes: verificationNotes,
         ...(completed
           ? {
               completed_at: r.visitAt,
               rating: r.details.visit_rating,
-              feedback_notes: r.details.visit_feedback!.trim(),
+              feedback_notes:
+                otherProject && !r.details.visit_feedback?.trim().startsWith('Other project:')
+                  ? `Other project: ${otherProject}. ${r.details.visit_feedback!.trim()}`
+                  : r.details.visit_feedback!.trim(),
             }
           : {}),
       },
@@ -303,8 +313,8 @@ export async function applyInitialStage(
         actor_id: user.employeeId,
         activity_type: completed ? 'SITE_VISIT_COMPLETED' : 'SITE_VISIT_BOOKED',
         notes: completed
-          ? `Visit ${booking.booking_code} to ${r.project!.name} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}. Interest: ${r.details.visit_rating}. Feedback: ${r.details.visit_feedback!.trim()}`
-          : `Visit ${booking.booking_code} to ${r.project!.name} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}`,
+          ? `Visit ${booking.booking_code} to ${projectName} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}. Interest: ${r.details.visit_rating}. Feedback: ${r.details.visit_feedback!.trim()}`
+          : `Visit ${booking.booking_code} to ${projectName} on ${r.visitAt!.toDateString()}, handled by ${r.handler!.name}`,
       },
     });
     await tx.notification.create({
@@ -312,7 +322,7 @@ export async function applyInitialStage(
         employee_id: r.handler!.id,
         type: 'STATUS_UPDATE',
         title: completed ? 'Site visit recorded' : 'Site visit scheduled for you',
-        message: `${lead.customer_name} (${lead.lead_code}) — ${r.project!.name}, ${r.visitAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. Recorded when the lead was added.`,
+        message: `${lead.customer_name} (${lead.lead_code}) — ${projectName}, ${r.visitAt!.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. Recorded when the lead was added.`,
       },
     });
   }

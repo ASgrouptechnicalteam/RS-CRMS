@@ -72,6 +72,7 @@ const parseLeadFilters = (req: AuthenticatedRequest): LeadListFilters => {
     q: queryString(req.query.q),
     assigned_to_id: idOrMe(req.query.assigned_to_id),
     created_by_id: idOrMe(req.query.created_by_id),
+    my_leads: req.query.my_leads === 'true' || req.query.owner === 'me',
     unassigned: req.query.unassigned === 'true',
     created_from: parseDate(req.query.created_from),
     created_to: parseDate(req.query.created_to),

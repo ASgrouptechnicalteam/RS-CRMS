@@ -852,6 +852,10 @@ router.post(
           : null;
       const accuracy = req.body.accuracy ? Number(req.body.accuracy) : null;
       const projectId = req.body.project_id ? parseInt(req.body.project_id, 10) : null;
+      const otherProject =
+        typeof req.body.other_project === 'string' && req.body.other_project.trim().length > 0
+          ? req.body.other_project.trim().slice(0, 120)
+          : null;
 
       const employee = await p.employee.findUnique({
         where: { id: req.user!.employeeId },
@@ -947,7 +951,13 @@ router.post(
           }
         }
       }
-      if (placeType === 'FIELD' && !projectId) flags.push('No project chosen');
+      if (placeType === 'FIELD') {
+        if (!projectId && !otherProject) {
+          flags.push('No project chosen');
+        } else if (otherProject) {
+          flags.push(`Field site: ${otherProject} (not in CRM)`);
+        }
+      }
       if (await plainBackground(selfieP.processedBuffer))
         flags.push('Background behind the selfie looks plain');
       const ai = await aiPlaceCheck(

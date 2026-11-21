@@ -22,6 +22,7 @@ import {
   refFromRecord,
   releaseInventoryLock,
   resolveInventoryRef,
+  type InventoryRef,
 } from './inventory/reference';
 
 const p = prisma;
@@ -60,6 +61,8 @@ interface CreateBookingInput {
   /** Exactly one of property_id / project_unit_id. Validated by resolveInventoryRef. */
   property_id?: number | null;
   project_unit_id?: number | null;
+  /** A project or property that is not in the CRM: no property, no unit, nothing to lock. */
+  other_inventory?: string | null;
   // Always overwritten from the authenticated caller's own company in
   // createBooking() below — never trust a caller-supplied company_id here.
   company_id?: number;
@@ -137,6 +140,29 @@ const BOOKING_DISPLAY_INCLUDE = {
   },
   assigned_employee: { select: { id: true, employee_code: true, full_name: true } },
 } satisfies Prisma.BookingInclude;
+
+/**
+ * The booking's inventory: a CRM property or unit (locked while the booking
+ * stands), or the name of an outside project (nothing to lock).
+ */
+function bookingInventory(dto: {
+  property_id?: number | null;
+  project_unit_id?: number | null;
+  other_inventory?: string | null;
+}): { ref: InventoryRef; other: null } | { ref: null; other: string } {
+  const other = dto.other_inventory?.trim() || null;
+  if (other) {
+    if (dto.property_id != null || dto.project_unit_id != null) {
+      throw new AppError(
+        400,
+        'Choose a property or unit from the CRM, or type an outside project, not both.',
+      );
+    }
+    if (other.length < 2) throw new AppError(400, 'Enter the project or property name.');
+    return { ref: null, other: other.slice(0, 160) };
+  }
+  return { ref: resolveInventoryRef(dto), other: null };
+}
 
 export class BookingService {
   /** List bookings scoped to the user's company. */
@@ -231,19 +257,20 @@ export class BookingService {
     // ProjectUnit. resolveInventoryRef rejects both-or-neither before any row is
     // touched — a booking pointing at two items is unrecoverable once money is
     // attached to it.
-    const ref = resolveInventoryRef(dto);
-    const locked = await lockInventoryRow(client, ref);
-
-    // Never let a booking be created against another company's inventory, even
-    // though company_id above is now always the caller's own — without this,
-    // a staff member could still book/lock an item that belongs to the
-    // other company under their own company's booking record.
-    if (locked.company_id !== dto.company_id) {
-      throw new AppError(404, `${locked.label} not found`);
-    }
-
+    const { ref, other } = bookingInventory(dto);
     const now = new Date();
-    assertClaimable(locked, now);
+    if (ref) {
+      const locked = await lockInventoryRow(client, ref);
+
+      // Never let a booking be created against another company's inventory, even
+      // though company_id above is now always the caller's own — without this,
+      // a staff member could still book/lock an item that belongs to the
+      // other company under their own company's booking record.
+      if (locked.company_id !== dto.company_id) {
+        throw new AppError(404, `${locked.label} not found`);
+      }
+      assertClaimable(locked, now);
+    }
 
     // Company-scope the customer. A non-existent customer is intentionally NOT
     // rejected here so the booking FK constraint surfaces a Prisma error (500),
@@ -269,7 +296,7 @@ export class BookingService {
         booking_code,
         company: { connect: { id: dto.company_id } },
         customer: { connect: { id: dto.customer_id } },
-        ...inventoryConnect(ref),
+        ...(ref ? inventoryConnect(ref) : { other_inventory: other }),
         ...(assignedEmployeeId
           ? { assigned_employee: { connect: { id: assignedEmployeeId } } }
           : {}),
@@ -289,7 +316,9 @@ export class BookingService {
     });
 
     // Claim the lock on whichever item this booking is against.
-    await claimInventoryLock(client, ref, booking.id, new Date(now.getTime() + LOCK_DURATION_MS));
+    if (ref) {
+      await claimInventoryLock(client, ref, booking.id, new Date(now.getTime() + LOCK_DURATION_MS));
+    }
 
     return booking;
   }
@@ -347,7 +376,9 @@ export class BookingService {
     }
 
     const bookedRef = refFromRecord(booking);
-    const bookedTitle = bookedRef ? await getInventoryTitle(p, bookedRef) : null;
+    const bookedTitle = bookedRef
+      ? await getInventoryTitle(p, bookedRef)
+      : (booking as any).other_inventory || null;
     // Full property/project/company detail for the Portal's UI (consolidation
     // plan Decision 1) — the portal has no catalog of its own and needs these
     // fields at handoff time, not just a display title.
@@ -748,16 +779,19 @@ export class BookingService {
       if (!customerId) throw new AppError(400, 'customer_id or new_customer is required');
 
       // 2. Inventory lock (same logic as createBooking)
-      const ref = resolveInventoryRef({
+      const { ref, other } = bookingInventory({
         property_id: dto.property_id,
         project_unit_id: dto.project_unit_id,
+        other_inventory: dto.other_inventory,
       });
-      const locked = await lockInventoryRow(tx, ref);
-      if (locked.company_id !== user.companyId) {
-        throw new AppError(404, `${locked.label} not found`);
-      }
       const now = new Date();
-      assertClaimable(locked, now);
+      if (ref) {
+        const locked = await lockInventoryRow(tx, ref);
+        if (locked.company_id !== user.companyId) {
+          throw new AppError(404, `${locked.label} not found`);
+        }
+        assertClaimable(locked, now);
+      }
 
       // 3. Calculate financials
       const balance = Math.max(0, Number(dto.agreed_price) - Number(dto.booking_amount));
@@ -772,7 +806,7 @@ export class BookingService {
           booking_code,
           company: { connect: { id: user.companyId } },
           customer: { connect: { id: customerId } },
-          ...inventoryConnect(ref),
+          ...(ref ? inventoryConnect(ref) : { other_inventory: other }),
           ...(dto.assigned_employee_id
             ? { assigned_employee: { connect: { id: dto.assigned_employee_id } } }
             : {}),
@@ -814,12 +848,14 @@ export class BookingService {
       });
 
       // 5. Claim inventory lock -- held until the MD approves or rejects the form.
-      await claimInventoryLock(
-        tx,
-        ref,
-        booking.id,
-        new Date(now.getTime() + HOLD_UNTIL_DECIDED_MS),
-      );
+      if (ref) {
+        await claimInventoryLock(
+          tx,
+          ref,
+          booking.id,
+          new Date(now.getTime() + HOLD_UNTIL_DECIDED_MS),
+        );
+      }
 
       // 6. Audit trail
       await tx.auditEvent.create({

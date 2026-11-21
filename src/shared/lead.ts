@@ -290,6 +290,7 @@ export const LeadCreateSchema = z.object({
       contacted_at: z.string().optional(),
       call_notes: z.string().max(1000).optional(),
       project_id: z.number().int().positive().optional(),
+      other_project: z.string().trim().min(2).max(120).optional(),
       visit_at: z.string().optional(),
       visit_handled_by_id: z.number().int().positive().optional(),
       visit_rating: z.enum(['HOT_INTERESTED', 'WARM', 'COLD', 'NOT_INTERESTED']).optional(),

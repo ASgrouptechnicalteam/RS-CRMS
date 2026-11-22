@@ -74,10 +74,27 @@ router.get(
     const byUser = new Map<number, number>(
       counts.map((c: any) => [c.assigned_to_id, c._count._all]),
     );
+    const callRows = await p.cpLeadActivity.groupBy({
+      by: ['actor_user_id'],
+      where: {
+        cp_id: cpId,
+        kind: 'CALL',
+        actor_user_id: { not: null },
+        created_at: { gte: new Date(Date.now() - 7 * 86400e3) },
+      },
+      _count: { _all: true },
+    });
+    const calls7 = new Map<number, number>(
+      callRows.map((c: any) => [c.actor_user_id, c._count._all]),
+    );
     return res.status(200).json({
       limit,
       used: users.filter((u: any) => u.is_active).length,
-      telecallers: users.map((u: any) => ({ ...u, leads: byUser.get(u.id) ?? 0 })),
+      telecallers: users.map((u: any) => ({
+        ...u,
+        leads: byUser.get(u.id) ?? 0,
+        calls_7d: calls7.get(u.id) ?? 0,
+      })),
     });
   }),
 );

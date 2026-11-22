@@ -524,6 +524,121 @@ router.post(
   }),
 );
 
+// ── home screen ──────────────────────────────────────────────
+
+/** What this person needs today, in one call: counts, call-backs due, next visits, and for the partner the team. */
+router.get(
+  '/overview',
+  requireCp,
+  handle(async (req, res) => {
+    const cp = req.cp!;
+    const scope = leadScope(req) as any;
+    const istNow = new Date(Date.now() + 330 * 60000);
+    const today = istNow.toISOString().slice(0, 10);
+    const endOfToday = new Date(`${today}T23:59:59+05:30`);
+    const monthStart = new Date(`${today.slice(0, 7)}-01T00:00:00+05:30`);
+    const weekAgo = new Date(Date.now() - 7 * 86400e3);
+    const open = ['NEW', 'CONTACTED', 'INTERESTED', 'VISIT_BOOKED'];
+    const visitWhere = await visitScope(req);
+    const upcoming = {
+      scheduled_date: { gte: new Date(Date.now() - 12 * 3600e3) },
+      status: { notIn: ['COMPLETED', 'CANCELLED'] },
+    };
+    const [byStatus, due, dueCount, nextVisits, upcomingCount, doneMonth, bookings] =
+      await Promise.all([
+        p.cpLead.groupBy({ by: ['status'], where: scope, _count: { _all: true } }),
+        p.cpLead.findMany({
+          where: { ...scope, status: { in: open }, next_follow_up_at: { lte: endOfToday } },
+          orderBy: { next_follow_up_at: 'asc' },
+          take: 6,
+          select: {
+            id: true,
+            customer_name: true,
+            phone: true,
+            status: true,
+            next_follow_up_at: true,
+          },
+        }),
+        p.cpLead.count({
+          where: { ...scope, status: { in: open }, next_follow_up_at: { lte: endOfToday } },
+        }),
+        p.siteVisitBooking.findMany({
+          where: { AND: [visitWhere, upcoming] },
+          orderBy: { scheduled_date: 'asc' },
+          take: 3,
+          select: visitSelect,
+        }),
+        p.siteVisitBooking.count({ where: { AND: [visitWhere, upcoming] } }),
+        p.siteVisitBooking.count({
+          where: { AND: [visitWhere, { status: 'COMPLETED', completed_at: { gte: monthStart } }] },
+        }),
+        cp.user
+          ? Promise.resolve(0)
+          : p.booking.count({
+              where: {
+                opportunity: { lead: { cp_owner_id: cp.id } },
+                booking_date: { gte: monthStart },
+              },
+            }),
+      ]);
+    const counts: Record<string, number> = Object.fromEntries(
+      byStatus.map((x: any) => [x.status, x._count._all]),
+    );
+    let team: unknown[] | undefined;
+    if (!cp.user) {
+      const [users, assigned, calls] = await Promise.all([
+        p.cpUser.findMany({
+          where: { cp_id: cp.id, is_active: true },
+          select: { id: true, full_name: true },
+          orderBy: { id: 'asc' },
+        }),
+        p.cpLead.groupBy({
+          by: ['assigned_to_id'],
+          where: { cp_id: cp.id, assigned_to_id: { not: null } },
+          _count: { _all: true },
+        }),
+        p.cpLeadActivity.groupBy({
+          by: ['actor_user_id'],
+          where: {
+            cp_id: cp.id,
+            kind: 'CALL',
+            actor_user_id: { not: null },
+            created_at: { gte: weekAgo },
+          },
+          _count: { _all: true },
+        }),
+      ]);
+      const a = new Map<number, number>(
+        assigned.map((x: any) => [x.assigned_to_id, x._count._all]),
+      );
+      const c = new Map<number, number>(calls.map((x: any) => [x.actor_user_id, x._count._all]));
+      team = users.map((u: any) => ({
+        id: u.id,
+        full_name: u.full_name,
+        leads: a.get(u.id) ?? 0,
+        calls_7d: c.get(u.id) ?? 0,
+      }));
+    }
+    return res.status(200).json({
+      leads: {
+        total: Object.values(counts).reduce((x, y) => x + y, 0),
+        open: open.reduce((n, k) => n + (counts[k] || 0), 0),
+        new: counts.NEW || 0,
+        interested: counts.INTERESTED || 0,
+        visit_booked: counts.VISIT_BOOKED || 0,
+      },
+      follow_ups: { count: dueCount, items: due },
+      visits: {
+        upcoming: upcomingCount,
+        done_this_month: doneMonth,
+        next: nextVisits.map((v: any) => toCpVisit(v, cp.id)),
+      },
+      bookings_this_month: bookings,
+      team,
+    });
+  }),
+);
+
 // ── our projects and properties (read only) ───────────────────
 
 const CAT_PROJECT = {
@@ -608,11 +723,18 @@ router.get(
           by: ['project_id'],
           where: { project_id: { in: projects.map((x: any) => x.id) }, sales_status: 'AVAILABLE' },
           _count: { _all: true },
+          _min: { final_price: true },
+          _max: { final_price: true },
         })
       : [];
-    const avail = new Map<number, number>(free.map((f: any) => [f.project_id, f._count._all]));
+    const avail = new Map<number, any>(free.map((f: any) => [f.project_id, f]));
     return res.status(200).json({
-      projects: projects.map((x: any) => ({ ...x, available_units: avail.get(x.id) ?? 0 })),
+      projects: projects.map((x: any) => ({
+        ...x,
+        available_units: avail.get(x.id)?._count._all ?? 0,
+        price_from: Number(avail.get(x.id)?._min.final_price) || null,
+        price_to: Number(avail.get(x.id)?._max.final_price) || null,
+      })),
     });
   }),
 );

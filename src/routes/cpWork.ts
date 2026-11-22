@@ -201,6 +201,11 @@ const leadView = (l: any, names: Map<number, string>) => ({
   next_follow_up_at: l.next_follow_up_at,
   last_called_at: l.last_called_at,
   has_visit: !!l.lead_id,
+  alt_phone: l.alt_phone ?? null,
+  budget_min: l.budget_min ?? null,
+  budget_max: l.budget_max ?? null,
+  preferred_locations: l.preferred_locations ?? null,
+  property_type: l.property_type ?? null,
   created_at: l.created_at,
 });
 
@@ -386,7 +391,13 @@ router.get(
       }),
       namesOf(req.cp!.id),
     ]);
-    return res.status(200).json({ lead: leadView(l, names), activities });
+    const tasks = await p.cpTask.findMany({
+      where: { cp_lead_id: l.id, cp_id: req.cp!.id },
+      orderBy: [{ done_at: 'asc' }, { due_at: 'asc' }],
+      take: 50,
+      select: { id: true, title: true, due_at: true, done_at: true },
+    });
+    return res.status(200).json({ lead: leadView(l, names), activities, tasks });
   }),
 );
 
@@ -524,6 +535,286 @@ router.post(
   }),
 );
 
+// ── lead details: qualification, drop, matches ───────────────
+
+const EditLeadSchema = z.object({
+  customer_name: z.string().trim().min(2).max(120).optional(),
+  email: z.string().trim().max(120).optional().nullable(),
+  alt_phone: z.string().trim().max(20).optional().nullable(),
+  notes: z.string().trim().max(2000).optional().nullable(),
+  budget_min: z.number().min(0).max(1e11).optional().nullable(),
+  budget_max: z.number().min(0).max(1e11).optional().nullable(),
+  preferred_locations: z.string().trim().max(255).optional().nullable(),
+  property_type: z.string().trim().max(40).optional().nullable(),
+});
+
+router.patch(
+  '/leads/:id',
+  requireCp,
+  handle(async (req, res) => {
+    const body = EditLeadSchema.safeParse(req.body);
+    if (!body.success) throw fail(400, body.error.issues[0]?.message || 'Check the details.');
+    const l = await ownLead(req, idOf(req.params.id));
+    const d = body.data;
+    if (d.budget_min != null && d.budget_max != null && d.budget_min > d.budget_max) {
+      throw fail(400, 'The lowest budget is higher than the highest.');
+    }
+    let alt: string | null | undefined = undefined;
+    if (d.alt_phone !== undefined) {
+      alt = d.alt_phone ? normalizeCpPhone(d.alt_phone) : null;
+      if (d.alt_phone && !alt) throw fail(400, 'The other number is not a valid 10-digit mobile.');
+    }
+    const data: Record<string, unknown> = {};
+    if (d.customer_name !== undefined) data.customer_name = d.customer_name;
+    if (d.email !== undefined) data.email = d.email || null;
+    if (alt !== undefined) data.alt_phone = alt;
+    if (d.notes !== undefined) data.notes = d.notes || null;
+    if (d.budget_min !== undefined) data.budget_min = d.budget_min;
+    if (d.budget_max !== undefined) data.budget_max = d.budget_max;
+    if (d.preferred_locations !== undefined)
+      data.preferred_locations = d.preferred_locations || null;
+    if (d.property_type !== undefined) data.property_type = d.property_type || null;
+    if (!Object.keys(data).length) throw fail(400, 'Nothing to change.');
+    await p.$transaction([
+      p.cpLead.update({ where: { id: l.id }, data }),
+      p.cpLeadActivity.create({
+        data: {
+          cp_lead_id: l.id,
+          cp_id: req.cp!.id,
+          actor_user_id: req.cp!.user?.id ?? null,
+          actor_name: actorName(req),
+          kind: 'NOTE',
+          notes: 'Details updated.',
+        },
+      }),
+    ]);
+    return res.status(200).json({ ok: true });
+  }),
+);
+
+const DROP_REASONS = [
+  'Not interested',
+  'Budget too low',
+  'Bought elsewhere',
+  'Wrong number',
+  'Not reachable',
+  'Looking for something we do not have',
+  'Other',
+] as const;
+
+router.post(
+  '/leads/:id/drop',
+  requireCp,
+  handle(async (req, res) => {
+    const reason = String(req.body?.reason || '');
+    if (!(DROP_REASONS as readonly string[]).includes(reason)) throw fail(400, 'Pick a reason.');
+    const detail = String(req.body?.detail || '')
+      .trim()
+      .slice(0, 500);
+    if (reason === 'Other' && detail.length < 3) throw fail(400, 'Say what the reason is.');
+    const l = await ownLead(req, idOf(req.params.id));
+    if (l.status === 'VISIT_BOOKED')
+      throw fail(409, 'A visit is booked. Cancel or finish it first.');
+    await p.$transaction([
+      p.cpLead.update({
+        where: { id: l.id },
+        data: { status: 'DROPPED', next_follow_up_at: null },
+      }),
+      p.cpTask.updateMany({
+        where: { cp_lead_id: l.id, cp_id: req.cp!.id, done_at: null },
+        data: { done_at: new Date() },
+      }),
+      p.cpLeadActivity.create({
+        data: {
+          cp_lead_id: l.id,
+          cp_id: req.cp!.id,
+          actor_user_id: req.cp!.user?.id ?? null,
+          actor_name: actorName(req),
+          kind: 'STATUS',
+          outcome: 'DROPPED',
+          notes: `Dropped: ${reason}${detail ? `. ${detail}` : ''}`,
+        },
+      }),
+    ]);
+    return res.status(200).json({ ok: true });
+  }),
+);
+
+router.get('/drop-reasons', requireCp, (_req, res) =>
+  res.status(200).json({ reasons: DROP_REASONS }),
+);
+
+/** Projects and properties that fit what this customer asked for (budget and place). */
+router.get(
+  '/leads/:id/matches',
+  requireCp,
+  handle(async (req, res) => {
+    const l = await ownLead(req, idOf(req.params.id));
+    const words = String(l.preferred_locations || '')
+      .split(/[,;/]/)
+      .map((x) => x.trim())
+      .filter((x) => x.length >= 3)
+      .slice(0, 5);
+    const min = l.budget_min ?? 0;
+    const max = l.budget_max ?? null;
+    const place = (fields: string[]) =>
+      words.length
+        ? { OR: words.flatMap((w) => fields.map((f) => ({ [f]: { contains: w } }))) }
+        : {};
+    const unitFilter: any = {
+      sales_status: 'AVAILABLE',
+      final_price: { gt: 0, gte: min, ...(max ? { lte: max } : {}) },
+    };
+    const projects = await p.project.findMany({
+      where: {
+        ...liveProject,
+        ...place(['location', 'city', 'name']),
+        units: { some: unitFilter },
+      },
+      select: {
+        id: true,
+        name: true,
+        location: true,
+        city: true,
+        project_type: true,
+        cover_image_url: true,
+      },
+      take: 10,
+    });
+    const priced = projects.length
+      ? await p.projectUnit.groupBy({
+          by: ['project_id'],
+          where: { project_id: { in: projects.map((x: any) => x.id) }, ...unitFilter },
+          _count: { _all: true },
+          _min: { final_price: true },
+        })
+      : [];
+    const byProject = new Map<number, any>(priced.map((x: any) => [x.project_id, x]));
+    const properties = await p.property.findMany({
+      where: {
+        status: 'LIVE',
+        sales_status: 'AVAILABLE',
+        final_price: { gt: 0, gte: min, ...(max ? { lte: max } : {}) },
+        ...place(['city', 'locality', 'title']),
+        ...(l.property_type ? { category: l.property_type } : {}),
+      },
+      select: {
+        id: true,
+        title: true,
+        category: true,
+        city: true,
+        locality: true,
+        final_price: true,
+      },
+      take: 10,
+    });
+    return res.status(200).json({
+      projects: projects.map((x: any) => ({
+        ...x,
+        matching_units: byProject.get(x.id)?._count._all ?? 0,
+        price_from: Number(byProject.get(x.id)?._min.final_price) || null,
+      })),
+      properties,
+    });
+  }),
+);
+
+// ── tasks and reminders ──────────────────────────────────────
+
+const taskScope = (req: CpRequest) =>
+  req.cp!.user
+    ? {
+        cp_id: req.cp!.id,
+        OR: [{ assigned_to_id: req.cp!.user.id }, { created_by_id: req.cp!.user.id }],
+      }
+    : { cp_id: req.cp!.id };
+
+router.get(
+  '/tasks',
+  requireCp,
+  handle(async (req, res) => {
+    const istNow = new Date(Date.now() + 330 * 60000);
+    const today = istNow.toISOString().slice(0, 10);
+    const endOfToday = new Date(`${today}T23:59:59+05:30`);
+    const scopeName = String(req.query.scope || 'open');
+    const where: any = { ...taskScope(req) };
+    if (scopeName === 'done') where.done_at = { not: null };
+    else where.done_at = null;
+    const rows = await p.cpTask.findMany({
+      where,
+      orderBy: scopeName === 'done' ? { done_at: 'desc' } : { due_at: 'asc' },
+      take: 200,
+    });
+    const leadIds = [
+      ...new Set<number>(rows.filter((r: any) => r.cp_lead_id).map((r: any) => r.cp_lead_id)),
+    ];
+    const leads = leadIds.length
+      ? await p.cpLead.findMany({
+          where: { id: { in: leadIds }, cp_id: req.cp!.id },
+          select: { id: true, customer_name: true, phone: true },
+        })
+      : [];
+    const byLead = new Map<number, any>(leads.map((x: any) => [x.id, x]));
+    const names = await namesOf(req.cp!.id);
+    return res.status(200).json({
+      tasks: rows.map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        due_at: t.due_at,
+        done_at: t.done_at,
+        overdue: !t.done_at && t.due_at < new Date(),
+        due_today: !t.done_at && t.due_at <= endOfToday,
+        assigned_to_name: t.assigned_to_id ? names.get(t.assigned_to_id) || null : null,
+        lead: t.cp_lead_id ? byLead.get(t.cp_lead_id) || null : null,
+      })),
+    });
+  }),
+);
+
+const NewTaskSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  due_at: z.string().min(8),
+  lead_id: z.number().int().positive().optional().nullable(),
+  assign_to_id: z.number().int().positive().optional().nullable(),
+});
+
+router.post(
+  '/tasks',
+  requireCp,
+  handle(async (req, res) => {
+    const body = NewTaskSchema.safeParse(req.body);
+    if (!body.success)
+      throw fail(400, body.error.issues[0]?.message || 'Give the task a title and a time.');
+    const due = new Date(body.data.due_at);
+    if (Number.isNaN(due.getTime())) throw fail(400, 'The time is not valid.');
+    if (body.data.lead_id) await ownLead(req, body.data.lead_id);
+    const toId = await assignee(req, body.data.assign_to_id);
+    const t = await p.cpTask.create({
+      data: {
+        cp_id: req.cp!.id,
+        cp_lead_id: body.data.lead_id ?? null,
+        title: body.data.title,
+        due_at: due,
+        assigned_to_id: toId,
+        created_by_id: req.cp!.user?.id ?? null,
+      },
+    });
+    return res.status(201).json({ task: { id: t.id } });
+  }),
+);
+
+router.post(
+  '/tasks/:id/done',
+  requireCp,
+  handle(async (req, res) => {
+    const id = idOf(req.params.id);
+    const t = await p.cpTask.findFirst({ where: { id, ...taskScope(req) } });
+    if (!t) throw fail(404, 'Task not found');
+    await p.cpTask.update({ where: { id }, data: { done_at: req.body?.undo ? null : new Date() } });
+    return res.status(200).json({ ok: true });
+  }),
+);
+
 // ── home screen ──────────────────────────────────────────────
 
 /** What this person needs today, in one call: counts, call-backs due, next visits, and for the partner the team. */
@@ -581,6 +872,16 @@ router.get(
               },
             }),
       ]);
+    const taskWhere = { ...taskScope(req), done_at: null, due_at: { lte: endOfToday } } as any;
+    const [tasksDue, taskItems] = await Promise.all([
+      p.cpTask.count({ where: taskWhere }),
+      p.cpTask.findMany({
+        where: taskWhere,
+        orderBy: { due_at: 'asc' },
+        take: 5,
+        select: { id: true, title: true, due_at: true, cp_lead_id: true },
+      }),
+    ]);
     const counts: Record<string, number> = Object.fromEntries(
       byStatus.map((x: any) => [x.status, x._count._all]),
     );
@@ -628,6 +929,7 @@ router.get(
         visit_booked: counts.VISIT_BOOKED || 0,
       },
       follow_ups: { count: dueCount, items: due },
+      tasks: { count: tasksDue, items: taskItems },
       visits: {
         upcoming: upcomingCount,
         done_this_month: doneMonth,
@@ -749,13 +1051,39 @@ router.get(
       select: CAT_PROJECT,
     });
     if (!project) throw fail(404, 'Project not found');
-    const units = await p.projectUnit.findMany({
-      where: { project_id: id },
-      select: CAT_UNIT,
-      orderBy: [{ sales_status: 'asc' }, { id: 'asc' }],
-      take: 400,
+    const [units, media, amenities, summary] = await Promise.all([
+      p.projectUnit.findMany({
+        where: { project_id: id },
+        select: CAT_UNIT,
+        orderBy: [{ sales_status: 'asc' }, { id: 'asc' }],
+        take: 400,
+      }),
+      // Photos, videos and plans only. Legal and approval documents stay with us.
+      p.projectMedia.findMany({
+        where: { project_id: id },
+        select: { id: true, kind: true, url: true, title: true },
+        orderBy: [{ sort_order: 'asc' }, { id: 'asc' }],
+        take: 120,
+      }),
+      p.projectAmenity.findMany({
+        where: { project_id: id },
+        select: { amenity: { select: { name: true, category: true } } },
+        orderBy: { sort_order: 'asc' },
+        take: 80,
+      }),
+      p.projectUnit.groupBy({
+        by: ['sales_status'],
+        where: { project_id: id },
+        _count: { _all: true },
+      }),
+    ]);
+    return res.status(200).json({
+      project,
+      units,
+      media,
+      amenities: amenities.map((a: any) => a.amenity),
+      summary: Object.fromEntries(summary.map((x: any) => [x.sales_status, x._count._all])),
     });
-    return res.status(200).json({ project, units });
   }),
 );
 
@@ -782,6 +1110,26 @@ router.get(
       take: 200,
     });
     return res.status(200).json({ properties: rows });
+  }),
+);
+
+router.get(
+  '/catalog/properties/:id',
+  requireCp,
+  handle(async (req, res) => {
+    const id = idOf(req.params.id);
+    const row = await p.property.findFirst({
+      where: { id, status: 'LIVE' },
+      select: {
+        ...CAT_PROPERTY,
+        description: true,
+        state: true,
+        pincode: true,
+        listing_type: true,
+      },
+    });
+    if (!row) throw fail(404, 'Property not found');
+    return res.status(200).json({ property: row });
   }),
 );
 
@@ -900,6 +1248,7 @@ const BookVisitSchema = z
   .object({
     project_id: z.number().int().positive().optional().nullable(),
     property_id: z.number().int().positive().optional().nullable(),
+    unit_ids: z.array(z.number().int().positive()).max(10).optional(),
     scheduled_date: z.string().min(8),
     mode: z.enum(['SELF', 'OUR_PM']),
     notes: z.string().trim().max(500).optional().nullable(),
@@ -934,6 +1283,18 @@ router.post(
         select: { id: true },
       });
       if (!ok) throw fail(404, 'Property not found');
+    }
+    // Units of this project the customer wants to see (optional).
+    let unitIds: number[] = [];
+    if (body.data.unit_ids?.length) {
+      if (!body.data.project_id) throw fail(400, 'Units belong to a project.');
+      const found = await p.projectUnit.findMany({
+        where: { id: { in: body.data.unit_ids }, project_id: body.data.project_id },
+        select: { id: true },
+      });
+      if (found.length !== body.data.unit_ids.length)
+        throw fail(404, 'One of the units was not found.');
+      unitIds = found.map((u: any) => u.id);
     }
     // Our CRM gets the customer only now.
     let ourLeadId: number | null = l.lead_id;
@@ -973,6 +1334,7 @@ router.post(
       scheduled_date: when.toISOString(),
       project_id: body.data.project_id || undefined,
       property_id: body.data.property_id || undefined,
+      project_unit_ids: unitIds.length ? unitIds : undefined,
       notes:
         `Booked by ${actorName(req)} (channel partner ${cp.full_name || cp.employee_code}). ${body.data.notes || ''}`.trim(),
       direct: self,

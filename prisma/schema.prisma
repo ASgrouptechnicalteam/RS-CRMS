@@ -3636,21 +3636,26 @@ model CpUser {
 /// A partner's own lead, private to that partner's group. Only when a site visit is booked is a
 /// normal Lead created in our CRM (lead_id).
 model CpLead {
-  id                Int       @id @default(autoincrement())
-  cp_id             Int
-  assigned_to_id    Int? // CpUser id; empty = the partner holds it
-  created_by_id     Int? // CpUser id; empty = the partner added it
-  customer_name     String    @db.VarChar(120)
-  phone             String    @db.VarChar(20)
-  email             String?   @db.VarChar(120)
-  source            String    @default("CP_ENTRY") @db.VarChar(20)
-  status            String    @default("NEW") @db.VarChar(20)
-  notes             String?   @db.Text
-  next_follow_up_at DateTime?
-  last_called_at    DateTime?
-  lead_id           Int? // our CRM lead, created when a visit is booked
-  created_at        DateTime  @default(now())
-  updated_at        DateTime  @updatedAt
+  id                  Int       @id @default(autoincrement())
+  cp_id               Int
+  assigned_to_id      Int? // CpUser id; empty = the partner holds it
+  created_by_id       Int? // CpUser id; empty = the partner added it
+  customer_name       String    @db.VarChar(120)
+  phone               String    @db.VarChar(20)
+  email               String?   @db.VarChar(120)
+  alt_phone           String?   @db.VarChar(20)
+  budget_min          Float?
+  budget_max          Float?
+  preferred_locations String?   @db.VarChar(255)
+  property_type       String?   @db.VarChar(40)
+  source              String    @default("CP_ENTRY") @db.VarChar(20)
+  status              String    @default("NEW") @db.VarChar(20)
+  notes               String?   @db.Text
+  next_follow_up_at   DateTime?
+  last_called_at      DateTime?
+  lead_id             Int? // our CRM lead, created when a visit is booked
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
 
   @@unique([cp_id, phone])
   @@index([cp_id, status])
@@ -3670,4 +3675,20 @@ model CpLeadActivity {
 
   @@index([cp_lead_id, created_at])
   @@index([cp_id, created_at])
+}
+
+/// A reminder or task in a partner's group (2026-11-22): a call-back, a document to collect, a visit to confirm.
+model CpTask {
+  id             Int       @id @default(autoincrement())
+  cp_id          Int
+  cp_lead_id     Int?
+  title          String    @db.VarChar(200)
+  due_at         DateTime
+  assigned_to_id Int? // CpUser id; empty = the partner
+  created_by_id  Int? // CpUser id; empty = the partner
+  done_at        DateTime?
+  created_at     DateTime  @default(now())
+
+  @@index([cp_id, done_at, due_at])
+  @@index([cp_lead_id])
 }

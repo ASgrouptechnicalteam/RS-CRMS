@@ -404,27 +404,29 @@ model Branch {
 }
 
 model Employee {
+  /// External channel partner: how many telecaller accounts they may have (empty = 3).
+  cp_telecaller_limit  Int?
   /// The person's GitHub name, so their commits are counted as their code updates.
-  github_username String? @db.VarChar(60)
-  meetings_organised Meeting[] @relation("MeetingsOrganised")
-  meeting_invites MeetingInvite[] @relation("MeetingsInvitedTo")
-  digital_assets_owned DigitalAsset[] @relation("DigitalAssetOwner")
-  tickets_raised SupportTicket[] @relation("TicketsRaised")
-  id                  Int       @id @default(autoincrement())
-  employee_code       String    @unique
-  company_id          Int
-  branch_id           Int?
-  password_hash       String
-  status              String    @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED, RESIGNED
-  token_version       Int       @default(1)
-  attendance_required Boolean   @default(true)
-  first_login_done    Boolean   @default(false)
+  github_username      String?         @db.VarChar(60)
+  meetings_organised   Meeting[]       @relation("MeetingsOrganised")
+  meeting_invites      MeetingInvite[] @relation("MeetingsInvitedTo")
+  digital_assets_owned DigitalAsset[]  @relation("DigitalAssetOwner")
+  tickets_raised       SupportTicket[] @relation("TicketsRaised")
+  id                   Int             @id @default(autoincrement())
+  employee_code        String          @unique
+  company_id           Int
+  branch_id            Int?
+  password_hash        String
+  status               String          @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED, RESIGNED
+  token_version        Int             @default(1)
+  attendance_required  Boolean         @default(true)
+  first_login_done     Boolean         @default(false)
   // 2-step login with an authenticator app (required for MD, Admin, Finance).
   // Secret is encrypted (encryptData); last_step stops one code being used twice.
-  totp_secret         String?   @db.Text
-  totp_enabled_at     DateTime?
-  totp_last_step      Int?
-  report_required     Boolean   @default(true) // derived from employment_type at create; overridable per employee
+  totp_secret          String?         @db.Text
+  totp_enabled_at      DateTime?
+  totp_last_step       Int?
+  report_required      Boolean         @default(true) // derived from employment_type at create; overridable per employee
 
   // Printed badge + PIN at the kiosk (F-12, decision D2): for staff with no phone or
   // data. Off for everyone; HR turns it on one person at a time. Kiosk-only.
@@ -1059,6 +1061,8 @@ model PerformanceSnapshot {
 }
 
 model Lead {
+  /// Set when a channel partner's customer is booked for a site visit: the partner (Employee id) who gets the credit.
+  cp_owner_id              Int?
   id                       Int               @id @default(autoincrement())
   lead_code                String            @unique
   company_id               Int
@@ -2581,8 +2585,8 @@ model Customer {
 // ─────────────────────────────────────────────────────────────
 
 model Booking {
-  id                   Int    @id @default(autoincrement())
-  booking_code         String @unique
+  id                   Int     @id @default(autoincrement())
+  booking_code         String  @unique
   company_id           Int
   branch_id            Int?
   customer_id          Int
@@ -2594,7 +2598,7 @@ model Booking {
   project_unit_id      Int?
   /// Name of a project or property that is not in the CRM (2026-11-20). When set,
   /// property_id and project_unit_id are both empty and nothing is locked.
-  other_inventory      String?  @db.VarChar(160)
+  other_inventory      String? @db.VarChar(160)
   assigned_employee_id Int?
 
   status String @default("PENDING") // DRAFT, FORM_SUBMITTED, PENDING_MD_APPROVAL, CONFIRMED, REGISTERED, COMPLETED, CANCELLED
@@ -2762,7 +2766,7 @@ model Opportunity {
   project_unit_id Int?
   /// A project or property that is not in the CRM (2026-11-20); the booking carries it over.
   other_inventory String? @db.VarChar(160)
-  booking_id      Int? @unique
+  booking_id      Int?    @unique
 
   expected_value      Float?
   probability         Float?    @default(10.0)
@@ -3610,4 +3614,60 @@ model CodeUpdate {
 
   @@unique([repo, sha])
   @@index([employee_id, committed_at])
+}
+
+/// External channel partner (CP) group, 2026-11-22. The partner is an Employee with the
+/// "Channel partner (external)" role; their telecallers are CpUser rows, not employees, so they
+/// never appear in HR, attendance, performance or Team Today. cp_id is that partner's Employee id.
+model CpUser {
+  id            Int      @id @default(autoincrement())
+  cp_id         Int
+  full_name     String   @db.VarChar(120)
+  login_id      String   @unique @db.VarChar(40)
+  password_hash String
+  is_active     Boolean  @default(true)
+  token_version Int      @default(0)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@index([cp_id])
+}
+
+/// A partner's own lead, private to that partner's group. Only when a site visit is booked is a
+/// normal Lead created in our CRM (lead_id).
+model CpLead {
+  id                Int       @id @default(autoincrement())
+  cp_id             Int
+  assigned_to_id    Int? // CpUser id; empty = the partner holds it
+  created_by_id     Int? // CpUser id; empty = the partner added it
+  customer_name     String    @db.VarChar(120)
+  phone             String    @db.VarChar(20)
+  email             String?   @db.VarChar(120)
+  source            String    @default("CP_ENTRY") @db.VarChar(20)
+  status            String    @default("NEW") @db.VarChar(20)
+  notes             String?   @db.Text
+  next_follow_up_at DateTime?
+  last_called_at    DateTime?
+  lead_id           Int? // our CRM lead, created when a visit is booked
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@unique([cp_id, phone])
+  @@index([cp_id, status])
+  @@index([assigned_to_id])
+}
+
+model CpLeadActivity {
+  id            Int      @id @default(autoincrement())
+  cp_lead_id    Int
+  cp_id         Int
+  actor_user_id Int? // CpUser id; empty = the partner
+  actor_name    String   @db.VarChar(120)
+  kind          String   @db.VarChar(12) // CALL | NOTE | STATUS | ASSIGN | VISIT
+  outcome       String?  @db.VarChar(30)
+  notes         String?  @db.Text
+  created_at    DateTime @default(now())
+
+  @@index([cp_lead_id, created_at])
+  @@index([cp_id, created_at])
 }

@@ -22,8 +22,10 @@ export interface CpTokenPayload {
   typ: 'cp';
   employeeId: number;
   companyId: number;
-  /** Employee.token_version at sign-in: bumping it ends every session. */
+  /** Employee.token_version at sign-in: bumping it ends every session. For a partner's telecaller this is CpUser.token_version. */
   tv: number;
+  /** Set for a partner's telecaller (CpUser id); employeeId is then the partner they work for. */
+  uid?: number;
 }
 
 export const generateCpToken = (p: Omit<CpTokenPayload, 'typ'>): string =>

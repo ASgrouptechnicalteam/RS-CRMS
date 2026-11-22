@@ -22,8 +22,15 @@ import { TokenPayload } from '../utils/jwt';
 const router = Router();
 const p = prisma;
 
-interface CpRequest extends Request {
-  cp?: { id: number; company_id: number; employee_code: string; full_name: string | null };
+export interface CpRequest extends Request {
+  /** id is always the partner (the group); user is set when a partner's telecaller is signed in. */
+  cp?: {
+    id: number;
+    company_id: number;
+    employee_code: string;
+    full_name: string | null;
+    user: { id: number; full_name: string } | null;
+  };
 }
 
 const loginLimiter = rateLimit({
@@ -63,26 +70,37 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
         roles: { select: { role: { select: { name: true } } } },
       },
     });
-    if (
-      !e ||
-      e.status !== 'ACTIVE' ||
-      e.company_id !== payload.companyId ||
-      e.token_version !== payload.tv ||
-      !isPartner(e.roles)
-    ) {
-      return res.status(401).json({ error: 'Your session has expired. Please log in again.' });
+    const expired = () =>
+      res.status(401).json({ error: 'Your session has expired. Please log in again.' });
+    if (!e || e.status !== 'ACTIVE' || e.company_id !== payload.companyId || !isPartner(e.roles)) {
+      return expired();
+    }
+    let user: { id: number; full_name: string } | null = null;
+    if (payload.uid) {
+      // A partner's telecaller: must still be active and belong to this partner.
+      const u = await (p as any).cpUser.findUnique({ where: { id: payload.uid } });
+      if (!u || !u.is_active || u.cp_id !== e.id || u.token_version !== payload.tv)
+        return expired();
+      user = { id: u.id, full_name: u.full_name };
+    } else if (e.token_version !== payload.tv) {
+      return expired();
     }
     req.cp = {
       id: e.id,
       company_id: e.company_id,
       employee_code: e.employee_code,
       full_name: e.full_name,
+      user,
     };
     next();
   } catch (err) {
     next(err);
   }
 };
+
+/** Only the partner themselves (not one of their telecallers). */
+export const requireOwner = (req: CpRequest, res: Response, next: NextFunction) =>
+  req.cp?.user ? res.status(403).json({ error: 'Only the partner can do this.' }) : next();
 
 // POST /cp/auth/login { employee_code, password }
 const LoginSchema = z.object({
@@ -105,15 +123,43 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
         roles: { select: { role: { select: { name: true } } } },
       },
     });
-    const ok =
-      !!e &&
-      e.status === 'ACTIVE' &&
-      isPartner(e.roles) &&
-      (await bcrypt.compare(password, e.password_hash));
-    if (!ok || !e) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!e || !isPartner(e.roles)) {
+      // Not a partner: it may be one of a partner's telecallers (their login is their phone number).
+      const u = await (p as any).cpUser.findUnique({ where: { login_id: employee_code } });
+      const owner = u
+        ? await p.employee.findUnique({
+            where: { id: u.cp_id },
+            select: {
+              id: true,
+              company_id: true,
+              status: true,
+              roles: { select: { role: { select: { name: true } } } },
+            },
+          })
+        : null;
+      const userOk =
+        !!u &&
+        !!owner &&
+        u.is_active &&
+        owner.status === 'ACTIVE' &&
+        isPartner(owner.roles) &&
+        (await bcrypt.compare(password, u.password_hash));
+      if (!userOk || !u || !owner) return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(200).json({
+        token: generateCpToken({
+          employeeId: owner.id,
+          companyId: owner.company_id,
+          tv: u.token_version,
+          uid: u.id,
+        }),
+        partner: { id: u.id, name: u.full_name, employee_code, role: 'TELECALLER' },
+      });
+    }
+    const ok = e.status === 'ACTIVE' && (await bcrypt.compare(password, e.password_hash));
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     return res.status(200).json({
       token: generateCpToken({ employeeId: e.id, companyId: e.company_id, tv: e.token_version }),
-      partner: { id: e.id, name: e.full_name, employee_code },
+      partner: { id: e.id, name: e.full_name, employee_code, role: 'OWNER' },
     });
   } catch (error) {
     logger.error({ error }, 'Partner login error');
@@ -123,95 +169,21 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
 
 router.get('/me', requireCp, (req: CpRequest, res) =>
   res.status(200).json({
-    partner: { id: req.cp!.id, name: req.cp!.full_name, employee_code: req.cp!.employee_code },
+    partner: {
+      id: req.cp!.user ? req.cp!.user.id : req.cp!.id,
+      name: req.cp!.user ? req.cp!.user.full_name : req.cp!.full_name,
+      employee_code: req.cp!.employee_code,
+      role: req.cp!.user ? 'TELECALLER' : 'OWNER',
+      group_name: req.cp!.full_name,
+    },
   }),
 );
-
-const firstName = (name?: string | null) => (name || '').trim().split(/\s+/)[0] || 'Customer';
-
-const visitSelect = {
-  id: true,
-  booking_code: true,
-  scheduled_date: true,
-  status: true,
-  lead: { select: { customer_name: true } },
-  project: { select: { name: true, location: true, city: true, maps_link: true } },
-  property: { select: { title: true, location: true, city: true } },
-  project_manager: { select: { full_name: true, phone: true } },
-} as const;
-
-/** The partner's view of a visit: built field by field, never by spreading a record. */
-const toCpVisit = (v: any) => ({
-  id: v.id,
-  booking_code: v.booking_code,
-  scheduled_date: v.scheduled_date,
-  status: v.status,
-  place: v.project
-    ? {
-        name: v.project.name,
-        location: v.project.location,
-        city: v.project.city,
-        maps_link: v.project.maps_link,
-      }
-    : v.property
-      ? {
-          name: v.property.title,
-          location: v.property.location,
-          city: v.property.city,
-          maps_link: null,
-        }
-      : null,
-  customer_first_name: firstName(v.lead?.customer_name),
-  pm: v.project_manager
-    ? { name: v.project_manager.full_name, phone: v.project_manager.phone }
-    : null,
-});
-
-// GET /cp/visits?scope=upcoming|past
-router.get('/visits', requireCp, async (req: CpRequest, res) => {
-  try {
-    const past = req.query.scope === 'past';
-    const now = new Date();
-    const visits = await p.siteVisitBooking.findMany({
-      where: {
-        assigned_agent_id: req.cp!.id,
-        lead: { company_id: req.cp!.company_id },
-        ...(past
-          ? {
-              OR: [{ scheduled_date: { lt: now } }, { status: { in: ['COMPLETED', 'CANCELLED'] } }],
-            }
-          : {
-              scheduled_date: { gte: new Date(now.getTime() - 12 * 3600e3) },
-              status: { notIn: ['COMPLETED', 'CANCELLED'] },
-            }),
-      },
-      select: visitSelect,
-      orderBy: { scheduled_date: past ? 'desc' : 'asc' },
-      take: 100,
-    });
-    return res.status(200).json({ visits: visits.map(toCpVisit) });
-  } catch (error) {
-    logger.error({ error }, 'Partner visits error');
-    return res.status(500).json({ error: 'Failed to load visits' });
-  }
-});
-
-router.get('/visits/:id', requireCp, async (req: CpRequest, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid ID format' });
-  const v = await p.siteVisitBooking.findFirst({
-    where: { id, assigned_agent_id: req.cp!.id, lead: { company_id: req.cp!.company_id } },
-    select: visitSelect,
-  });
-  if (!v) return res.status(404).json({ error: 'Visit not found' });
-  return res.status(200).json({ visit: toCpVisit(v) });
-});
 
 /** Phone-like digit runs (7+ digits) in texts written for staff are masked. */
 export const maskPhones = (s: string) =>
   s.replace(/\+?\d[\d\s-]{5,}\d/g, (m) => (m.replace(/\D/g, '').length >= 7 ? '•••' : m));
 
-router.get('/notifications', requireCp, async (req: CpRequest, res) => {
+router.get('/notifications', requireCp, requireOwner, async (req: CpRequest, res) => {
   const rows = await p.notification.findMany({
     where: { employee_id: req.cp!.id, is_dismissed: false },
     orderBy: { created_at: 'desc' },
@@ -228,7 +200,7 @@ router.get('/notifications', requireCp, async (req: CpRequest, res) => {
 });
 
 /** The draft service works on a staff-like identity; a partner has no permissions. */
-const asUser = (req: CpRequest): TokenPayload => ({
+export const asUser = (req: CpRequest): TokenPayload => ({
   employeeId: req.cp!.id,
   employeeCode: req.cp!.employee_code,
   companyId: req.cp!.company_id,
@@ -237,7 +209,7 @@ const asUser = (req: CpRequest): TokenPayload => ({
   permissions: [],
 });
 
-router.get('/drafts', requireCp, async (req: CpRequest, res, next) => {
+router.get('/drafts', requireCp, requireOwner, async (req: CpRequest, res, next) => {
   try {
     const { drafts, total } = await DraftService.list(asUser(req), { limit: 50, offset: 0 });
     return res.status(200).json({ drafts, total });
@@ -248,6 +220,7 @@ router.get('/drafts', requireCp, async (req: CpRequest, res, next) => {
 router.post(
   '/drafts/property',
   requireCp,
+  requireOwner,
   validateRequestBody(PropertyDraftCreateSchema),
   async (req: CpRequest, res, next) => {
     try {
@@ -260,6 +233,7 @@ router.post(
 router.post(
   '/drafts/project',
   requireCp,
+  requireOwner,
   validateRequestBody(ProjectDraftCreateSchema),
   async (req: CpRequest, res, next) => {
     try {

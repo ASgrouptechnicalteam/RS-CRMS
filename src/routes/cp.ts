@@ -199,6 +199,14 @@ router.get('/notifications', requireCp, requireOwner, async (req: CpRequest, res
   });
 });
 
+router.post('/notifications/read', requireCp, requireOwner, async (req: CpRequest, res) => {
+  await p.notification.updateMany({
+    where: { employee_id: req.cp!.id, is_read: false },
+    data: { is_read: true },
+  });
+  return res.status(200).json({ ok: true });
+});
+
 /** The draft service works on a staff-like identity; a partner has no permissions. */
 export const asUser = (req: CpRequest): TokenPayload => ({
   employeeId: req.cp!.id,

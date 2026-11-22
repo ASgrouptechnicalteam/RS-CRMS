@@ -832,6 +832,42 @@ router.post(
   }),
 );
 
+// ── the bell ─────────────────────────────────────────────────
+
+/** Small counts for the bell in the header: office messages not read, call-backs and reminders due now. */
+router.get(
+  '/badges',
+  requireCp,
+  handle(async (req, res) => {
+    const cp = req.cp!;
+    const now = new Date();
+    const open = ['NEW', 'CONTACTED', 'INTERESTED', 'VISIT_BOOKED'];
+    const [messages, callBacks, tasks] = await Promise.all([
+      cp.user
+        ? Promise.resolve(0)
+        : p.notification.count({
+            where: { employee_id: cp.id, is_read: false, is_dismissed: false },
+          }),
+      p.cpLead.count({
+        where: {
+          ...(leadScope(req) as any),
+          status: { in: open },
+          next_follow_up_at: { lte: now },
+        },
+      }),
+      p.cpTask.count({
+        where: { ...(taskScope(req) as any), done_at: null, due_at: { lte: now } },
+      }),
+    ]);
+    return res.status(200).json({
+      messages_unread: messages,
+      call_backs_due: callBacks,
+      tasks_due: tasks,
+      total: messages + callBacks + tasks,
+    });
+  }),
+);
+
 // ── home screen ──────────────────────────────────────────────
 
 /** What this person needs today, in one call: counts, call-backs due, next visits, and for the partner the team. */

@@ -611,11 +611,9 @@ router.get(
         })
       : [];
     const avail = new Map<number, number>(free.map((f: any) => [f.project_id, f._count._all]));
-    return res
-      .status(200)
-      .json({
-        projects: projects.map((x: any) => ({ ...x, available_units: avail.get(x.id) ?? 0 })),
-      });
+    return res.status(200).json({
+      projects: projects.map((x: any) => ({ ...x, available_units: avail.get(x.id) ?? 0 })),
+    });
   }),
 );
 
@@ -746,18 +744,16 @@ router.get(
     const past = req.query.scope === 'past';
     const now = new Date();
     const scope = await visitScope(req);
+    // The time filter is combined with the scope using AND: spreading both would let the time
+    // filter's own OR replace the scope's OR and show every visit of the company.
+    const timeFilter = past
+      ? { OR: [{ scheduled_date: { lt: now } }, { status: { in: ['COMPLETED', 'CANCELLED'] } }] }
+      : {
+          scheduled_date: { gte: new Date(now.getTime() - 12 * 3600e3) },
+          status: { notIn: ['COMPLETED', 'CANCELLED'] },
+        };
     const visits = await p.siteVisitBooking.findMany({
-      where: {
-        ...scope,
-        ...(past
-          ? {
-              OR: [{ scheduled_date: { lt: now } }, { status: { in: ['COMPLETED', 'CANCELLED'] } }],
-            }
-          : {
-              scheduled_date: { gte: new Date(now.getTime() - 12 * 3600e3) },
-              status: { notIn: ['COMPLETED', 'CANCELLED'] },
-            }),
-      },
+      where: { AND: [scope, timeFilter] },
       select: visitSelect,
       orderBy: { scheduled_date: past ? 'desc' : 'asc' },
       take: 100,

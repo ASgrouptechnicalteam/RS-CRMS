@@ -187,7 +187,8 @@ export async function measureMetric(
         take: 20000,
       });
       const leadIds = [...new Set(calls.map((c) => c.lead_id))];
-      // A "new" call is the first call ever made to a lead, credited to whoever made it.
+      // A "new" call is the first call ever made to a lead, credited to whoever made it,
+      // and it counts only in the period when that first call was made.
       let firstMine = 0;
       if (leadIds.length) {
         const history = await p.leadActivity.findMany({
@@ -196,12 +197,16 @@ export async function measureMetric(
             activity_type: 'CALL_LOGGED',
             created_at: { lt: end },
           },
-          select: { lead_id: true, actor_id: true },
+          select: { lead_id: true, actor_id: true, created_at: true },
           orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
         });
-        const first = new Map<number, number>();
-        for (const h of history) if (!first.has(h.lead_id)) first.set(h.lead_id, h.actor_id);
-        firstMine = leadIds.filter((id) => first.get(id) === employeeId).length;
+        const first = new Map<number, { actor: number; at: Date }>();
+        for (const h of history)
+          if (!first.has(h.lead_id)) first.set(h.lead_id, { actor: h.actor_id, at: h.created_at });
+        firstMine = leadIds.filter((id) => {
+          const f = first.get(id);
+          return !!f && f.actor === employeeId && f.at >= start && f.at < end;
+        }).length;
       }
       return metric === 'NEW_CALLS' ? firstMine : calls.length - firstMine;
     }

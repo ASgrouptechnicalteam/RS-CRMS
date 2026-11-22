@@ -11,6 +11,8 @@ import {
   getISTNextMonthStart,
   toHolidayDateKey,
 } from '../../utils/time';
+import { z } from 'zod';
+import { carryPlansForward } from '../../services/dayPlan.service';
 import { Roles, LateProposalSchema, LeaveProposalSchema, EmptyBodySchema } from '../../shared';
 import { validateRequestBody } from '../../middleware/validate';
 import { notifyEmployee } from '../../utils/notifyEmployee';
@@ -139,7 +141,11 @@ router.post(
   validateRequestBody(LeaveProposalSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { start_date, end_date, reason, leave_type = 'FULL_DAY', sick = false } = req.body;
+      const { start_date, end_date, reason, leave_type = 'FULL_DAY' } = req.body;
+      const leaveKind: 'CASUAL' | 'SICK' | 'EMERGENCY' =
+        req.body.leave_kind || (req.body.sick ? 'SICK' : 'CASUAL');
+      const sick = leaveKind === 'SICK';
+      const emergency = leaveKind === 'EMERGENCY';
       if (!start_date || !reason) {
         return res.status(400).json({ error: 'Start date and reason are required' });
       }
@@ -155,13 +161,13 @@ router.post(
         return res.status(400).json({ error: 'Leave cannot start in the past.' });
       }
       if (startDay === todayIST) {
-        if (!sick) {
+        if (!sick && !emergency) {
           return res.status(400).json({
             error:
-              'Leave requests must be submitted at least 1 day in advance (tick "Sick leave" for today).',
+              'Leave requests must be submitted at least 1 day in advance (choose "Sick leave" or "Emergency leave" for today).',
           });
         }
-        if (nowIST.hours * 60 + nowIST.minutes >= 11 * 60) {
+        if (sick && nowIST.hours * 60 + nowIST.minutes >= 11 * 60) {
           return res.status(400).json({
             error: 'Same-day sick leave must be requested before 11:00 AM.',
           });
@@ -237,8 +243,9 @@ router.post(
           employee_id: req.user!.employeeId,
           type: 'LEAVE',
           leave_type,
+          leave_kind: leaveKind,
           target_date: day,
-          reason: sick ? `Sick leave: ${reason}` : reason,
+          reason: sick ? `Sick leave: ${reason}` : emergency ? `Emergency leave: ${reason}` : reason,
           status: 'PENDING',
           created_at: createdAt,
         })),
@@ -676,12 +683,15 @@ router.get(
 );
 
 // POST /api/v1/attendance/proposals/:id/approve - Approve proposal (changes attendance status, e.g. LATE -> PRESENT)
+// Approving a leave asks: paid or unpaid (owner, 2026-11-21). Other requests send nothing.
+const ApproveSchema = z.object({ pay_type: z.enum(['PAID', 'UNPAID']).optional() });
+
 router.post(
   '/proposals/:id/approve',
   authenticateToken,
   // HR decides attendance requests (2026-10-18); MD / Admin can too.
   requireRole([Roles.HR_MANAGER, Roles.MD, Roles.ADMIN]),
-  validateRequestBody(EmptyBodySchema),
+  validateRequestBody(ApproveSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -704,12 +714,17 @@ router.post(
       // approvers) at the same moment used to both pass the check above and
       // both run the side effects -- two attendance rows for one field-work
       // day (production, 30 Oct).
+      const payType: 'PAID' | 'UNPAID' | null = req.body.pay_type || null;
+      if (proposal.type === 'LEAVE' && !payType) {
+        return res.status(400).json({ error: 'Choose paid or unpaid leave.' });
+      }
       const claimed = await p.attendanceProposal.updateMany({
         where: { id, status: 'PENDING' },
         data: {
           status: 'APPROVED',
           reviewed_by: req.user!.employeeId,
           reviewed_at: new Date(),
+          ...(proposal.type === 'LEAVE' ? { pay_type: payType } : {}),
         },
       });
       if (claimed.count === 0) {
@@ -731,9 +746,26 @@ router.post(
             status: 'APPROVED',
             reviewed_by: req.user!.employeeId,
             reviewed_at: new Date(),
+            pay_type: payType,
           },
         });
         leaveDays += siblings.count;
+
+        // Plans made for the leave days move to the first working day after it.
+        const approvedDays = await p.attendanceProposal.findMany({
+          where: {
+            employee_id: updated.employee_id,
+            type: 'LEAVE',
+            status: 'APPROVED',
+            created_at: updated.created_at,
+            leave_type: 'FULL_DAY',
+          },
+          select: { target_date: true },
+        });
+        await carryPlansForward(
+          updated.employee_id,
+          approvedDays.map((d: { target_date: Date }) => getISTComponents(d.target_date).dateString),
+        ).catch((err) => logger.error({ err }, 'Carrying the plan forward after leave failed'));
       }
 
       if (updated.type === 'LATE_CHECKIN') {

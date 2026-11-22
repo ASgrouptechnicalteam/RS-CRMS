@@ -88,7 +88,12 @@ export async function findVisitForUser(
   opts: { verifyAction?: boolean } = {},
 ) {
   let where: Prisma.SiteVisitBookingWhereInput;
-  if (opts.verifyAction && !user.roles.includes(Roles.ADMIN) && !user.roles.includes(Roles.MD)) {
+  if (
+    opts.verifyAction &&
+    !user.roles.includes(Roles.ADMIN) &&
+    !user.roles.includes(Roles.MD) &&
+    !user.roles.includes(Roles.TECHNICAL_MANAGER)
+  ) {
     where = {
       AND: [
         { id: visitId },

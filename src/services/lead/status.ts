@@ -15,7 +15,7 @@ import { CustomerPortalService } from '../customerPortal.service';
 import { findBestAssigneeForLead } from '../../utils/distributionService';
 import { AppError } from './errors';
 import { normaliseLeadSource, LEAD_SOURCE_NAMES } from './sources';
-import { generateNextLeadCode, syncLeadPreferredLocations } from './shared';
+import { generateNextLeadCode, nextUnknownNumber, syncLeadPreferredLocations } from './shared';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 
@@ -662,7 +662,8 @@ function sanitiseBulkLeadRow(raw: any): { row: any; error?: string } {
   // A blank name is never worth losing a lead over — default to "Unknown"
   // rather than rejecting the row, same as the frontend's own file parser.
   // Phone stays mandatory: a name with no contactable number isn't usable.
-  const customer_name = BULK_TEXT(raw.customer_name, 120) || 'Unknown';
+  // Blank stays blank here; bulkUploadLeads names it "Unknown N".
+  const customer_name = BULK_TEXT(raw.customer_name, 120);
   let phone = BULK_TEXT(raw.phone, 20).replace(/\.0+$/, '').replace(/\D/g, '');
   if (phone.length === 12 && phone.startsWith('91')) phone = phone.slice(2);
   if (phone.length === 11 && phone.startsWith('0')) phone = phone.slice(1);
@@ -728,6 +729,15 @@ export async function bulkUploadLeads(
   };
 
   const sanitised = rawLeads.map(sanitiseBulkLeadRow);
+
+  // A row with only a number becomes "Unknown 1", "Unknown 2"... so the
+  // telecaller can ask for the name and edit it.
+  if (sanitised.some((s) => !s.error && !s.row.customer_name)) {
+    let nextUnknown = await nextUnknownNumber(p, user.companyId);
+    for (const s of sanitised) {
+      if (!s.error && !s.row.customer_name) s.row.customer_name = `Unknown ${nextUnknown++}`;
+    }
+  }
 
   // Pre-fetch existing phones and emails to detect duplicates efficiently
   const phones = sanitised.filter((r) => !r.error).map((r) => r.row.phone);

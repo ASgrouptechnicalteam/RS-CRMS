@@ -5,6 +5,7 @@ import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { Roles, DO_NOT_CALL_EXIT_REASONS } from '../../shared';
 import { AppError } from './errors';
+import { nextUnknownNumber } from './shared';
 import { followUpsDue } from '../counts/followUps';
 
 const p = prisma;
@@ -47,6 +48,36 @@ const activeGroup = async (user: TokenPayload, groupId: number) => {
 
 const isDuplicateKey = (e: unknown) => (e as { code?: string })?.code === 'P2002';
 
+/**
+ * The permanent group for lists of numbers with no names (owner, 2026-11-21).
+ * It is created the first time such a list is uploaded, and cannot be renamed or retired.
+ */
+export const ONLY_NUMBERS_GROUP = 'Only numbers';
+
+export async function ensureOnlyNumbersGroup(user: TokenPayload) {
+  const existing = await p.masterLeadGroup.findFirst({
+    where: { company_id: user.companyId, name: ONLY_NUMBERS_GROUP },
+  });
+  if (existing) {
+    return existing.is_active
+      ? existing
+      : p.masterLeadGroup.update({ where: { id: existing.id }, data: { is_active: true } });
+  }
+  try {
+    return await p.masterLeadGroup.create({
+      data: { company_id: user.companyId, name: ONLY_NUMBERS_GROUP, created_by_id: user.employeeId },
+    });
+  } catch (e) {
+    // Two uploads started together: the other one made it first.
+    if (isDuplicateKey(e)) {
+      return p.masterLeadGroup.findFirstOrThrow({
+        where: { company_id: user.companyId, name: ONLY_NUMBERS_GROUP },
+      });
+    }
+    throw e;
+  }
+}
+
 export async function createGroup(user: TokenPayload, input: { name: string }) {
   const name = text(input.name, 80);
   if (name.length < 2) throw new AppError(400, 'Enter a group name');
@@ -70,6 +101,9 @@ export async function updateGroup(
     where: { id: groupId, company_id: user.companyId },
   });
   if (!group) throw new AppError(404, 'That group was not found');
+  if (group.name === ONLY_NUMBERS_GROUP) {
+    throw new AppError(409, 'This group is permanent: it cannot be renamed or retired.');
+  }
   const name = input.name === undefined ? undefined : text(input.name, 80);
   if (name !== undefined && name.length < 2) throw new AppError(400, 'Enter a group name');
   try {
@@ -86,18 +120,27 @@ export async function updateGroup(
 export async function startBatch(
   user: TokenPayload,
   input: {
-    group_id: number;
+    group_id?: number;
+    /** A list of numbers with no names: goes to the permanent "Only numbers" group. */
+    numbers_only?: boolean;
     file_name: string;
     file_size?: number;
     source?: string;
     source_detail?: string;
   },
 ) {
-  await activeGroup(user, input.group_id);
+  let groupId: number;
+  if (input.numbers_only) {
+    groupId = (await ensureOnlyNumbersGroup(user)).id;
+  } else {
+    if (!input.group_id) throw new AppError(400, 'Choose a group');
+    await activeGroup(user, input.group_id);
+    groupId = input.group_id;
+  }
   return p.masterLeadBatch.create({
     data: {
       company_id: user.companyId,
-      group_id: input.group_id,
+      group_id: groupId,
       file_name: text(input.file_name, 200) || 'Upload',
       file_size: BigInt(Math.max(0, Math.floor(input.file_size || 0))),
       source: text(input.source, 40) || 'BULK_UPLOAD',
@@ -344,6 +387,10 @@ async function assignTo(
         const batches = await tx.masterLeadBatch.findMany({ where: { id: { in: batchIds } } });
         const batchBy = new Map(batches.map((b) => [b.id, b]));
 
+        // A number with no name is "Unknown 1", "Unknown 2"... until the telecaller edits it.
+        let nextUnknown = fresh.some((r) => !r.name)
+          ? await nextUnknownNumber(tx, user.companyId)
+          : 0;
         if (fresh.length) {
           await tx.lead.createMany({
             data: fresh.map((r) => {
@@ -351,7 +398,7 @@ async function assignTo(
               return {
                 lead_code: leadCodeFor(Number(r.id)),
                 company_id: user.companyId,
-                customer_name: r.name || 'Unknown',
+                customer_name: r.name || `Unknown ${nextUnknown++}`,
                 phone: r.phone,
                 email: r.email,
                 preferred_location: r.location,

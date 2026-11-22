@@ -439,6 +439,31 @@ async function workEvidence(employeeId: number, dateString: string) {
 
 // GET /api/v1/attendance/team-requests - pending duty / swap / comp-off / attendance
 // requests and doubtful phone check-ins of the people I approve for
+// GET /api/v1/attendance/team-requests/count - how many duty-day, comp-off and swap requests and
+// phone check-ins wait for a decision, for the counts on the Approvals page (owner, 2026-11-21).
+router.get(
+  '/team-requests/count',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const ids = await decidableIds(req);
+      if (ids.length === 0) return res.status(200).json({ requests: 0, checkins: 0, total: 0 });
+      const [requests, checkins] = await Promise.all([
+        p.attendanceProposal.count({
+          where: { employee_id: { in: ids }, type: { in: TEAM_REQUEST_TYPES }, status: 'PENDING' },
+        }),
+        p.attendanceCheckinProof.count({
+          where: { employee_id: { in: ids }, review_status: 'PENDING' },
+        }),
+      ]);
+      return res.status(200).json({ requests, checkins, total: requests + checkins });
+    } catch (error) {
+      logger.error('Team request count error:', error);
+      return res.status(500).json({ error: 'Failed to count team requests' });
+    }
+  },
+);
+
 router.get(
   '/team-requests',
   authenticateToken,

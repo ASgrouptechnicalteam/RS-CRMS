@@ -15,6 +15,7 @@ import { getAccessibleCompanyIds } from '../authz/dataScope';
 import { getStorageService, UPLOAD_DIR } from '../services/storage.service';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import { getISTComponents } from '../utils/time';
+import { IMPORT_MAX_ROWS, entryKey, readImportRows } from '../services/pettyCashImport';
 
 /**
  * Petty cash and the monthly budget, per company (item 4, 2026-11-15).
@@ -314,6 +315,114 @@ router.post(
         }
       }
       return res.status(201).json({ entry: { id: entry.id } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * POST /petty-cash/import { company_id?, dry_run, rows }: spreadsheet rows (the CRM
+ * template or a Tally export) as petty cash entries. A check run (dry_run) saves
+ * nothing and says what would happen to every row; the real run saves only when no
+ * row has an error, and skips rows already in the book (diary D28, 2026-11-21).
+ */
+router.post(
+  '/import',
+  authenticateToken,
+  canRead,
+  guard(Permissions.PETTY_CASH_MANAGE, isAccountant, 'the accountant'),
+  async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const rows = Array.isArray(req.body?.rows)
+        ? (req.body.rows as Record<string, unknown>[])
+        : [];
+      if (!rows.length) return res.status(400).json({ error: 'The file has no rows.' });
+      if (rows.length > IMPORT_MAX_ROWS)
+        return res.status(400).json({ error: `Import up to ${IMPORT_MAX_ROWS} rows at a time.` });
+      const companyId = await companyOf(req, req.body?.company_id);
+      const today = getISTComponents(new Date()).dateString;
+      const parsed = readImportRows(rows, today);
+
+      // Rows already in the book (same day, kind, amount, bill and payee) are skipped, so a file can be uploaded twice safely.
+      const dates = parsed
+        .filter((r) => r.entry)
+        .map((r) => r.entry!.entry_date)
+        .sort();
+      const existing = dates.length
+        ? await p.pettyCashEntry.findMany({
+            where: {
+              company_id: companyId,
+              entry_date: {
+                gte: new Date(`${dates[0]}T00:00:00Z`),
+                lte: new Date(`${dates[dates.length - 1]}T00:00:00Z`),
+              },
+            },
+            select: { entry_date: true, type: true, amount: true, bill_no: true, paid_to: true },
+          })
+        : [];
+      const seen = new Set(
+        existing.map((e) =>
+          entryKey({
+            entry_date: e.entry_date.toISOString().slice(0, 10),
+            type: e.type,
+            amount: money(e.amount),
+            bill_no: e.bill_no,
+            paid_to: e.paid_to,
+          }),
+        ),
+      );
+      const results = parsed.map((r) => {
+        if (!r.entry) return { row: r.row, status: 'ERROR' as const, message: r.error! };
+        const key = entryKey(r.entry);
+        if (seen.has(key))
+          return {
+            row: r.row,
+            status: 'SKIP' as const,
+            message: 'Already in the book.',
+            entry: r.entry,
+          };
+        seen.add(key);
+        return { row: r.row, status: 'NEW' as const, entry: r.entry };
+      });
+      const fresh = results.filter((r) => r.status === 'NEW');
+      const errors = results.filter((r) => r.status === 'ERROR').length;
+      const total = (type: string) =>
+        Math.round(
+          fresh.filter((r) => r.entry!.type === type).reduce((a, r) => a + r.entry!.amount, 0) *
+            100,
+        ) / 100;
+      const summary = {
+        new: fresh.length,
+        skipped: results.filter((r) => r.status === 'SKIP').length,
+        errors,
+        expenses: total('EXPENSE'),
+        top_ups: total('TOP_UP'),
+        adjustments: total('ADJUSTMENT'),
+      };
+      const dryRun = req.body?.dry_run !== false;
+      if (dryRun || errors || !fresh.length) {
+        return res.status(200).json({ saved: false, summary, rows: results });
+      }
+      await p.$transaction(
+        fresh.map((r) =>
+          p.pettyCashEntry.create({
+            data: {
+              company_id: companyId,
+              entry_date: new Date(`${r.entry!.entry_date}T00:00:00Z`),
+              type: r.entry!.type,
+              amount: D(r.entry!.amount.toFixed(2)),
+              category: r.entry!.category,
+              source: r.entry!.source,
+              note: r.entry!.note,
+              paid_to: r.entry!.paid_to,
+              bill_no: r.entry!.bill_no,
+              entered_by_id: req.user!.employeeId,
+            },
+          }),
+        ),
+      );
+      return res.status(201).json({ saved: true, summary, rows: results });
     } catch (err) {
       next(err);
     }

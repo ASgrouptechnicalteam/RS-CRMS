@@ -212,6 +212,9 @@ jobManager.register({
 
 // Assets (2026-11-16): SIM recharges due in 3 days, warranties ending in 30 days.
 import { assetReminderJob } from '../services/assets';
+import { digitalAssetReminderJob } from '../services/digitalAssets';
+import { recordRecentTargetResults } from '../services/targetPeriods';
+import { meetingReminderJob } from '../services/meetings';
 jobManager.register({
   name: 'Asset Reminder',
   schedule: '30 9 * * *',
@@ -248,3 +251,33 @@ export const initJobs = () => {
     }
   })();
 };
+
+// Renewal and expiry reminders for digital assets (plans, subscriptions, domains), 09:40 IST.
+jobManager.register({
+  name: 'Digital Asset Renewals',
+  schedule: '40 9 * * *',
+  handler: async () => {
+    await digitalAssetReminderJob();
+  },
+  envDisableKey: 'DISABLE_JOB_DIGITAL_ASSETS',
+});
+
+// Target results for the day, week or month that just ended move the performance score (00:20 IST).
+jobManager.register({
+  name: 'Target Results',
+  schedule: '20 0 * * *',
+  handler: async () => {
+    await recordRecentTargetResults();
+  },
+  envDisableKey: 'DISABLE_JOB_TARGET_RESULTS',
+});
+
+// A reminder to everyone invited, about 30 minutes before a meeting starts (every 5 minutes).
+jobManager.register({
+  name: 'Meeting Reminders',
+  schedule: '*/5 * * * *',
+  handler: async () => {
+    await meetingReminderJob();
+  },
+  envDisableKey: 'DISABLE_JOB_MEETING_REMINDERS',
+});

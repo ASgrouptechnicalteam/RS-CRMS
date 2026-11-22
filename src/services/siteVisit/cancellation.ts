@@ -7,23 +7,67 @@ import { applyTransition, findVisitForUser } from './shared';
 
 const p = prisma;
 
-/** cancel: any active state → CANCELLED. */
+async function resolveCancellerName(user: TokenPayload, isManagement: boolean): Promise<string> {
+  if (user.employeeId) {
+    const emp = await p.employee.findUnique({
+      where: { id: user.employeeId },
+      select: { full_name: true },
+    });
+    if (emp?.full_name) return emp.full_name;
+  }
+  if (user.employeeCode) return user.employeeCode;
+  return isManagement ? 'Management' : 'Staff';
+}
+
+/** cancel: any active state → CANCELLED. Admin and Technical Manager can cancel at any time. */
 export async function cancelVisit(user: TokenPayload, visitId: number, reason?: string) {
   const visit = await findVisitForUser(user, visitId);
+  const isManagement = SiteVisitPolicy.canCancelAtAnyTime(user);
   if (
+    !isManagement &&
     !can(user, Permissions.SITE_VISITS_COMPLETE, visit) &&
     !SiteVisitPolicy.canHoldOrInitiateCancel(user, visit)
   ) {
     throw { status: 403, message: 'Forbidden: Missing permission to cancel site visits' };
   }
-  return applyTransition(
+  const result = await applyTransition(
     user,
     visitId,
     'CANCEL',
-    {},
+    {
+      cancellation_reason: reason || null,
+    },
     'SITE_VISIT_COMPLETED',
     `Site visit ${visit.booking_code} cancelled.${reason ? ` Reason: ${reason}` : ''}`,
   );
+
+  const cancellerName = await resolveCancellerName(user, isManagement);
+
+  // If PM was already assigned/accepted, notify the PM with the cancellation reason
+  if (visit.project_manager_id && visit.project_manager_id !== user.employeeId) {
+    await p.notification.create({
+      data: {
+        employee_id: visit.project_manager_id,
+        type: 'SYSTEM_ALERT',
+        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
+        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
+      },
+    });
+  }
+
+  // Also notify telecaller if someone else cancelled it
+  if (visit.telecaller_id && visit.telecaller_id !== user.employeeId) {
+    await p.notification.create({
+      data: {
+        employee_id: visit.telecaller_id,
+        type: 'SYSTEM_ALERT',
+        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
+        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
+      },
+    });
+  }
+
+  return result;
 }
 
 // ==========================================
@@ -130,31 +174,66 @@ export async function rejectCancellation(user: TokenPayload, visitId: number) {
   return result;
 }
 
-/** CONFIRM_CANCEL: PM explicitly confirms cancellation, providing a reason. */
+/** CONFIRM_CANCEL: PM explicitly confirms cancellation, providing a reason. Admin and Technical Manager can also cancel at any time. */
 export async function confirmCancellation(user: TokenPayload, visitId: number, reason: string) {
   const visit = await findVisitForUser(user, visitId);
-  if (!SiteVisitPolicy.canConfirmCancel(user, visit)) {
+  const isManagement = SiteVisitPolicy.canCancelAtAnyTime(user);
+  if (!isManagement && !SiteVisitPolicy.canConfirmCancel(user, visit)) {
     throw {
       status: 403,
-      message: 'Forbidden: Only the assigned PM can confirm this cancellation.',
+      message:
+        'Forbidden: Only the assigned PM or management (Admin / Technical Manager) can confirm this cancellation.',
     };
   }
   if (!reason || reason.trim() === '') {
     throw { status: 400, message: 'A cancellation reason must be provided.' };
   }
 
+  // Choose action dynamically so both PM cross-check and direct cancel work seamlessly
+  const action =
+    visit.status === 'CANCELLATION_PENDING_PM_CONFIRMATION' ? 'CONFIRM_CANCEL' : 'CANCEL';
+
   // Pass cancellation details in the extra update payload
   const result = await applyTransition(
     user,
     visitId,
-    'CONFIRM_CANCEL',
+    action,
     {
       cancellation_reason: reason,
-      cancellation_confirmed_by_pm_id: user.employeeId,
+      // Only the visit's own PM is recorded as the one who confirmed; a manager who cancels is not.
+      ...(user.employeeId && user.employeeId === visit.project_manager_id
+        ? { cancellation_confirmed_by_pm_id: user.employeeId }
+        : {}),
     },
     'SITE_VISIT_COMPLETED',
-    `Site visit ${visit.booking_code} cancellation confirmed by PM. Reason: ${reason}`,
+    `Site visit ${visit.booking_code} cancellation confirmed by ${isManagement ? 'Management' : 'PM'}. Reason: ${reason}`,
   );
+
+  const cancellerName = await resolveCancellerName(user, isManagement);
+
+  // If PM was already assigned/accepted, notify the PM with the cancellation reason
+  if (visit.project_manager_id && visit.project_manager_id !== user.employeeId) {
+    await p.notification.create({
+      data: {
+        employee_id: visit.project_manager_id,
+        type: 'SYSTEM_ALERT',
+        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
+        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
+      },
+    });
+  }
+
+  // Also notify telecaller if someone else cancelled it
+  if (visit.telecaller_id && visit.telecaller_id !== user.employeeId) {
+    await p.notification.create({
+      data: {
+        employee_id: visit.telecaller_id,
+        type: 'SYSTEM_ALERT',
+        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
+        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
+      },
+    });
+  }
 
   // No-Show Flagging (2 No-shows)
   const normalizedReason = reason.toLowerCase().replace(/[\s-]/g, '');

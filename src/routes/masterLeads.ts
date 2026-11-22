@@ -105,7 +105,8 @@ router.post(
 );
 
 const BatchSchema = z.object({
-  group_id: z.number().int().positive(),
+  group_id: z.number().int().positive().optional(),
+  numbers_only: z.boolean().optional(),
   file_name: z.string().min(1).max(200),
   file_size: z.number().int().nonnegative().optional(),
   source: z.string().max(40).optional(),

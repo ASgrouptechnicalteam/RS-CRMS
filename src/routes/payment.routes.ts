@@ -4,6 +4,7 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
 import { Permissions } from '../shared';
 import { PaymentService } from '../services/payment.service';
+import { PAYMENT_IMPORT_MAX_ROWS } from '../services/paymentImport';
 
 const router = Router();
 
@@ -68,6 +69,29 @@ router.post('/', requireAuthz(Permissions.PAYMENTS_CREATE as any), async (req: a
     next(error);
   }
 });
+
+router.post(
+  '/import',
+  requireAuthz(Permissions.PAYMENTS_CREATE as any),
+  async (req: any, res, next) => {
+    try {
+      const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+      if (!rows.length) return res.status(400).json({ error: 'The file has no rows.' });
+      if (rows.length > PAYMENT_IMPORT_MAX_ROWS)
+        return res
+          .status(400)
+          .json({ error: `Import up to ${PAYMENT_IMPORT_MAX_ROWS} rows at a time.` });
+      const result = await PaymentService.importPayments(
+        req.user,
+        rows,
+        req.body?.dry_run !== false,
+      );
+      res.status(result.saved ? 201 : 200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.put(
   '/:id/status',

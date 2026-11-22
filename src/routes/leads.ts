@@ -22,7 +22,8 @@ import { CALLABLE_STATUSES } from '../services/counts/followUps';
 import { OpportunityService } from '../services/opportunity.service';
 import prisma from '../lib/prisma';
 import { z } from 'zod';
-import { logCall, getCallQueueMeta, splitCalls } from '../services/lead/calls';
+import { getPipelineHealth } from '../services/lead/pipelineHealth';
+import { logCall, addLeadFeedback, getCallQueueMeta, splitCalls } from '../services/lead/calls';
 import { getMyQueue } from '../services/lead/myQueue';
 import { listUploadBatches, moveUploadBatch, stageTotals } from '../services/lead/batches';
 import {
@@ -184,6 +185,22 @@ router.get(
     try {
       const summary = await LeadService.getLeadSummary(req.user!, parseLeadFilters(req));
       return res.status(200).json(summary);
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
+// GET /api/v1/leads/pipeline-health?status=&employee_id= - where the leads are stuck, in every open stage
+router.get(
+  '/pipeline-health',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_READ),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+      const employeeId = Number(req.query.employee_id) || undefined;
+      return res.status(200).json(await getPipelineHealth(req.user!, { status, employeeId }));
     } catch (error: any) {
       return handleServiceError(error, res);
     }
@@ -576,6 +593,24 @@ router.post(
   },
 );
 
+// POST /api/v1/leads/:id/feedback - feedback on the lead at any time
+router.post(
+  '/:id/feedback',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  validateRequestBody(z.object({ feedback: z.string().trim().min(3).max(1000) })),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      const activity = await addLeadFeedback(req.user!, leadId, req.body.feedback);
+      return res.status(201).json({ message: 'Feedback saved', activity });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
 // PATCH /api/v1/leads/:id/status - Update lead status (through the workflow engine)
 router.patch(
   '/:id/status',
@@ -617,6 +652,8 @@ router.patch(
 // through (a string budget or a non-array preferred_locations reached Prisma
 // or produced a one-letter "location").
 const LeadGenericUpdateSchema = z.object({
+  // A lead that came with only a number is "Unknown 1"; the telecaller asks for the name and edits it.
+  customer_name: z.string().trim().min(2, 'Enter the customer name').max(120).optional(),
   budget_min: z.number().nonnegative().nullable().optional(),
   budget_max: z.number().nonnegative().nullable().optional(),
   property_type_preference: z.string().nullable().optional(),
@@ -655,9 +692,23 @@ router.patch(
       // Basic update using prisma
       const updated = await prisma.$transaction(
         async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+          if (
+            updateData.customer_name !== undefined &&
+            updateData.customer_name !== existingLead.customer_name
+          ) {
+            await tx.leadActivity.create({
+              data: {
+                lead_id: leadId,
+                actor_id: req.user!.employeeId,
+                activity_type: 'NOTE_ADDED',
+                notes: `Name changed from "${existingLead.customer_name}" to "${updateData.customer_name}".`,
+              },
+            });
+          }
           const lead = await tx.lead.update({
             where: { id: leadId },
             data: {
+              customer_name: updateData.customer_name,
               budget_min: updateData.budget_min !== undefined ? updateData.budget_min : undefined,
               budget_max: updateData.budget_max !== undefined ? updateData.budget_max : undefined,
               property_type_preference:

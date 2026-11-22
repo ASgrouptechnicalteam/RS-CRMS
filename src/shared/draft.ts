@@ -52,6 +52,9 @@ const ProjectDraftFields = z.object({
   city: text(2, 120),
   project_type: ProjectTypeValue,
   developer_name: text(2),
+  // The contactable person (team only, never public). Required by the CRM form, optional here for other senders.
+  owner_contact_name: optText(255),
+  owner_contact_phone: phone.optional().nullable(),
   // optional
   maps_link: optText(500),
   rera_number: optText(100),
@@ -74,7 +77,7 @@ const PropertyDraftFields = z.object({
   maps_link: optText(500),
   project_name_hint: optText(255),
   description: optText(4000),
-  // owner contact, for resale listings
+  // The contactable person (owner, developer or site contact): team only, never public.
   owner_contact_name: optText(255),
   owner_contact_phone: phone.optional().nullable(),
   details,

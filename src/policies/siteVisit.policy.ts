@@ -3,9 +3,18 @@ import { Roles, Permissions } from '../shared';
 import { SiteVisitBooking, Lead, Employee } from '@prisma/client';
 
 export class SiteVisitPolicy {
-  /** The only roles that may act on any visit: MD and Admin. */
-  private static isManagement(user: TokenPayload): boolean {
-    return user.roles.some((r) => [Roles.MD, Roles.ADMIN].includes(r as any));
+  /** The roles that may manage/override any visit: MD, Admin, and Technical Manager. */
+  static isManagement(user: TokenPayload): boolean {
+    return user.roles.some((r) =>
+      [Roles.MD, Roles.ADMIN, Roles.TECHNICAL_MANAGER].includes(r as any),
+    );
+  }
+
+  /**
+   * Management (Admin, MD, Technical Manager) can cancel a site visit at any time.
+   */
+  static canCancelAtAnyTime(user: TokenPayload): boolean {
+    return this.isManagement(user);
   }
 
   /**

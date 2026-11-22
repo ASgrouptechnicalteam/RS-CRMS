@@ -147,6 +147,43 @@ export async function submitFeedback(token: string, input: SubmitFeedbackInput):
     },
   });
 
+  // The customer's own words belong on the lead's timeline too (owner, 2026-11-21).
+  try {
+    const visit = await p.siteVisitBooking.findUnique({
+      where: { id: feedback.site_visit_id },
+      select: {
+        booking_code: true,
+        lead_id: true,
+        telecaller_id: true,
+        project_manager_id: true,
+        lead: { select: { assigned_to_id: true } },
+      },
+    });
+    const actorId =
+      feedback.rated_employee_id ??
+      visit?.project_manager_id ??
+      visit?.telecaller_id ??
+      visit?.lead?.assigned_to_id ??
+      null;
+    if (visit?.lead_id && actorId) {
+      const yn = (v: boolean) => (v ? 'yes' : 'no');
+      await p.leadActivity.create({
+        data: {
+          lead_id: visit.lead_id,
+          actor_id: actorId,
+          activity_type: 'SITE_VISIT_CUSTOMER_FEEDBACK',
+          notes:
+            `Customer feedback on visit ${visit.booking_code}: ${input.rating}/5. ` +
+            `On time: ${yn(input.onTime)}. Questions answered: ${yn(input.answeredQuestions)}. ` +
+            `Property as described: ${yn(input.propertyAsDescribed)}.` +
+            (input.comment?.trim() ? ` "${input.comment.trim()}"` : ''),
+        },
+      });
+    }
+  } catch (err) {
+    logger.error('[Feedback] could not add the customer feedback to the lead timeline', err);
+  }
+
   // Notify the rated employee's manager + all MDs — the whole point of
   // collecting this is that it reaches someone who can act on it.
   const recipientIds = new Set<number>();

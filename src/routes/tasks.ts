@@ -211,8 +211,16 @@ router.post(
   validateRequestBody(TaskCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const { title, description, assignee_id, priority, deadline, lead_id, opportunity_id } =
-        req.body;
+      const {
+        title,
+        description,
+        assignee_id,
+        priority,
+        deadline,
+        lead_id,
+        opportunity_id,
+        task_type,
+      } = req.body;
       const creatorId = req.user!.employeeId;
 
       // Validate Assignee Company Isolation
@@ -257,6 +265,7 @@ router.post(
           description,
           assignee_id,
           priority,
+          task_type,
           created_by: creatorId,
           status: 'PENDING',
           target_date: deadline ? new Date(deadline) : new Date(Date.now() + 86400000),

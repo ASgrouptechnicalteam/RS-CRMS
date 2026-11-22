@@ -1,3 +1,4 @@
+import { readPaymentRows, paymentKey } from './paymentImport';
 import { pmScope, pmMaySee } from '../authz/pmScope';
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
@@ -174,6 +175,134 @@ export class PaymentService {
       entity_id: created.id,
     });
     return created;
+  }
+
+  /**
+   * Import payments from a checked file (diary D28). Every row is looked up by booking
+   * code in the caller's company; cancelled bookings and rows already recorded are not
+   * saved. Saved rows are PENDING, so Finance verifies them like any typed-in payment.
+   */
+  static async importPayments(
+    user: TokenPayload,
+    rows: Record<string, unknown>[],
+    dryRun: boolean,
+  ) {
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    const parsed = readPaymentRows(rows, today);
+    const codes = [...new Set(parsed.filter((r) => r.entry).map((r) => r.entry!.booking_code))];
+    const bookings = codes.length
+      ? await p.booking.findMany({
+          where: { booking_code: { in: codes }, company_id: user.companyId },
+        })
+      : [];
+    const byCode = new Map<string, any>(
+      bookings.map((b: any) => [b.booking_code.toUpperCase(), b]),
+    );
+    const existing = bookings.length
+      ? await p.payment.findMany({
+          where: { booking_id: { in: bookings.map((b: any) => b.id) } },
+          select: {
+            booking_id: true,
+            amount: true,
+            payment_method: true,
+            reference_number: true,
+            payment_date: true,
+          },
+        })
+      : [];
+    const codeById = new Map<number, string>(bookings.map((b: any) => [b.id, b.booking_code]));
+    const seen = new Set(
+      existing.map((e: any) =>
+        paymentKey({
+          booking_code: codeById.get(e.booking_id)!,
+          payment_date: new Date(e.payment_date.getTime() + 330 * 60000).toISOString().slice(0, 10),
+          amount: Number(e.amount),
+          payment_method: e.payment_method,
+          reference_number: e.reference_number,
+        }),
+      ),
+    );
+    const results: {
+      row: number;
+      status: 'NEW' | 'SKIP' | 'ERROR';
+      message?: string;
+      entry?: any;
+      booking_id?: number;
+    }[] = [];
+    for (const r of parsed) {
+      if (!r.entry) {
+        results.push({ row: r.row, status: 'ERROR', message: r.error });
+        continue;
+      }
+      const booking = byCode.get(r.entry.booking_code);
+      if (!booking) {
+        results.push({
+          row: r.row,
+          status: 'ERROR',
+          message: `No booking ${r.entry.booking_code} in this company.`,
+        });
+      } else if (booking.status === 'CANCELLED') {
+        results.push({
+          row: r.row,
+          status: 'ERROR',
+          message: `Booking ${booking.booking_code} is cancelled.`,
+        });
+      } else if (
+        !BookingPolicy.canView(user, booking) ||
+        !(await pmMaySee(user, 'booking', booking.id))
+      ) {
+        results.push({
+          row: r.row,
+          status: 'ERROR',
+          message: `You cannot record payments on ${booking.booking_code}.`,
+        });
+      } else if (seen.has(paymentKey(r.entry))) {
+        results.push({ row: r.row, status: 'SKIP', message: 'Already recorded.', entry: r.entry });
+      } else {
+        seen.add(paymentKey(r.entry));
+        results.push({ row: r.row, status: 'NEW', entry: r.entry, booking_id: booking.id });
+      }
+    }
+    const fresh = results.filter((r) => r.status === 'NEW');
+    const errors = results.filter((r) => r.status === 'ERROR').length;
+    const summary = {
+      new: fresh.length,
+      skipped: results.filter((r) => r.status === 'SKIP').length,
+      errors,
+      total: round2(fresh.reduce((a, r) => a + r.entry.amount, 0)),
+    };
+    const publicRows = results.map(({ booking_id: _b, ...rest }) => rest);
+    if (dryRun || errors || !fresh.length) return { saved: false, summary, rows: publicRows };
+
+    const year = new Date().getFullYear();
+    const start = await p.payment.count();
+    await p.$transaction(
+      fresh.map((r, i) =>
+        p.payment.create({
+          data: {
+            payment_code: `RRH-PAY-${year}-${String(start + i + 1).padStart(5, '0')}`,
+            company_id: user.companyId || 1,
+            booking_id: r.booking_id!,
+            amount: r.entry.amount,
+            payment_method: r.entry.payment_method,
+            reference_number: r.entry.reference_number,
+            payment_date: new Date(`${r.entry.payment_date}T00:00:00+05:30`),
+            notes: r.entry.notes,
+            status: 'PENDING',
+            recorded_by_id: user.employeeId || 1,
+          },
+        }),
+      ),
+    );
+    await PaymentService.notifyFinance(user.companyId, user.employeeId, {
+      type: 'PAYMENT_TO_VERIFY',
+      title: 'Payments to verify',
+      message: `${fresh.length} imported payments (${inr(summary.total)}) are waiting for you to verify.`,
+      link: '/finance',
+      entity_type: 'PAYMENT',
+      entity_id: 0,
+    });
+    return { saved: true, summary, rows: publicRows };
   }
 
   /** Notify the company's accountants, except the person who did the action. */

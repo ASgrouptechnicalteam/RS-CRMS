@@ -227,6 +227,34 @@ export async function createLead(
   let ownershipType = isPublicSubmission ? 'POOL' : dto.ownership_type || 'POOL';
   let bestAssignee: any = null;
 
+  // A number that is still waiting in Master Data and is now added by an
+  // employee: the lead goes to that employee and the number leaves the Master
+  // Data pool (owner, 2026-11-21). Only for staff who can work leads.
+  let masterMatchId: number | null = null;
+  if (!isPublicSubmission) {
+    const master = await p.masterLead.findFirst({
+      where: { company_id: user.companyId, phone: dto.phone, status: 'NEW' },
+      select: { id: true },
+    });
+    if (master) {
+      masterMatchId = master.id;
+      if (ownershipType === 'POOL' && !dto.assign_to_employee_id) {
+        const canWork = await p.employee.findFirst({
+          where: {
+            id: user.employeeId,
+            roles: {
+              some: {
+                role: { permissions: { some: { permission: { name: Permissions.LEADS_UPDATE } } } },
+              },
+            },
+          },
+          select: { id: true },
+        });
+        if (canWork) ownershipType = 'DIRECT';
+      }
+    }
+  }
+
   // A CPM lead that came through an associate traces back to that external
   // agent -- capture the contact so its origin isn't just "some phone
   // number". Other sources need only the customer's name and phone.
@@ -431,6 +459,25 @@ export async function createLead(
     });
 
     if (resolvedStage) await applyInitialStage(tx, user, lead, resolvedStage);
+
+    // The number was waiting in Master Data: take it off the pool, so nobody
+    // else is handed it, and say so on the lead.
+    if (masterMatchId) {
+      const taken = await tx.masterLead.updateMany({
+        where: { id: masterMatchId, status: 'NEW' },
+        data: { status: 'ALREADY_LEAD', lead_id: lead.id },
+      });
+      if (taken.count > 0) {
+        await tx.leadActivity.create({
+          data: {
+            lead_id: lead.id,
+            actor_id: user.employeeId,
+            activity_type: 'NOTE_ADDED',
+            notes: 'This number was in Master Data. It has been taken off the Master Data list.',
+          },
+        });
+      }
+    }
 
     if (colleague) {
       await tx.leadActivity.create({

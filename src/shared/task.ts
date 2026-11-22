@@ -60,6 +60,11 @@ export const TaskCreateSchema = z.object({
   lead_id: z.number().int().positive().optional().nullable(),
   opportunity_id: z.number().int().positive().optional().nullable(),
   booking_id: z.number().int().positive().optional().nullable(),
+  // CALL: a call to make to the lead; it completes itself when the call is logged.
+  task_type: z.enum(['GENERAL', 'CALL']).default('GENERAL'),
+}).refine((v) => v.task_type !== 'CALL' || !!v.lead_id, {
+  message: 'Choose the lead to call',
+  path: ['lead_id'],
 });
 
 export type TaskCreateInput = z.infer<typeof TaskCreateSchema>;

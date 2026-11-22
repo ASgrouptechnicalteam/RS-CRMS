@@ -12,6 +12,8 @@ import {
   getTomorrow,
   saveTomorrow,
   setItemDone,
+  setItemStatus,
+  addUnplanned,
 } from '../services/dayPlan.service';
 
 const router = Router();
@@ -39,6 +41,7 @@ const SaveSchema = z.object({
         kind: z.enum(['NOTE', 'SITE_VISIT', 'TASK']).optional(),
         ref_id: z.number().int().nullable().optional(),
         time: z.string().max(20).nullable().optional(),
+        carried_from: z.string().max(10).nullable().optional(),
       }),
     )
     .min(1, "Add at least one thing to tomorrow's plan")
@@ -65,17 +68,39 @@ router.get('/today', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-const DoneSchema = z.object({ done: z.boolean() });
+// Either { done } (the tick) or { status, note } (done differently, or not done and why).
+const DoneSchema = z.union([
+  z.object({ done: z.boolean() }),
+  z.object({
+    status: z.enum(['DONE', 'CHANGED', 'NOT_DONE', 'OPEN']),
+    note: z.string().trim().max(300).optional(),
+  }),
+]);
 router.patch(
   '/today/items/:itemId',
   validateRequestBody(DoneSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      return res.json(
-        await setItemDone(req.user!.employeeId, String(req.params.itemId), req.body.done),
-      );
-    } catch (error) {
+      const itemId = String(req.params.itemId);
+      if ('done' in req.body) {
+        return res.json(await setItemDone(req.user!.employeeId, itemId, req.body.done));
+      }
+      return res.json(await setItemStatus(req.user!.employeeId, itemId, req.body));
+    } catch (error: any) {
+      if (error?.statusCode === 400) return res.status(400).json({ error: error.message });
       return fail(res, error, 'update the plan');
+    }
+  },
+);
+
+router.post(
+  '/today/unplanned',
+  validateRequestBody(z.object({ text: z.string().trim().min(3).max(300) })),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      return res.status(201).json(await addUnplanned(req.user!.employeeId, req.body.text));
+    } catch (error) {
+      return fail(res, error, 'add the work');
     }
   },
 );

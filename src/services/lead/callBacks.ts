@@ -51,6 +51,7 @@ export async function moveCallBackTasks(
   await tx.task.create({
     data: {
       title: missed.title,
+      task_type: 'CALL',
       description: missed.description,
       assignee_id: toId,
       created_by: toId,

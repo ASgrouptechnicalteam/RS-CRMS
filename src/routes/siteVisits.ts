@@ -764,8 +764,8 @@ router.post(
 router.post(
   '/:id/cancel',
   authenticateToken,
-  requirePermission([Permissions.SITE_VISITS_COMPLETE]),
-  validateRequestBody(EmptyBodySchema),
+  requirePermission([Permissions.SITE_VISITS_COMPLETE, Permissions.SITE_VISITS_ASSIGN_AGENT]),
+  validateRequestBody(SiteVisitCancelConfirmSchema.partial()),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const visitId = parseInt(req.params.id, 10);
@@ -861,7 +861,7 @@ router.post(
 router.post(
   '/:id/confirm-cancel',
   authenticateToken,
-  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT]),
+  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT, Permissions.SITE_VISITS_COMPLETE]),
   validateRequestBody(SiteVisitCancelConfirmSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {

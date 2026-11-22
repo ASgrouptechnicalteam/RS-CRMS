@@ -133,6 +133,9 @@ const PUBLIC_PROJECT_SELECT: Prisma.ProjectSelect = {
   created_at: true,
   slug: true,
   cover_image_url: true,
+  // Written by the digital team in the CRM for the public page (2026-11-21).
+  seo_title: true,
+  seo_keywords: true,
   // company_id EXCLUDED — internal
   // assigned_pm_id EXCLUDED — internal
   // branch_id EXCLUDED — internal
@@ -276,6 +279,10 @@ const cachedList = (req: any, res: Response, next: () => void) => {
   };
   next();
 };
+/** What the Radha Real Home site is allowed to show: open plots and residential land. */
+const RRH_PROPERTY_CATEGORY = 'PLOT';
+const RRH_PROJECT_TYPE = 'PLOTTED';
+
 router.get('/:brand/properties', cachedList);
 router.get('/:brand/projects', cachedList);
 router.get('/:brand/legal', cachedList);
@@ -482,6 +489,11 @@ router.get('/:brand/properties', async (req: any, res: Response) => {
     if (category !== undefined && typeof category === 'string' && category.trim() !== '') {
       whereCondition.category = category.trim();
     }
+    // The Radha Real Home site sells open plots and residential land only (owner, 2026-11-21).
+    // Apartments, villas and houses stay in the CRM and show on the Sonthillu site.
+    if (brand.toLowerCase() === 'rrh') {
+      whereCondition.category = RRH_PROPERTY_CATEGORY;
+    }
     if (
       listing_type !== undefined &&
       typeof listing_type === 'string' &&
@@ -600,7 +612,10 @@ router.get('/:brand/properties/:id', async (req: any, res: Response) => {
       select: PUBLIC_PROPERTY_DETAIL_SELECT,
     });
 
-    if (!property) {
+    if (
+      !property ||
+      (brand.toLowerCase() === 'rrh' && (property as any).category !== RRH_PROPERTY_CATEGORY)
+    ) {
       return res.status(404).json({ error: 'Property not found or not available' });
     }
 
@@ -703,6 +718,7 @@ router.get('/:brand/projects', async (req: any, res: Response) => {
         // drafts still carry is_published = true.
         verification_status: 'VERIFIED',
         status: { not: 'CANCELLED' },
+        ...(brandLower === 'rrh' ? { project_type: RRH_PROJECT_TYPE } : {}),
       },
       select: PUBLIC_PROJECT_SELECT,
       orderBy: { created_at: 'desc' },
@@ -763,6 +779,7 @@ router.get('/:brand/projects/:id', async (req: any, res: Response) => {
         verification_status: 'VERIFIED',
         // Same as the list: a cancelled project is not on the websites.
         status: { not: 'CANCELLED' },
+        ...(brandLower === 'rrh' ? { project_type: RRH_PROJECT_TYPE } : {}),
       },
       select: PUBLIC_PROJECT_DETAIL_SELECT,
     });
@@ -780,9 +797,18 @@ router.get('/:brand/projects/:id', async (req: any, res: Response) => {
     });
     const inventory_summary = deriveUnitInventorySummary(allUnits);
 
+    // The project's own photos (the CRM's Media tab), not only its units' photos (2026-11-21).
+    const gallery = await p.projectMedia.findMany({
+      where: { project_id: projectId, kind: 'GALLERY' },
+      orderBy: [{ sort_order: 'asc' }, { id: 'asc' }],
+      select: { id: true, url: true, title: true },
+      take: 80,
+    });
+
     const { units, ...projectFields } = project as any;
     res.status(200).json({
       ...projectFields,
+      gallery,
       properties: (units || []).map(unitToPublicPropertyShape),
       inventory_summary,
     });

@@ -404,6 +404,12 @@ model Branch {
 }
 
 model Employee {
+  /// The person's GitHub name, so their commits are counted as their code updates.
+  github_username String? @db.VarChar(60)
+  meetings_organised Meeting[] @relation("MeetingsOrganised")
+  meeting_invites MeetingInvite[] @relation("MeetingsInvitedTo")
+  digital_assets_owned DigitalAsset[] @relation("DigitalAssetOwner")
+  tickets_raised SupportTicket[] @relation("TicketsRaised")
   id                  Int       @id @default(autoincrement())
   employee_code       String    @unique
   company_id          Int
@@ -828,6 +834,8 @@ model AttendanceProposal {
   employee_id Int
   type        String // LATE_CHECKIN, LEAVE_DAY
   leave_type  String    @default("FULL_DAY") // FULL_DAY, FIRST_HALF, SECOND_HALF
+  leave_kind  String?   @db.VarChar(10) // LEAVE only: CASUAL, SICK, EMERGENCY (2026-11-21)
+  pay_type    String?   @db.VarChar(8) // LEAVE only, set when approved: PAID or UNPAID (2026-11-21)
   target_date DateTime
   reason      String    @db.Text
   status      String    @default("PENDING") // PENDING, APPROVED, REJECTED
@@ -865,6 +873,8 @@ model Task {
   completed_at   DateTime?
   lead_id        Int?
   opportunity_id Int?
+  /// GENERAL, or CALL: a call to make to the task's lead; done by itself when that call is logged (2026-11-21).
+  task_type      String    @default("GENERAL") @db.VarChar(10)
   priority       String    @default("MEDIUM")
   // How the assignee finished it (COMPLETED / NOT_COMPLETED / BLOCKED / NEED_MORE_TIME),
   // the note they gave, and when. History stays in AuditEvent (TASK_FINISHED / TASK_REVIEWED).
@@ -3498,4 +3508,106 @@ model AssetAssignment {
 
   @@index([asset_id, assigned_at])
   @@index([employee_id, returned_at])
+}
+
+/// A query or problem raised from Help & FAQ about the CRM, the My Property portal or the
+/// Sales Portal. The Technical Manager answers it (2026-11-21).
+model SupportTicket {
+  id            Int       @id @default(autoincrement())
+  company_id    Int
+  created_by_id Int
+  portal        String    @default("CRM") @db.VarChar(16) // CRM, MY_PROPERTY, SALES_PORTAL
+  subject       String    @db.VarChar(150)
+  message       String    @db.Text
+  status        String    @default("OPEN") @db.VarChar(12) // OPEN, IN_PROGRESS, RESOLVED, CLOSED
+  reply         String?   @db.Text
+  handled_by_id Int?
+  resolved_at   DateTime?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  created_by Employee @relation("TicketsRaised", fields: [created_by_id], references: [id])
+
+  @@index([company_id, status])
+  @@index([created_by_id])
+}
+
+/// A plan, subscription, domain, hosting or licence with its renewal date (2026-11-21).
+/// No logins or passwords here: only where the account is held.
+model DigitalAsset {
+  id              Int       @id @default(autoincrement())
+  company_id      Int
+  name            String    @db.VarChar(150)
+  kind            String    @db.VarChar(16) // DOMAIN, HOSTING, SOFTWARE, SUBSCRIPTION, SSL, EMAIL, OTHER
+  vendor          String?   @db.VarChar(120)
+  plan            String?   @db.VarChar(120)
+  cost            Decimal?  @db.Decimal(12, 2)
+  billing_cycle   String    @default("YEARLY") @db.VarChar(12) // MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY, ONE_TIME
+  renews_on       DateTime  @db.Date
+  auto_renew      Boolean   @default(false)
+  account_note    String?   @db.VarChar(255)
+  owner_id        Int?
+  status          String    @default("ACTIVE") @db.VarChar(10) // ACTIVE, CANCELLED
+  notes           String?   @db.Text
+  last_renewed_at DateTime?
+  created_by_id   Int
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  owner Employee? @relation("DigitalAssetOwner", fields: [owner_id], references: [id])
+
+  @@index([company_id, status, renews_on])
+}
+
+/// A meeting that HR, the MD or a manager schedules, with the people invited (2026-11-21).
+model Meeting {
+  id            Int       @id @default(autoincrement())
+  company_id    Int
+  created_by_id Int
+  title         String    @db.VarChar(150)
+  details       String?   @db.Text
+  location      String?   @db.VarChar(200)
+  start_at      DateTime
+  end_at        DateTime?
+  status        String    @default("SCHEDULED") @db.VarChar(10) // SCHEDULED, CANCELLED
+  reminded_at   DateTime?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  created_by Employee        @relation("MeetingsOrganised", fields: [created_by_id], references: [id])
+  invites    MeetingInvite[]
+
+  @@index([company_id, start_at])
+  @@index([created_by_id])
+}
+
+model MeetingInvite {
+  id           Int       @id @default(autoincrement())
+  meeting_id   Int
+  employee_id  Int
+  response     String?   @db.VarChar(8) // YES, NO
+  responded_at DateTime?
+
+  meeting  Meeting  @relation(fields: [meeting_id], references: [id], onDelete: Cascade)
+  employee Employee @relation("MeetingsInvitedTo", fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@unique([meeting_id, employee_id])
+  @@index([employee_id])
+}
+
+/// A commit on the main branch, sent by a GitHub webhook, counted as a code update on Team Today (2026-11-21).
+model CodeUpdate {
+  id           Int      @id @default(autoincrement())
+  company_id   Int
+  repo         String   @db.VarChar(80)
+  sha          String   @db.VarChar(40)
+  message      String   @db.VarChar(300)
+  author_name  String?  @db.VarChar(120)
+  author_login String?  @db.VarChar(60)
+  committed_at DateTime
+  employee_id  Int?
+  created_at   DateTime @default(now())
+
+  @@unique([repo, sha])
+  @@index([employee_id, committed_at])
 }

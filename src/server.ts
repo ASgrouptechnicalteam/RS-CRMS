@@ -31,6 +31,10 @@ import workUpdateRoutes from './routes/workUpdates';
 import assetRoutes from './routes/assets';
 import masterLeadRoutes from './routes/masterLeads';
 import dayPlanRoutes from './routes/dayPlans';
+import supportTicketRoutes from './routes/supportTickets';
+import digitalAssetRoutes from './routes/digitalAssets';
+import meetingRoutes from './routes/meetings';
+import githubWebhookRoutes from './routes/githubWebhook';
 import myDayRoutes from './routes/myDay';
 import reportRoutes from './routes/reports';
 import taskRoutes from './routes/tasks';
@@ -178,7 +182,15 @@ app.use(compression({ threshold: 0 }) as any);
 // ever reaches route code (bulk-upload's own MAX_BATCH_SIZE check never
 // gets a chance to run). 10mb comfortably covers a 1000-row import batch
 // (the cap bulk-upload enforces per request) with headroom.
-app.use(express.json({ limit: '10mb' }));
+// The webhook from GitHub is checked against its exact bytes, so they are kept for that route only.
+app.use(
+  express.json({
+    limit: '10mb',
+    verify: (req, _res, buf) => {
+      if (req.url?.startsWith('/api/v1/webhooks/github')) (req as any).rawBody = buf;
+    },
+  }),
+);
 
 import { setupSwagger } from './utils/swagger';
 setupSwagger(app);
@@ -304,6 +316,10 @@ if (mountInternal) {
   app.use('/api/v1/master-leads', masterLeadRoutes);
   app.use('/api/v1/associates', associateRoutes);
   app.use('/api/v1/day-plans', dayPlanRoutes);
+  app.use('/api/v1/support-tickets', supportTicketRoutes);
+  app.use('/api/v1/digital-assets', digitalAssetRoutes);
+  app.use('/api/v1/meetings', meetingRoutes);
+  app.use('/api/v1/webhooks/github', githubWebhookRoutes);
   app.use('/api/v1/my-day', myDayRoutes);
   app.use('/api/v1/reports', reportRoutes);
   app.use('/api/v1/tasks', taskRoutes);

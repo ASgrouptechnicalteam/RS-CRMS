@@ -23,6 +23,50 @@ const router = Router();
 
 const p = prisma;
 
+/**
+ * What a recorded CRM change was about, from its API path. Set from what the live records show
+ * (owner, 2026-11-21, last 30 days): the Technical Manager's day is master data and project
+ * entry, the MD decides attendance and listings, HR and the digital team polish projects and
+ * post content, and everyone files a daily report and plan. Asking for one's own leave or
+ * checking in is not work, so it is kept apart (OWN) and left out of "changes made".
+ */
+export type CrmGroup =
+  'OWN' | 'APPROVALS' | 'FINANCE' | 'PEOPLE' | 'LISTINGS' | 'MASTER_DATA' | 'LEADS' | 'OTHER';
+export const crmActionGroup = (method: string, path: string): CrmGroup => {
+  const p = (path || '').replace(/^\/api\/v1/, '');
+  if (
+    /^\/(reports\/daily|day-plans|work-log|work-updates)(\/|$)/.test(p) ||
+    /^\/attendance\/(leave-proposal|late-proposal|early-logout-proposal|field-work-proposal|wfh-proposal|comp-off-request|swap-request|duty-request|claim-request|check-in|check-out|selfie-check-in|checkout|scan)(\/|$)/.test(
+      p,
+    )
+  )
+    return 'OWN';
+  if (
+    /\/(approve|reject|md-approve|md-reject|md-review|review|accountant-review|verify|dm-verify-as-is)(\/|$)/.test(
+      p,
+    )
+  )
+    return 'APPROVALS';
+  if (
+    /^\/(expenses|expense-refunds|payments|installments|petty-cash|finance|refunds)(\/|$)/.test(p)
+  )
+    return 'FINANCE';
+  if (/^\/master-leads(\/|$)/.test(p)) return 'MASTER_DATA';
+  if (
+    /^\/(employees|attendance|holidays|assets|digital-assets|meetings|work-calendar)(\/|$)/.test(p)
+  )
+    return 'PEOPLE';
+  if (
+    /^\/(properties|projects|units|pricing-rules|pricing|project-units|amenities|drafts)(\/|$)/.test(
+      p,
+    )
+  )
+    return 'LISTINGS';
+  if (/^\/(leads|customers|demos|site-visits|opportunities|bookings|associates)(\/|$)/.test(p))
+    return 'LEADS';
+  return 'OTHER';
+};
+
 // Which kind of work a role does, for Team Today's per-role view.
 const workKind = (
   roleNames: string[],
@@ -283,6 +327,91 @@ const dayOfPeople =
       const countOf = (rows: any[], key: string, empId: number) =>
         rows.find((r) => r[key] === empId)?._count._all || 0;
 
+      // A "new" call is the first call ever made to a lead, credited to whoever made it; every
+      // other call is a follow-up (owner, 2026-11-21: calls are required for every role, so every
+      // role shows them).
+      const todaysCalls: { actor_id: number; lead_id: number }[] = await p.leadActivity.findMany({
+        where: { actor_id: { in: ids }, activity_type: 'CALL_LOGGED', created_at: inDay },
+        select: { actor_id: true, lead_id: true },
+        take: 20000,
+      });
+      const calledToday = [...new Set(todaysCalls.map((c) => c.lead_id))];
+      const firstCallBy = new Map<number, number>(); // lead id -> who made its first call ever
+      const calledBeforeToday = new Set<number>();
+      if (calledToday.length) {
+        const earlier: { lead_id: number }[] = await p.leadActivity.findMany({
+          where: {
+            lead_id: { in: calledToday },
+            activity_type: 'CALL_LOGGED',
+            created_at: { lt: inDay.gte },
+          },
+          select: { lead_id: true },
+          distinct: ['lead_id'],
+        });
+        for (const e of earlier) calledBeforeToday.add(e.lead_id);
+        const history: { lead_id: number; actor_id: number }[] = await p.leadActivity.findMany({
+          where: {
+            lead_id: { in: calledToday },
+            activity_type: 'CALL_LOGGED',
+            created_at: { lt: end },
+          },
+          select: { lead_id: true, actor_id: true },
+          orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+        });
+        for (const h of history)
+          if (!firstCallBy.has(h.lead_id)) firstCallBy.set(h.lead_id, h.actor_id);
+      }
+      // Leads whose very first call was today, by this person.
+      const firstCallsToday = (empId: number) => {
+        const todays = new Set(
+          todaysCalls.filter((c) => c.actor_id === empId).map((c) => c.lead_id),
+        );
+        // The first call counts only when it falls today (a lead first called earlier is a follow-up).
+        return [...todays].filter(
+          (leadId) => firstCallBy.get(leadId) === empId && !calledBeforeToday.has(leadId),
+        ).length;
+      };
+      // A completed visit counts once, for the person who ran it: the agent named on it, or the
+      // project manager when no agent was named (never both, never the PM of a visit someone
+      // else ran).
+      const completedVisits: {
+        assigned_agent_id: number | null;
+        project_manager_id: number | null;
+      }[] = await p.siteVisitBooking.findMany({
+        where: {
+          status: 'COMPLETED',
+          completed_at: inDay,
+          OR: [{ assigned_agent_id: { in: ids } }, { project_manager_id: { in: ids } }],
+        },
+        select: { assigned_agent_id: true, project_manager_id: true },
+      });
+      const visitsRunBy = (empId: number) =>
+        completedVisits.filter((v) =>
+          v.assigned_agent_id ? v.assigned_agent_id === empId : v.project_manager_id === empId,
+        ).length;
+      // Telecallers: visits they scheduled today, and visits of their leads that were completed today.
+      const visitsScheduled = await p.siteVisitBooking.groupBy({
+        by: ['telecaller_id'],
+        where: { telecaller_id: { in: ids }, created_at: inDay, status: { not: 'CANCELLED' } },
+        _count: { _all: true },
+      });
+      const visitsDoneForLeads = await p.siteVisitBooking.groupBy({
+        by: ['telecaller_id'],
+        where: { telecaller_id: { in: ids }, status: 'COMPLETED', completed_at: inDay },
+        _count: { _all: true },
+      });
+      // Code updates (commits on the main branch) credited to each person.
+      const codeUpdates = await p.codeUpdate.groupBy({
+        by: ['employee_id'],
+        where: { employee_id: { in: ids }, committed_at: inDay },
+        _count: { _all: true },
+      });
+      const bookingsToday = await p.booking.groupBy({
+        by: ['assigned_employee_id'],
+        where: { assigned_employee_id: { in: ids }, created_at: inDay },
+        _count: { _all: true },
+      });
+
       const count = (empId: number, types: string[]) =>
         byType
           .filter((r) => r.actor_id === empId && types.includes(r.activity_type))
@@ -302,7 +431,7 @@ const dayOfPeople =
           )
           .reduce((n, r) => n + r._count._all, 0);
         const tasks = tasksDone.find((t) => t.assignee_id === e.id)?._count._all || 0;
-        const visits = visitsDone.find((v) => v.assigned_agent_id === e.id)?._count._all || 0;
+        const visits = visitsRunBy(e.id);
 
         const roleNames = e.roles.map((r) => r.role.name);
         const kind = workKind(roleNames);
@@ -352,7 +481,7 @@ const dayOfPeople =
         };
         const site = {
           visits_today: countOf(pmVisitsToday, 'project_manager_id', e.id),
-          visits_completed: countOf(pmVisitsCompleted, 'project_manager_id', e.id),
+          visits_completed: visitsRunBy(e.id),
           visits_awaiting_acceptance: countOf(pmPending, 'project_manager_id', e.id),
           inventory_updates:
             countOf(verifications, 'actor_id', e.id) +
@@ -385,7 +514,7 @@ const dayOfPeople =
         const today = offToday.get(e.id);
         if (today?.offDay && att) flags.push(`Worked on ${today.label}`);
         if (today?.duty && !att) flags.push('Duty day today, not checked in yet');
-        if (att && !anyWork) {
+        if (att && att.status !== 'ABSENT' && !anyWork) {
           flags.push(
             kind === 'CALLING'
               ? 'Present, but no work recorded in the CRM'
@@ -475,7 +604,54 @@ const dayOfPeople =
           // Their day off today ("Sunday (week off)", a holiday...), or null when expected at work.
           off_today: today?.offDay ? today.label : null,
           duty_today: !!today?.duty,
+          crm_counts: (() => {
+            const by: Record<CrmGroup, number> = {
+              OWN: 0,
+              APPROVALS: 0,
+              FINANCE: 0,
+              PEOPLE: 0,
+              LISTINGS: 0,
+              MASTER_DATA: 0,
+              LEADS: 0,
+              OTHER: 0,
+            };
+            for (const a of crmActionRows.filter((x) => x.actor_id === e.id)) {
+              try {
+                const v = JSON.parse(a.new_value || '{}');
+                by[crmActionGroup(v.method || '', v.path || '')]++;
+              } catch {
+                by.OTHER++;
+              }
+            }
+            return {
+              // Work changes only: filing one's own report or asking for leave is not counted.
+              total:
+                by.APPROVALS +
+                by.FINANCE +
+                by.PEOPLE +
+                by.LISTINGS +
+                by.MASTER_DATA +
+                by.LEADS +
+                by.OTHER,
+              approvals: by.APPROVALS,
+              finance: by.FINANCE,
+              people: by.PEOPLE,
+              listings: by.LISTINGS,
+              master_data: by.MASTER_DATA,
+              leads: by.LEADS,
+              other: by.OTHER,
+              own: by.OWN,
+            };
+          })(),
           calls_logged: calls,
+          calls_new: firstCallsToday(e.id),
+          calls_followup: calls - firstCallsToday(e.id),
+          visits_booked: count(e.id, ['SITE_VISIT_REQUESTED', 'SITE_VISIT_BOOKED']),
+          visits_scheduled: countOf(visitsScheduled, 'telecaller_id', e.id),
+          visits_done_for_leads: countOf(visitsDoneForLeads, 'telecaller_id', e.id),
+          code_updates: countOf(codeUpdates, 'employee_id', e.id),
+          bookings_today: countOf(bookingsToday, 'assigned_employee_id', e.id),
+          listings_added: countOf(propertiesAdded, 'created_by_id', e.id),
           leads_worked: leads,
           contacted: count(e.id, ['CONTACTED']),
           qualified: count(e.id, ['QUALIFIED']),
@@ -521,7 +697,11 @@ const dayOfPeople =
           }),
       );
 
-      return res.status(200).json({ date: dateString, employees: rows });
+      // Each lead once, however many people touched it (the per-person counts add up to more).
+      const leadsWorkedTotal = new Set(leadsWorked.map((l: any) => l.lead_id)).size;
+      return res
+        .status(200)
+        .json({ date: dateString, employees: rows, leads_worked_total: leadsWorkedTotal });
     } catch (error) {
       logger.error('Team today error:', error);
       return res.status(500).json({ error: "Failed to load the team's day" });

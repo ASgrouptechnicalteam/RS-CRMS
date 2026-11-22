@@ -58,3 +58,24 @@ export function calculateLeadScore(leadData: any): number {
 
   return score;
 }
+
+/**
+ * A lead that arrives with only a number is named "Unknown 1", "Unknown 2"...
+ * until the telecaller asks for the name and edits it (owner, 2026-11-21).
+ * Returns the next free number for the company.
+ */
+export async function nextUnknownNumber(
+  client: { lead: { findMany: (args: any) => Promise<{ customer_name: string }[]> } },
+  companyId: number,
+): Promise<number> {
+  const rows = await client.lead.findMany({
+    where: { company_id: companyId, customer_name: { startsWith: 'Unknown ' } },
+    select: { customer_name: true },
+  });
+  let max = 0;
+  for (const r of rows) {
+    const m = /^Unknown (\d+)$/.exec(r.customer_name);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max + 1;
+}

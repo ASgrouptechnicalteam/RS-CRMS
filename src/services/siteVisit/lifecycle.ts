@@ -507,8 +507,8 @@ export async function startVisit(user: TokenPayload, visitId: number) {
     visitId,
     'START',
     {},
-    'SITE_VISIT_COMPLETED',
-    `Site visit ${visit.booking_code} is now ACTIVE (in progress).`,
+    'SITE_VISIT_STARTED',
+    `Site visit ${visit.booking_code} started (in progress).`,
   );
 }
 
@@ -609,6 +609,11 @@ export async function completeVisit(
     (outcomes.length > 0 && outcomes.every((o: any) => o.outcome === 'NOT_INTERESTED')) ||
     (outcomes.length === 0 && rating === 'NOT_INTERESTED');
 
+  // What goes on the lead's timeline: the real result, not just a count
+  // (owner, 2026-11-21): which properties and units, liked or not and why, the
+  // rating, and what the PM wrote.
+  const completionNote = await describeVisitCompletion(visit, outcomes, feedback_notes, rating);
+
   const result = await p.$transaction(
     async (tx: import('@prisma/client').Prisma.TransactionClient) => {
       // Persist outcomes. A compound-unique lookup needs a real (non-null)
@@ -660,7 +665,7 @@ export async function completeVisit(
           lead: { connect: { id: visit.lead_id } },
           actor: { connect: { id: user.employeeId } },
           activity_type: 'SITE_VISIT_COMPLETED',
-          notes: `Site Visit Completed! ${outcomes.length} property outcome(s) recorded.`,
+          notes: completionNote,
         },
       });
 
@@ -706,4 +711,52 @@ export async function completeVisit(
   await markPresentFromVisit(visitId);
 
   return result;
+}
+
+const OUTCOME_WORD: Record<string, string> = {
+  INTERESTED: 'Interested',
+  NOT_INTERESTED: 'Not interested',
+  MAYBE: 'Maybe',
+  NEUTRAL: 'Maybe',
+};
+const pretty = (v: string) => v.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase());
+
+/** The timeline text for a completed visit: outcome per property or unit, rating and feedback. */
+export async function describeVisitCompletion(
+  visit: { booking_code: string; project_id?: number | null },
+  outcomes: any[],
+  feedback_notes?: string,
+  rating?: string,
+): Promise<string> {
+  const propertyIds = outcomes.filter((o) => o.property_id != null).map((o) => o.property_id);
+  const unitIds = outcomes.filter((o) => o.project_unit_id != null).map((o) => o.project_unit_id);
+  const [props, units] = await Promise.all([
+    propertyIds.length
+      ? p.property.findMany({
+          where: { id: { in: propertyIds } },
+          select: { id: true, title: true },
+        })
+      : [],
+    unitIds.length
+      ? p.projectUnit.findMany({
+          where: { id: { in: unitIds } },
+          select: { id: true, unit_number: true, project: { select: { name: true } } },
+        })
+      : [],
+  ]);
+  const propName = new Map(props.map((x: any) => [x.id, x.title as string]));
+  const unitName = new Map(
+    units.map((x: any) => [x.id, `${x.project?.name ? `${x.project.name}, ` : ''}unit ${x.unit_number}`]),
+  );
+  const lines = outcomes.map((o) => {
+    const name =
+      o.property_id != null ? propName.get(o.property_id) : unitName.get(o.project_unit_id);
+    const word = OUTCOME_WORD[o.outcome] || pretty(String(o.outcome || ''));
+    return `${name || 'Property'}: ${word}${o.outcome_reason ? ` (${o.outcome_reason})` : ''}`;
+  });
+  const parts = [`Site visit ${visit.booking_code} completed.`];
+  if (rating) parts.push(`Customer response: ${pretty(rating)}.`);
+  if (lines.length) parts.push(lines.join('; ') + '.');
+  if (feedback_notes?.trim()) parts.push(`Feedback: ${feedback_notes.trim()}`);
+  return parts.join(' ');
 }

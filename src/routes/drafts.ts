@@ -62,10 +62,20 @@ const withType =
     next();
   };
 
+// Staff must give the contactable person (name and number) with every new listing (owner, 2026-11-21).
+const requireContact = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const b = req.body || {};
+  if (!String(b.owner_contact_name || '').trim() || !String(b.owner_contact_phone || '').trim()) {
+    return res.status(400).json({ error: 'Enter the contactable person name and number.' });
+  }
+  return next();
+};
+
 router.post(
   '/property',
   authenticateToken,
   requireAuthz(Permissions.DRAFTS_SUBMIT),
+  requireContact,
   withType('PROPERTY'),
   validateRequestBody(PropertyDraftCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -82,6 +92,7 @@ router.post(
   '/project',
   authenticateToken,
   requireAuthz(Permissions.DRAFTS_SUBMIT),
+  requireContact,
   withType('PROJECT'),
   validateRequestBody(ProjectDraftCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {

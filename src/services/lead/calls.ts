@@ -132,6 +132,18 @@ export async function logCall(
       if (owner && CONNECTED.includes(input.outcome) && !doNotCall) {
         await closeCallBackTasks(tx, leadId, { outcome: 'COMPLETED', assigneeId: owner.id });
       }
+      // A call task assigned to this person for this lead is done once the call is
+      // logged (owner, 2026-11-21). No performance points: those are given only
+      // through the task-status route.
+      await tx.task.updateMany({
+        where: {
+          lead_id: leadId,
+          assignee_id: user.employeeId,
+          task_type: 'CALL',
+          status: { in: ['PENDING', 'IN_PROGRESS', 'OVERDUE'] },
+        },
+        data: { status: 'COMPLETED', completed_at: new Date() },
+      });
       // Do-not-call-again: no call-back may remain for ANYONE on this lead.
       if (doNotCall && ownsLead) await closeCallBackTasks(tx, leadId, { outcome: 'CANCELLED' });
 
@@ -139,6 +151,7 @@ export async function logCall(
         ? await tx.task.create({
             data: {
               title: `Call back ${lead.customer_name}`,
+              task_type: 'CALL',
               description: note || CALL_OUTCOMES[input.outcome],
               assignee_id: callBackOwnerId,
               created_by: user.employeeId,
@@ -298,4 +311,25 @@ export async function getCallQueueMeta(user: TokenPayload, activeStatuses: strin
     if (!m.follow_up_at || t.target_date < m.follow_up_at) m.follow_up_at = t.target_date;
   }
   return meta;
+}
+
+/**
+ * Feedback on a lead at any time (owner, 2026-11-21): what the customer said,
+ * from any call, message or meeting, kept on the lead's timeline. Anyone who can
+ * see the lead may add it; it changes nothing else on the lead.
+ */
+export async function addLeadFeedback(user: TokenPayload, leadId: number, text: string) {
+  const scope = await buildLeadScope(user);
+  const lead = await p.lead.findFirst({ where: { id: leadId, ...scope }, select: { id: true } });
+  if (!lead) throw new AppError(404, 'Lead not found');
+  const clean = (text || '').trim();
+  if (clean.length < 3) throw new AppError(400, 'Write the feedback (at least 3 characters).');
+  return p.leadActivity.create({
+    data: {
+      lead_id: leadId,
+      actor_id: user.employeeId,
+      activity_type: 'FEEDBACK_ADDED',
+      notes: clean.slice(0, 1000),
+    },
+  });
 }

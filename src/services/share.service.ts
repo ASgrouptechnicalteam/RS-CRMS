@@ -33,6 +33,21 @@ export type Sections = Record<SectionKey, boolean>;
 
 const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
 
+/** The title as a readable web address part: "Green Valley Plots, Phase 2" -> "green-valley-plots-phase-2". */
+export const titleSlug = (title: string) =>
+  title
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50)
+    .replace(/-+$/g, '');
+
+/** A link is "title~key"; only the key (after the last ~) opens it. The old "key" alone still works. */
+export const keyOfLink = (link: string) =>
+  link.includes('~') ? link.slice(link.lastIndexOf('~') + 1) : link;
+
 export const formatPrice = (value?: number | null): string | null => {
   if (!value || value <= 0) return null;
   if (value >= 10000000) return `₹${(value / 10000000).toFixed(2).replace(/\.?0+$/, '')} Cr`;
@@ -543,7 +558,9 @@ export async function createShareLink(
     },
   });
   const base = origin && /^https?:\/\/[\w.:-]+$/.test(origin) ? origin : APP_URL();
-  const url = `${base}/s/${token}`;
+  // The title in the address (owner, 2026-11-21), so the customer sees what the link is about.
+  const slug = titleSlug(content.title || '');
+  const url = `${base}/s/${slug ? `${slug}~` : ''}${token}`;
 
   const [employee, company] = await Promise.all([
     p.employee.findUnique({ where: { id: user.employeeId }, select: { full_name: true } }),
@@ -605,7 +622,8 @@ export async function revokeShareLink(user: TokenPayload, id: number) {
 
 // ─── The customer's side: no login, the token is the only key ──────────────
 
-async function findLiveLink(token: string) {
+async function findLiveLink(link: string) {
+  const token = keyOfLink(link);
   if (!/^[\w-]{20,40}$/.test(token)) throw new AppError(404, 'This link is not valid.');
   const row = await p.shareLink.findUnique({ where: { token_hash: hashToken(token) } });
   if (!row) throw new AppError(404, 'This link is not valid.');

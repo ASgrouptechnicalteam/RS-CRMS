@@ -66,6 +66,10 @@ export const PERFORMANCE_WEIGHTS = {
   midnightAutoCheckoutPenalty: 1.0,
   missingDailyReportPenalty: 1.0,
   completedAllWorkBoost: 1.0,
+  // Target results (owner, 2026-11-21): a day +/-1, a week +/-3, a month +/-5.
+  dayTargetPoints: 1.0,
+  weekTargetPoints: 3.0,
+  monthTargetPoints: 5.0,
 } as const;
 
 export interface PerformanceScoreInputs {
@@ -78,6 +82,13 @@ export interface PerformanceScoreInputs {
   midnightAutoCheckoutEvents: number;
   missingDailyReportEvents: number;
   completedAllWorkEvents: number;
+  /** Target results for finished days, weeks and months (written by the night job). */
+  dayTargetsMet?: number;
+  dayTargetsMissed?: number;
+  weekTargetsMet?: number;
+  weekTargetsMissed?: number;
+  monthTargetsMet?: number;
+  monthTargetsMissed?: number;
   propertyBookingContributions: number;
   presentCount: number;
   // § Phase 4: pre-summed points across the month's attendance logs, from
@@ -122,6 +133,16 @@ export interface PerformanceScoreBreakdown {
   missingDailyReportPenalty: number;
   completedAllWorkEvents: number;
   completedAllWorkBoost: number;
+  /** Points from finished days, weeks and months whose targets were reached. */
+  periodTargetBoost: number;
+  /** Points lost for finished days, weeks and months whose targets were missed. */
+  periodTargetPenalty: number;
+  dayTargetsMet: number;
+  dayTargetsMissed: number;
+  weekTargetsMet: number;
+  weekTargetsMissed: number;
+  monthTargetsMet: number;
+  monthTargetsMissed: number;
   tier: PerformanceTier;
   tierBoostMultiplier: number;
   tierPenaltyMultiplier: number;
@@ -164,6 +185,14 @@ const ZERO_BREAKDOWN: PerformanceScoreBreakdown = {
   missingDailyReportPenalty: 0,
   completedAllWorkEvents: 0,
   completedAllWorkBoost: 0,
+  periodTargetBoost: 0,
+  periodTargetPenalty: 0,
+  dayTargetsMet: 0,
+  dayTargetsMissed: 0,
+  weekTargetsMet: 0,
+  weekTargetsMissed: 0,
+  monthTargetsMet: 0,
+  monthTargetsMissed: 0,
   tier: 'SATISFACTORY',
   tierBoostMultiplier: 1.0,
   tierPenaltyMultiplier: 1.0,
@@ -230,6 +259,20 @@ export function calculatePerformanceScore(
     completedAllWorkEvents: inputs.completedAllWorkEvents,
     completedAllWorkBoost:
       inputs.completedAllWorkEvents * PERFORMANCE_WEIGHTS.completedAllWorkBoost,
+    periodTargetBoost:
+      (inputs.dayTargetsMet ?? 0) * PERFORMANCE_WEIGHTS.dayTargetPoints +
+      (inputs.weekTargetsMet ?? 0) * PERFORMANCE_WEIGHTS.weekTargetPoints +
+      (inputs.monthTargetsMet ?? 0) * PERFORMANCE_WEIGHTS.monthTargetPoints,
+    periodTargetPenalty:
+      (inputs.dayTargetsMissed ?? 0) * PERFORMANCE_WEIGHTS.dayTargetPoints +
+      (inputs.weekTargetsMissed ?? 0) * PERFORMANCE_WEIGHTS.weekTargetPoints +
+      (inputs.monthTargetsMissed ?? 0) * PERFORMANCE_WEIGHTS.monthTargetPoints,
+    dayTargetsMet: inputs.dayTargetsMet ?? 0,
+    dayTargetsMissed: inputs.dayTargetsMissed ?? 0,
+    weekTargetsMet: inputs.weekTargetsMet ?? 0,
+    weekTargetsMissed: inputs.weekTargetsMissed ?? 0,
+    monthTargetsMet: inputs.monthTargetsMet ?? 0,
+    monthTargetsMissed: inputs.monthTargetsMissed ?? 0,
     tier,
     tierBoostMultiplier,
     tierPenaltyMultiplier,
@@ -243,7 +286,8 @@ export function calculatePerformanceScore(
     breakdown.presentBoost +
     breakdown.propertyBookingBoost +
     breakdown.targetExceededBoost +
-    breakdown.completedAllWorkBoost;
+    breakdown.completedAllWorkBoost +
+    breakdown.periodTargetBoost;
   const totalPenalties =
     breakdown.latePenalty +
     breakdown.halfDayPenalty +
@@ -251,7 +295,8 @@ export function calculatePerformanceScore(
     breakdown.overduePenalty +
     breakdown.uninformedAbsentPenalty +
     breakdown.midnightAutoCheckoutPenalty +
-    breakdown.missingDailyReportPenalty;
+    breakdown.missingDailyReportPenalty +
+    breakdown.periodTargetPenalty;
 
   const adjustedBoosts = totalBoosts * tierBoostMultiplier;
   const adjustedPenalties = totalPenalties * tierPenaltyMultiplier;

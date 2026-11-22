@@ -387,7 +387,10 @@ export const BasePropertyCreateSchema = z.object({
   bathrooms: z.number().int().optional().nullable(),
   facing: z.string().optional().nullable(),
   amenities: z.string().optional().nullable(),
-  possession_status: z.enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION']).optional().nullable(),
+  possession_status: z
+    .enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION', 'PLANNING'])
+    .optional()
+    .nullable(),
   assigned_pm_id: z.number().int().optional().nullable(),
   // Was missing entirely — validateRequestBody's schema.parse() strips any key not
   // listed here, so a property could never actually be linked to a project via this
@@ -490,7 +493,10 @@ export const PropertyUpdateSchema = z.object({
   bathrooms: z.number().int().optional().nullable(),
   facing: z.string().optional().nullable(),
   amenities: z.any().optional(),
-  possession_status: z.enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION']).optional().nullable(),
+  possession_status: z
+    .enum(['READY_TO_MOVE', 'UNDER_CONSTRUCTION', 'PLANNING'])
+    .optional()
+    .nullable(),
   assigned_pm_id: z.number().int().optional().nullable(),
   project_id: z.number().int().positive().nullable().optional(),
   // Nested detail sub-records: passed through here and handled by

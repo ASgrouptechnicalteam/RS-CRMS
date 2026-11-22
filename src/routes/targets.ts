@@ -9,6 +9,7 @@ import { can } from '../authz/authorization';
 import { getDownstreamEmployeeIds } from '../utils/hierarchy';
 import {
   TARGET_METRICS,
+  METRIC_GROUPS,
   TARGET_PERIODS,
   METRIC_LABELS,
   progressFor,
@@ -420,7 +421,11 @@ router.get(
           metric_label: METRIC_LABELS[r.metric as TargetMetric] || r.metric,
           employee_name: r.employee_id ? byId.get(r.employee_id) || null : null,
         })),
-        metrics: TARGET_METRICS.map((m) => ({ key: m, label: METRIC_LABELS[m] })),
+        metrics: TARGET_METRICS.map((m) => ({
+          key: m,
+          label: METRIC_LABELS[m],
+          group: METRIC_GROUPS[m],
+        })),
         periods: TARGET_PERIODS,
       });
     } catch (error) {

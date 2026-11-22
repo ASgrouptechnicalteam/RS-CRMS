@@ -14,6 +14,15 @@ export interface PlanItem {
   ref_id?: number | null;
   time?: string | null;
   done?: boolean;
+  /** CHANGED: did something else instead (note says what). NOT_DONE: not done (note says why). */
+  status?: 'CHANGED' | 'NOT_DONE' | null;
+  note?: string | null;
+  /** Work done that was not in the plan. */
+  unplanned?: boolean;
+  /** Moved here from a day the person was on leave. */
+  carried_from?: string | null;
+  /** Already moved on to another day; never moved twice. */
+  carried_to?: string | null;
 }
 
 const addDays = (date: string, n: number) =>
@@ -119,6 +128,7 @@ export async function saveTomorrow(
     kind?: PlanItem['kind'];
     ref_id?: number | null;
     time?: string | null;
+    carried_from?: string | null;
   }[],
 ) {
   const date = await nextWorkDay(employeeId);
@@ -128,6 +138,7 @@ export async function saveTomorrow(
     kind: i.kind || 'NOTE',
     ref_id: i.ref_id ?? null,
     time: i.time ?? null,
+    carried_from: i.carried_from ?? null,
     done: false,
   }));
   await p.dayPlan.upsert({
@@ -147,6 +158,111 @@ export async function setItemDone(employeeId: number, itemId: string, done: bool
     data: { items: items as any },
   });
   return { date, items, saved: true };
+}
+
+/**
+ * How the day went for one planned item (owner, 2026-11-21): done, done differently
+ * (say what was done instead), or not done (say why).
+ */
+export async function setItemStatus(
+  employeeId: number,
+  itemId: string,
+  input: { status: 'DONE' | 'CHANGED' | 'NOT_DONE' | 'OPEN'; note?: string },
+) {
+  const date = getISTComponents(new Date()).dateString;
+  const plan = await getPlan(employeeId, date);
+  const note = (input.note || '').trim().slice(0, 300);
+  if ((input.status === 'CHANGED' || input.status === 'NOT_DONE') && note.length < 3) {
+    throw Object.assign(
+      new Error(
+        input.status === 'CHANGED' ? 'Say what you did instead.' : 'Say why it was not done.',
+      ),
+      { statusCode: 400 },
+    );
+  }
+  const items = plan.items.map((i) => {
+    if (i.id !== itemId) return i;
+    if (input.status === 'DONE') return { ...i, done: true, status: null, note: null };
+    if (input.status === 'OPEN') return { ...i, done: false, status: null, note: null };
+    return { ...i, done: input.status === 'CHANGED', status: input.status, note };
+  });
+  await p.dayPlan.update({
+    where: { employee_id_plan_date: { employee_id: employeeId, plan_date: date } },
+    data: { items: items as any },
+  });
+  return { date, items, saved: true };
+}
+
+/** Something done today that was not in the plan. */
+export async function addUnplanned(employeeId: number, text: string) {
+  const date = getISTComponents(new Date()).dateString;
+  const plan = await getPlan(employeeId, date);
+  const item: PlanItem = {
+    id: randomUUID(),
+    text: text.trim().slice(0, 300),
+    kind: 'NOTE',
+    done: true,
+    unplanned: true,
+  };
+  const items = [...plan.items, item];
+  await p.dayPlan.upsert({
+    where: { employee_id_plan_date: { employee_id: employeeId, plan_date: date } },
+    create: { employee_id: employeeId, plan_date: date, items: items as any },
+    update: { items: items as any },
+  });
+  return { date, items, saved: true };
+}
+
+/**
+ * Plans made for days the person is now on leave move to the first working day after the
+ * leave, so the work is not lost (owner, 2026-11-21). Only what is not done moves, and
+ * each item moves once.
+ */
+export async function carryPlansForward(employeeId: number, leaveDates: string[]) {
+  if (!leaveDates.length) return { moved: 0, to: null as string | null };
+  const sorted = [...new Set(leaveDates)].sort();
+  const employee = await p.employee.findUnique({
+    where: { id: employeeId },
+    select: { id: true, company_id: true, weekly_off_day: true },
+  });
+  if (!employee) return { moved: 0, to: null as string | null };
+  const leave = new Set(sorted);
+  // The first working day after the last leave day.
+  let target = addDays(sorted[sorted.length - 1], 1);
+  for (let n = 0; n < 10; n++) {
+    if (!leave.has(target) && !(await dayInfo(employee, target)).offDay) break;
+    target = addDays(target, 1);
+  }
+
+  const plans = await p.dayPlan.findMany({
+    where: { employee_id: employeeId, plan_date: { in: sorted } },
+  });
+  const carried: PlanItem[] = [];
+  for (const plan of plans) {
+    const items = (plan.items as unknown as PlanItem[]) || [];
+    const marked = items.map((i) => {
+      if (i.done || i.carried_to || i.unplanned) return i;
+      carried.push({
+        ...i,
+        id: randomUUID(),
+        done: false,
+        status: null,
+        note: null,
+        carried_from: plan.plan_date,
+        carried_to: null,
+      });
+      return { ...i, carried_to: target };
+    });
+    await p.dayPlan.update({ where: { id: plan.id }, data: { items: marked as any } });
+  }
+  if (!carried.length) return { moved: 0, to: target };
+  const existing = await getPlan(employeeId, target);
+  await p.dayPlan.upsert({
+    where: { employee_id_plan_date: { employee_id: employeeId, plan_date: target } },
+    create: { employee_id: employeeId, plan_date: target, items: carried as any },
+    update: { items: [...existing.items, ...carried] as any },
+  });
+  return { moved: carried.length, to: target };
 }
 
 /** Today's assigned calls, for the telecaller's own screen. */

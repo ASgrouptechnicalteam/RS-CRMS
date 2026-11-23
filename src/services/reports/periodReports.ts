@@ -1159,6 +1159,25 @@ async function personalReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
           ]
         : []),
       ...(below ? [{ text: `${plural(below, 'day')} below target`, link: '/my-day' }] : []),
+      ...(inp.uninformedAbsentEvents
+        ? [
+            {
+              text: `${plural(inp.uninformedAbsentEvents, 'day')} absent without telling`,
+              link: '/my-day',
+            },
+          ]
+        : []),
+      ...(inp.lateCount + inp.halfDayCount
+        ? [{ text: `${plural(inp.lateCount + inp.halfDayCount, 'late or half-day check-in')}` }]
+        : []),
+      ...(inp.midnightAutoCheckoutEvents
+        ? [
+            {
+              text: `${plural(inp.midnightAutoCheckoutEvents, 'day')} you forgot to check out`,
+              link: '/my-day',
+            },
+          ]
+        : []),
       ...(inputs.get(me.id)!.missingDailyReportEvents
         ? [
             {

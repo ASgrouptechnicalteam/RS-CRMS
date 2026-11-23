@@ -7,28 +7,79 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { cpInterestRateLimiter } from '../middleware/rateLimiter';
 import { normalizeCpPhone } from '../services/cpLeadImport';
 import { getAccessibleCompanyIds } from '../authz/dataScope';
+import { decryptData, encryptData } from '../utils/crypto';
 
 /**
- * The channel partner details form (2026-11-23).
+ * The channel partner registration form (2026-11-23): the paper form, online.
  *
  * POST / is deliberately UNAUTHENTICATED (partners reach it through a link we share, with no account),
  * so it is rate limited, takes a fixed set of fields only, and answers the same whether or not the
- * phone number was sent before (a repeat updates the earlier entry). It only COLLECTS details: no
- * account, lead or notification is created from it. HR (and MD, Admin, Marketing Director) read the
- * entries in the HR hub through GET /.
+ * phone number was sent before (a repeat updates the earlier entry and keeps its partner number).
+ * It only COLLECTS details: no account, lead or notification is created from it. HR (and MD, Admin,
+ * Marketing Director) read the entries in the HR hub.
+ *
+ * Aadhaar, PAN and the bank account are stored encrypted. The list only ever carries them masked; the
+ * full values come from GET /:id/sensitive, which is logged.
  */
+/** Bump when the terms in the web form change, so each entry shows which wording was accepted. */
+const TERMS_VERSION = '2026-11-23';
+
 const router = Router();
 const p = prisma as any;
 
+/** An empty form field means "not given". */
+const blank = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
+const optional = <T extends z.ZodTypeAny>(t: T) => z.preprocess(blank, t.optional());
+
 const FormSchema = z.object({
   full_name: z.string().trim().min(2, 'Enter your full name').max(120),
+  father_spouse_name: z.string().trim().min(2, "Enter your father's or spouse's name").max(120),
+  age: z.coerce
+    .number({ invalid_type_error: 'Enter your age' })
+    .int()
+    .min(18, 'You must be 18 or older')
+    .max(90, 'Enter a valid age'),
+  occupation: z.string().trim().min(2, 'Enter your occupation').max(80),
+  address: z.string().trim().min(8, 'Enter your full address').max(500),
   phone: z.string().trim().min(8, 'Enter your mobile number').max(20),
+  whatsapp: optional(z.string().trim().max(20)),
   email: z.string().trim().toLowerCase().email('Enter a valid email address').max(120),
   projects_handled: z
     .string()
     .trim()
     .min(3, 'Tell us which projects you handle')
     .max(2000, 'Please keep this under 2000 characters'),
+  // Bank and ID details are optional here; HR can collect them later.
+  bank_name: optional(z.string().trim().max(80)),
+  bank_branch: optional(z.string().trim().max(80)),
+  bank_account: optional(
+    z
+      .string()
+      .transform((v) => v.replace(/\s|-/g, ''))
+      .pipe(z.string().regex(/^\d{6,20}$/, 'Bank account number should be 6 to 20 digits')),
+  ),
+  ifsc: optional(
+    z
+      .string()
+      .transform((v) => v.replace(/\s/g, '').toUpperCase())
+      .pipe(z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'IFSC looks wrong. Example: SBIN0001234')),
+  ),
+  pan: optional(
+    z
+      .string()
+      .transform((v) => v.replace(/\s/g, '').toUpperCase())
+      .pipe(z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/, 'PAN looks wrong. Example: ABCDE1234F')),
+  ),
+  aadhaar: optional(
+    z
+      .string()
+      .transform((v) => v.replace(/[\s-]/g, ''))
+      .pipe(z.string().regex(/^[2-9]\d{11}$/, 'Aadhaar should be 12 digits')),
+  ),
+  place: z.string().trim().min(2, 'Enter your place').max(80),
+  agreed: z.literal(true, {
+    errorMap: () => ({ message: 'Please accept the terms and conditions to continue' }),
+  }),
   // A hidden field real people never fill: bots do.
   website: z.string().optional(),
 });
@@ -46,45 +97,93 @@ async function formCompanyId(): Promise<number | null> {
   return company?.id ?? null;
 }
 
+/** The next partner number for a company: RRH-CP-0001, RRH-CP-0002, ... */
+async function nextPartnerNo(company_id: number | null): Promise<string> {
+  const rows = await p.cpApplication.findMany({
+    where: { company_id, partner_no: { startsWith: 'RRH-CP-' } },
+    select: { partner_no: true },
+  });
+  const top = rows.reduce((m: number, r: { partner_no: string }) => {
+    const n = Number(r.partner_no.slice('RRH-CP-'.length));
+    return Number.isInteger(n) && n > m ? n : m;
+  }, 0);
+  return `RRH-CP-${String(top + 1).padStart(4, '0')}`;
+}
+
+const maskTail = (v: string | null, keep: number) =>
+  v ? `${'X'.repeat(Math.max(0, v.length - keep))}${v.slice(-keep)}` : null;
+
 router.post('/', cpInterestRateLimiter, async (req, res: Response) => {
   try {
     const body = FormSchema.safeParse(req.body || {});
     if (!body.success) {
       return res.status(400).json({ error: body.error.issues[0]?.message || 'Check the details.' });
     }
+    const d = body.data;
     // A bot filled the hidden field: pretend it worked and store nothing.
-    if (body.data.website) return res.status(201).json({ ok: true });
+    if (d.website) return res.status(201).json({ ok: true, partner_no: 'RRH-CP-0000' });
 
-    const phone = normalizeCpPhone(body.data.phone);
+    const phone = normalizeCpPhone(d.phone);
     if (!phone) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
+    const whatsapp = d.whatsapp ? normalizeCpPhone(d.whatsapp) : phone;
+    if (!whatsapp)
+      return res.status(400).json({ error: 'Enter a valid 10-digit WhatsApp number.' });
 
     const company_id = await formCompanyId();
+    const data = {
+      full_name: d.full_name,
+      father_spouse_name: d.father_spouse_name,
+      age: d.age,
+      occupation: d.occupation,
+      address: d.address,
+      email: d.email,
+      whatsapp,
+      projects_handled: d.projects_handled,
+      bank_name: d.bank_name ?? null,
+      bank_branch: d.bank_branch ?? null,
+      ifsc: d.ifsc ?? null,
+      bank_account_enc: d.bank_account ? encryptData(d.bank_account) : null,
+      pan_enc: d.pan ? encryptData(d.pan) : null,
+      aadhaar_enc: d.aadhaar ? encryptData(d.aadhaar) : null,
+      place: d.place,
+      agreed_terms_at: new Date(),
+      terms_version: TERMS_VERSION,
+    };
+
     const existing = await p.cpApplication.findFirst({ where: { company_id, phone } });
     if (existing) {
-      await p.cpApplication.update({
+      const row = await p.cpApplication.update({
         where: { id: existing.id },
         data: {
-          full_name: body.data.full_name,
-          email: body.data.email,
-          projects_handled: body.data.projects_handled,
+          ...data,
+          // An earlier entry (before the full form) has no number yet: it gets one now.
+          ...(existing.partner_no ? {} : { partner_no: await nextPartnerNo(company_id) }),
           submissions: existing.submissions + 1,
           status: 'NEW',
         },
       });
-    } else {
-      await p.cpApplication.create({
-        data: {
-          company_id,
-          full_name: body.data.full_name,
-          phone,
-          email: body.data.email,
-          projects_handled: body.data.projects_handled,
-        },
-      });
+      return res.status(201).json({ ok: true, partner_no: row.partner_no });
     }
-    return res.status(201).json({ ok: true });
+    // Two people sending at the same moment could be given the same number: the unique key refuses
+    // the second, which then takes the next one.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const row = await p.cpApplication.create({
+          data: { company_id, phone, ...data, partner_no: await nextPartnerNo(company_id) },
+        });
+        return res.status(201).json({ ok: true, partner_no: row.partner_no });
+      } catch (e: any) {
+        if (e?.code !== 'P2002') throw e;
+        // Same phone sent twice at once: update instead.
+        const again = await p.cpApplication.findFirst({ where: { company_id, phone } });
+        if (again) {
+          return res.status(201).json({ ok: true, partner_no: again.partner_no });
+        }
+      }
+    }
+    throw new Error('Could not allocate a partner number');
   } catch (e) {
-    logger.error({ err: e }, 'Partner details form error');
+    logger.error({ err: e }, 'Channel partner registration form error');
     return res.status(500).json({ error: 'Could not save your details. Please try again.' });
   }
 });
@@ -96,6 +195,23 @@ const onlyHr = (req: AuthenticatedRequest, res: Response, next: () => void) =>
   (req.user?.roles || []).some((r) => readers.includes(r))
     ? next()
     : res.status(403).json({ error: 'Only HR, the MD or Admin can see these.' });
+
+/** What the list shows: everything except the secrets, which are masked. */
+function present(row: any) {
+  const { bank_account_enc, pan_enc, aadhaar_enc, ...rest } = row;
+  const account = decryptData(bank_account_enc);
+  const pan = decryptData(pan_enc);
+  const aadhaar = decryptData(aadhaar_enc);
+  return {
+    ...rest,
+    bank_account_masked: maskTail(account, 4),
+    pan_masked: maskTail(pan, 4),
+    aadhaar_masked: maskTail(aadhaar, 4),
+    has_bank: !!(account && rest.ifsc && rest.bank_name),
+    has_pan: !!pan,
+    has_aadhaar: !!aadhaar,
+  };
+}
 
 router.get('/', authenticateToken, onlyHr, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -114,18 +230,59 @@ router.get('/', authenticateToken, onlyHr, async (req: AuthenticatedRequest, res
     });
     const n = (s: string) => counts.find((c: any) => c.status === s)?._count._all ?? 0;
     return res.status(200).json({
-      applications: rows,
+      applications: rows.map(present),
       counts: { new: n('NEW'), reviewed: n('REVIEWED'), total: n('NEW') + n('REVIEWED') },
     });
   } catch (e) {
-    logger.error({ err: e }, 'Partner details list error');
+    logger.error({ err: e }, 'Channel partner registration list error');
     return res.status(500).json({ error: 'Could not load the partner details.' });
   }
 });
 
+// The full bank account, PAN and Aadhaar of one entry. Every read is written to the audit log.
+router.get(
+  '/:id/sensitive',
+  authenticateToken,
+  onlyHr,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0)
+        return res.status(400).json({ error: 'Check the details.' });
+      const companyIds = await getAccessibleCompanyIds(req.user!);
+      const row = await p.cpApplication.findFirst({
+        where: { id, company_id: { in: companyIds } },
+      });
+      if (!row) return res.status(404).json({ error: 'Not found' });
+      await p.auditEvent.create({
+        data: {
+          actor_id: req.user!.employeeId,
+          action: 'CP_APPLICATION_SENSITIVE_VIEWED',
+          entity_type: 'CP_APPLICATION',
+          entity_id: id,
+          reason: `Viewed bank, PAN and Aadhaar of ${row.partner_no || `entry ${id}`}`,
+        },
+      });
+      return res.status(200).json({
+        bank_account: decryptData(row.bank_account_enc),
+        pan: decryptData(row.pan_enc),
+        aadhaar: decryptData(row.aadhaar_enc),
+      });
+    } catch (e) {
+      logger.error({ err: e }, 'Channel partner registration sensitive read error');
+      return res.status(500).json({ error: 'Could not load.' });
+    }
+  },
+);
+
 const EditSchema = z.object({
   status: z.enum(['NEW', 'REVIEWED']).optional(),
   hr_note: z.string().trim().max(500).optional().nullable(),
+  // The paper form's "company" part: filled by HR.
+  designation: z.string().trim().max(80).optional().nullable(),
+  commission: z.string().trim().max(80).optional().nullable(),
+  travel_allowance: z.string().trim().max(80).optional().nullable(),
+  superior: z.string().trim().max(120).optional().nullable(),
 });
 router.patch(
   '/:id',
@@ -143,16 +300,24 @@ router.patch(
         where: { id, company_id: { in: companyIds } },
       });
       if (!row) return res.status(404).json({ error: 'Not found' });
+      const d = body.data;
+      const clean = (v: string | null | undefined) => (v === undefined ? undefined : v || null);
       const saved = await p.cpApplication.update({
         where: { id },
         data: {
-          ...(body.data.status ? { status: body.data.status } : {}),
-          ...(body.data.hr_note !== undefined ? { hr_note: body.data.hr_note || null } : {}),
+          ...(d.status ? { status: d.status } : {}),
+          ...(d.hr_note !== undefined ? { hr_note: clean(d.hr_note) } : {}),
+          ...(d.designation !== undefined ? { designation: clean(d.designation) } : {}),
+          ...(d.commission !== undefined ? { commission: clean(d.commission) } : {}),
+          ...(d.travel_allowance !== undefined
+            ? { travel_allowance: clean(d.travel_allowance) }
+            : {}),
+          ...(d.superior !== undefined ? { superior: clean(d.superior) } : {}),
         },
       });
-      return res.status(200).json({ application: saved });
+      return res.status(200).json({ application: present(saved) });
     } catch (e) {
-      logger.error({ err: e }, 'Partner details edit error');
+      logger.error({ err: e }, 'Channel partner registration edit error');
       return res.status(500).json({ error: 'Could not save.' });
     }
   },

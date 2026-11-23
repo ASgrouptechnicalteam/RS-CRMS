@@ -3751,6 +3751,29 @@ model CpApplication {
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
 
+  // Channel partner registration form (2026-11-23): the paper form, online. The partner number is made by the server.
+  partner_no       String?   @db.VarChar(20)
+  occupation         String?   @db.VarChar(80)
+  age                Int?
+  father_spouse_name String?   @db.VarChar(120)
+  address            String?   @db.Text
+  whatsapp           String?   @db.VarChar(20)
+  bank_name          String?   @db.VarChar(80)
+  bank_branch        String?   @db.VarChar(80)
+  ifsc               String?   @db.VarChar(11)
+  bank_account_enc   String?   @db.Text // encrypted
+  pan_enc            String?   @db.Text // encrypted
+  aadhaar_enc        String?   @db.Text // encrypted
+  place              String?   @db.VarChar(80)
+  agreed_terms_at    DateTime?
+  terms_version      String?   @db.VarChar(20) // which wording they accepted
+  // Filled by HR, not by the applicant.
+  designation        String?   @db.VarChar(80)
+  commission         String?   @db.VarChar(80)
+  travel_allowance   String?   @db.VarChar(80)
+  superior           String?   @db.VarChar(120)
+
   @@unique([company_id, phone])
+  @@unique([company_id, partner_no])
   @@index([status, created_at])
 }

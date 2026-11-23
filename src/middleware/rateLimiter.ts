@@ -116,6 +116,21 @@ export const feedbackRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// The channel partner details form is public (a link we share, no account), so it is throttled per IP:
+// a handful of entries an hour is plenty for one person, and stops a script filling the table.
+export const cpInterestRateLimiter = rateLimit({
+  keyGenerator: (req: any) => clientIp(req),
+  windowMs: 60 * 60 * 1000,
+  skip: skipRateLimitInTests,
+  max: 12,
+  message: {
+    error: 'Too many submissions from this connection. Please try again later.',
+    code: 'RATE_LIMIT_EXCEEDED',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Keyed by IP *and* the employee code being tried, not IP alone. With an
 // IP-only key, one successful login reset the whole IP's counter -- so an
 // attacker holding any valid account could interleave their own login to

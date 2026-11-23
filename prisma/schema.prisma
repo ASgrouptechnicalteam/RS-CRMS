@@ -3735,3 +3735,22 @@ model CpReferralActivity {
 
   @@index([referral_id, created_at])
 }
+
+/// A channel partner's details, sent through the public form we share (2026-11-23): who they are and
+/// which projects they handle. Only collected and shown to HR; no account is created from it.
+model CpApplication {
+  id               Int      @id @default(autoincrement())
+  company_id       Int?
+  full_name        String   @db.VarChar(120)
+  phone            String   @db.VarChar(20)
+  email            String   @db.VarChar(120)
+  projects_handled String   @db.Text
+  status           String   @default("NEW") @db.VarChar(12) // NEW | REVIEWED
+  hr_note          String?  @db.VarChar(500)
+  submissions      Int      @default(1)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@unique([company_id, phone])
+  @@index([status, created_at])
+}

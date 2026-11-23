@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger';
+import { associateWork } from '../services/associateWork';
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
@@ -309,27 +310,38 @@ router.get('/cpm-summary', authenticateToken, async (req: AuthenticatedRequest, 
     const employeeId = req.user!.employeeId;
     const { dateString, range } = dayRange(undefined);
     const monthStart = getISTMidnightInstant(`${dateString.slice(0, 8)}01`);
-    const [monthRows, associates, leadsThisMonth, visitsThisMonth] = await Promise.all([
-      p.auditEvent.findMany({
-        where: { actor_id: employeeId, action: WORK_LOG_ACTION, created_at: { gte: monthStart } },
-        select: { id: true, new_value: true, created_at: true },
-      }),
-      associatesFor(employeeId),
-      p.lead.count({
-        where: {
-          created_by_id: employeeId,
-          external_agent_name: { not: null },
-          created_at: { gte: monthStart },
-        },
-      }),
-      p.siteVisitBooking.count({
-        where: {
-          lead: { created_by_id: employeeId, external_agent_name: { not: null } },
-          created_at: { gte: monthStart },
-          status: { not: 'CANCELLED' },
-        },
-      }),
-    ]);
+    const dayStartInstant = getISTMidnightInstant(dateString);
+    const [monthRows, associates, leadsThisMonth, visitsThisMonth, todayWork, monthWork] =
+      await Promise.all([
+        p.auditEvent.findMany({
+          where: { actor_id: employeeId, action: WORK_LOG_ACTION, created_at: { gte: monthStart } },
+          select: { id: true, new_value: true, created_at: true },
+        }),
+        associatesFor(employeeId),
+        p.lead.count({
+          where: {
+            created_by_id: employeeId,
+            external_agent_name: { not: null },
+            created_at: { gte: monthStart },
+          },
+        }),
+        p.siteVisitBooking.count({
+          where: {
+            lead: { created_by_id: employeeId, external_agent_name: { not: null } },
+            created_at: { gte: monthStart },
+            status: { not: 'CANCELLED' },
+          },
+        }),
+        // What the Associates page recorded (the same numbers the reports and targets use).
+        associateWork(employeeId, {
+          start: dayStartInstant,
+          end: new Date(dayStartInstant.getTime() + 24 * 3600 * 1000),
+        }),
+        associateWork(employeeId, {
+          start: monthStart,
+          end: new Date(Date.now() + 24 * 3600 * 1000),
+        }),
+      ]);
     const entries = monthRows.map(parseWorkLog).filter((e): e is WorkLogEntry => !!e);
     const today = entries.filter((e) => e.at >= range.gte && e.at < range.lt);
     const staleCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -337,6 +349,8 @@ router.get('/cpm-summary', authenticateToken, async (req: AuthenticatedRequest, 
       date: dateString,
       today: countByKind(today),
       month: countByKind(entries),
+      associates_today: todayWork,
+      associates_month: monthWork,
       leads_from_associates_month: leadsThisMonth,
       visits_from_associates_month: visitsThisMonth,
       associates_total: associates.length,

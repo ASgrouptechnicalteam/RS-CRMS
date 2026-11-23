@@ -44,6 +44,7 @@ import {
   visitDoneWhere,
   WAITING_PM,
 } from '../counts/metrics';
+import { associateWork } from '../associateWork';
 import { Person, groupOf, nameOf, rankBy, staffOf } from '../counts/people';
 
 /**
@@ -1315,29 +1316,50 @@ async function pmReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
 async function channelReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
   const me = ctx.subject.person!;
   const since = new Date(ctx.now.getTime() - 120 * 24 * 3600 * 1000);
-  const rows = await p.auditEvent.findMany({
-    where: {
-      actor_id: me.id,
-      action: WORK_LOG_ACTION,
-      created_at: { gte: new Date(Math.min(since.getTime(), ctx.prev.start.getTime())) },
-    },
-    select: { id: true, new_value: true, created_at: true },
-  });
+  const [rows, now, before, followUps, owned] = await Promise.all([
+    // Older Work Log entries (visits, prospects, bookings are still logged there).
+    p.auditEvent.findMany({
+      where: {
+        actor_id: me.id,
+        action: WORK_LOG_ACTION,
+        created_at: { gte: new Date(Math.min(since.getTime(), ctx.prev.start.getTime())) },
+      },
+      select: { id: true, new_value: true, created_at: true },
+    }),
+    // What the Associates page recorded (calls, agreements, office visits, enrolments, leads).
+    associateWork(me.id, ctx.range),
+    associateWork(me.id, ctx.prev),
+    p.associateFollowUp.findMany({
+      where: { employee_id: me.id, created_at: { gte: ctx.range.start, lt: ctx.range.end } },
+      select: { channel: true, outcome: true, associate: { select: { full_name: true } } },
+    }),
+    p.associate.findMany({
+      where: { owner_cpm_id: me.id, pipeline: { notIn: ['LEFT'] } },
+      select: { full_name: true, last_contacted_at: true },
+    }),
+  ]);
   const entries = rows
     .map(parseWorkLog)
     .filter((e): e is NonNullable<ReturnType<typeof parseWorkLog>> => !!e);
-  const count = (kinds: string[], r: Range) =>
+  const logged = (kinds: string[], r: Range) =>
     entries
       .filter((e) => kinds.includes(e.kind) && e.at >= r.start && e.at < r.end)
       .reduce((n, e) => n + (e.count || 1), 0);
-  const KINDS: [string, string, string[]][] = [
-    ['calls', 'Associate calls', ['ASSOCIATE_CALL', 'ASSOCIATE_NEW_CALL']],
-    ['prospects', 'New prospects', ['ASSOCIATE_PROSPECT']],
-    ['office', 'Office visits', ['ASSOCIATE_OFFICE_VISIT']],
-    ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT']],
-    ['site', 'Associate site visits', ['ASSOCIATE_SITE_VISIT']],
-    ['bookings', 'Associate bookings', ['ASSOCIATE_BOOKING']],
+  // One number per line: the Associates page record plus anything logged in the Work Log.
+  const KINDS: [string, string, string[], (w: typeof now) => number][] = [
+    ['calls', 'Associate calls', ['ASSOCIATE_CALL', 'ASSOCIATE_NEW_CALL'], (w) => w.calls],
+    ['agreed', 'Agreed to work with us', [], (w) => w.agreed],
+    ['prospects', 'New prospects', ['ASSOCIATE_PROSPECT'], () => 0],
+    ['office', 'Office visits', ['ASSOCIATE_OFFICE_VISIT'], (w) => w.office_visits],
+    ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT'], (w) => w.enrolled],
+    ['site', 'Associate site visits', ['ASSOCIATE_SITE_VISIT'], (w) => w.site_visits],
+    ['leads', 'Leads from associates', [], (w) => w.leads],
+    ['bookings', 'Associate bookings', ['ASSOCIATE_BOOKING'], () => 0],
   ];
+  const value = (kinds: string[], pick: (w: typeof now) => number, r: Range, w: typeof now) =>
+    logged(kinds, r) + pick(w);
+
+  // Per associate: Work Log names plus the associates followed up on the Associates page.
   const last = new Map<string, Date>();
   const per = new Map<string, Record<string, number>>();
   for (const e of entries) {
@@ -1350,6 +1372,28 @@ async function channelReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
       per.set(name, m);
     }
   }
+  for (const a of owned) {
+    if (
+      a.last_contacted_at &&
+      (!last.get(a.full_name) || last.get(a.full_name)! < a.last_contacted_at)
+    )
+      last.set(a.full_name, a.last_contacted_at);
+    if (!a.last_contacted_at && !last.has(a.full_name)) last.set(a.full_name, new Date(0));
+  }
+  const CHANNEL_KIND: Record<string, string> = {
+    CALL: 'ASSOCIATE_CALL',
+    OFFICE_VISIT: 'ASSOCIATE_OFFICE_VISIT',
+    SITE_VISIT: 'ASSOCIATE_SITE_VISIT',
+  };
+  for (const f of followUps) {
+    const name = f.associate?.full_name;
+    if (!name) continue;
+    const m = per.get(name) || {};
+    const kind = CHANNEL_KIND[f.channel];
+    if (kind) m[kind] = (m[kind] || 0) + 1;
+    if (f.outcome === 'AGREED') m.AGREED = (m.AGREED || 0) + 1;
+    per.set(name, m);
+  }
   const quiet = [...last.entries()].filter(
     ([, at]) => ctx.now.getTime() - at.getTime() > 14 * 24 * 3600 * 1000,
   );
@@ -1361,7 +1405,10 @@ async function channelReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
         { key: 'name', label: 'Associate', format: 'text' },
         { key: 'last', label: 'Last contact', format: 'text' },
       ],
-      rows: quiet.map(([name, at]) => ({ name, last: istDate(at) })),
+      rows: quiet.map(([name, at]) => ({
+        name,
+        last: at.getTime() === 0 ? 'Never' : istDate(at),
+      })),
       empty: 'Every associate was contacted in the last 14 days.',
     },
   ];
@@ -1371,26 +1418,44 @@ async function channelReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
       title: 'Per associate',
       columns: [
         { key: 'name', label: 'Associate', format: 'text' },
-        ...KINDS.map(([k, l]) => ({ key: k, label: l })),
+        ...KINDS.filter(([k]) => ['calls', 'agreed', 'office', 'site'].includes(k)).map(
+          ([k, l]) => ({
+            key: k,
+            label: l,
+          }),
+        ),
       ],
       rows: [...per.entries()].map(([name, m]) => ({
         name,
-        ...Object.fromEntries(
-          KINDS.map(([k, , kinds]) => [k, kinds.reduce((n, x) => n + (m[x] || 0), 0)]),
-        ),
+        calls: (m.ASSOCIATE_CALL || 0) + (m.ASSOCIATE_NEW_CALL || 0),
+        agreed: m.AGREED || 0,
+        office: m.ASSOCIATE_OFFICE_VISIT || 0,
+        site: m.ASSOCIATE_SITE_VISIT || 0,
       })),
       empty: 'Nothing logged this month.',
     });
   }
   return {
-    headline: KINDS.map(([k, l, kinds]) =>
-      h(k, l, count(kinds, ctx.range), count(kinds, ctx.prev), 'number', '/my-day'),
+    headline: KINDS.map(([k, l, kinds, pick]) =>
+      h(
+        k,
+        l,
+        value(kinds, pick, ctx.range, now),
+        value(kinds, pick, ctx.prev, before),
+        'number',
+        '/associates',
+      ),
     ),
     tables,
     exceptions: quiet.length
-      ? [{ text: `${plural(quiet.length, 'associate')} not contacted in 14 days` }]
+      ? [
+          {
+            text: `${plural(quiet.length, 'associate')} not contacted in 14 days`,
+            link: '/associates',
+          },
+        ]
       : [],
-    next: 'Log every associate call, visit and booking in the Work Log the same day: the report is built only from it.',
+    next: 'Log every associate call on the Associates page. Office and site visits can be logged there too. Everything is counted from it.',
   };
 }
 

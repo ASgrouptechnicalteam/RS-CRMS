@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { associateWork } from './associateWork';
 import { Roles } from '../shared';
 import { periodContaining } from './counts/period';
 import {
@@ -308,15 +309,33 @@ const CPM_FIELDS: FieldDef[] = [
     label: 'Total calls made',
     recorded: withAssociateCalls(['ASSOCIATE_CALL', 'ASSOCIATE_NEW_CALL'], 'all'),
   },
+  {
+    id: 'agreed',
+    label: 'Associates who agreed to work with us',
+    recorded: async (c: Ctx) =>
+      (await associateWork(c.employeeId, { start: c.start, end: c.end })).agreed,
+  },
   ...(
     [
-      ['newProspects', 'New prospects', ['ASSOCIATE_PROSPECT']],
-      ['associateOfficeVisits', "Associates' office visits", ['ASSOCIATE_OFFICE_VISIT']],
-      ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT']],
-      ['associateSiteVisits', 'Associate site visits', ['ASSOCIATE_SITE_VISIT']],
-      ['bookings', 'Bookings', ['ASSOCIATE_BOOKING']],
-    ] as [string, string, string[]][]
-  ).map(([id, label, kinds]) => ({ id, label, recorded: workLogSum(kinds) })),
+      ['newProspects', 'New prospects', ['ASSOCIATE_PROSPECT'], null],
+      [
+        'associateOfficeVisits',
+        "Associates' office visits",
+        ['ASSOCIATE_OFFICE_VISIT'],
+        'office_visits',
+      ],
+      ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT'], 'enrolled'],
+      ['associateSiteVisits', 'Associate site visits', ['ASSOCIATE_SITE_VISIT'], 'site_visits'],
+      ['bookings', 'Bookings', ['ASSOCIATE_BOOKING'], null],
+    ] as [string, string, string[], 'office_visits' | 'enrolled' | 'site_visits' | null][]
+  ).map(([id, label, kinds, part]) => ({
+    id,
+    label,
+    // The Work Log entries plus what the Associates page recorded the same day.
+    recorded: async (c: Ctx) =>
+      (await workLogSum(kinds)(c)) +
+      (part ? (await associateWork(c.employeeId, { start: c.start, end: c.end }))[part] : 0),
+  })),
 ];
 
 const typed = (

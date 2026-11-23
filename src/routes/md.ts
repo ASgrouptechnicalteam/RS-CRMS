@@ -9,6 +9,7 @@ import { authenticateToken, AuthenticatedRequest, requireRole } from '../middlew
 import { getAccessibleCompanyIds, buildEmployeeScope } from '../authz/dataScope';
 import { getISTComponents, getISTMidnightInstant } from '../utils/time';
 import { WORK_LOG_ACTION, parseWorkLog, WorkLogEntry, platformCounts } from './workLog';
+import { associateWork } from '../services/associateWork';
 import { progressFor, PLATFORM_METRICS } from '../services/targets.service';
 import { CRM_ACTION, crmActionLabel } from '../middleware/recordCrmAction';
 import { requireAuthz } from '../middleware/authz';
@@ -417,6 +418,16 @@ const dayOfPeople =
           .filter((r) => r.actor_id === empId && types.includes(r.activity_type))
           .reduce((n, r) => n + r._count._all, 0);
 
+      // Channel Partner Managers: what the Associates page recorded today (calls, agreements, visits), so
+      // their day shows here even when nothing was typed in the Work Log.
+      const associateByPerson = new Map(
+        await Promise.all(
+          employees
+            .filter((e) => workKind(e.roles.map((r) => r.role.name)) === 'PARTNER')
+            .map(async (e) => [e.id, await associateWork(e.id, { start, end })] as const),
+        ),
+      );
+
       const rows = employees.map((e) => {
         const att = attendance.find((a) => a.employee_id === e.id);
         const fl = firstLast.find((f) => f.actor_id === e.id);
@@ -585,6 +596,7 @@ const dayOfPeople =
           site,
           drafts,
           work_log: workLog,
+          associates: associateByPerson.get(e.id) || null,
           // Digital team: what they are on now, paused and finished (Work updates).
           work_updates: isWorkUpdateRole(roleNames) ? workUpdates : null,
           // Digital team: posts per platform today, from the work log (item 1).

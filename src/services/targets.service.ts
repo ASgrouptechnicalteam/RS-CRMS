@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { associateWork } from './associateWork';
 import { getISTComponents, getISTDayOfWeek, toHolidayDateKey } from '../utils/time';
 import { periodContaining } from './counts/period';
 import { DEAL_STATUSES } from './counts/deals';
@@ -40,6 +41,13 @@ export const TARGET_METRICS = [
   'PEOPLE_ACTIONS',
   'LISTING_EDITS',
   'MASTER_DATA_ACTIONS',
+  // Added 2026-11-23: the Channel Partner Manager's work with associates, from the Associates page.
+  'ASSOCIATE_CALLS',
+  'NEW_ASSOCIATE_CALLS',
+  'ASSOCIATES_AGREED',
+  'ASSOCIATES_ONBOARDED',
+  'ASSOCIATE_OFFICE_VISITS',
+  'ASSOCIATE_LEADS',
 ] as const;
 export const TARGET_PERIODS = ['DAY', 'WEEK', 'MONTH'] as const;
 export type TargetMetric = (typeof TARGET_METRICS)[number];
@@ -71,6 +79,12 @@ export const METRIC_LABELS: Record<TargetMetric, string> = {
   PEOPLE_ACTIONS: 'People and attendance actions (HR)',
   LISTING_EDITS: 'Property and project edits',
   MASTER_DATA_ACTIONS: 'Master data actions',
+  ASSOCIATE_CALLS: 'Calls to associates',
+  NEW_ASSOCIATE_CALLS: 'Calls to new associates (not joined yet)',
+  ASSOCIATES_AGREED: 'Associates who agreed to work with us',
+  ASSOCIATES_ONBOARDED: 'Associates onboarded',
+  ASSOCIATE_OFFICE_VISITS: 'Associate office visits',
+  ASSOCIATE_LEADS: 'Leads added from associates',
 };
 
 const G_CALL = 'Calling (Telecaller, Sales Manager, Agent, every role)';
@@ -78,6 +92,7 @@ const G_SITE = 'Site visits and bookings (Telecaller, Project Manager)';
 const G_DATA = 'Listings and data (Project Manager, Inventory, Data Entry, Technical Manager)';
 const G_DIGI = 'Digital team (from the work log)';
 const G_MGMT = 'Management, HR and Finance';
+const G_ASSOC = 'Associates (Channel Partner Manager)';
 
 /** Which kind of work each measure suits, so the setting screen can group them. */
 export const METRIC_GROUPS: Record<TargetMetric, string> = {
@@ -106,6 +121,12 @@ export const METRIC_GROUPS: Record<TargetMetric, string> = {
   FINANCE_ENTRIES: G_MGMT,
   PEOPLE_ACTIONS: G_MGMT,
   TASKS_DONE: G_MGMT,
+  ASSOCIATE_CALLS: G_ASSOC,
+  NEW_ASSOCIATE_CALLS: G_ASSOC,
+  ASSOCIATES_AGREED: G_ASSOC,
+  ASSOCIATES_ONBOARDED: G_ASSOC,
+  ASSOCIATE_OFFICE_VISITS: G_ASSOC,
+  ASSOCIATE_LEADS: G_ASSOC,
 };
 
 /** Target metric -> the work-log platform it counts. */
@@ -297,6 +318,22 @@ export async function measureMetric(
           ready_at: { gte: start, lt: end },
         },
       });
+    case 'ASSOCIATE_CALLS':
+    case 'NEW_ASSOCIATE_CALLS':
+    case 'ASSOCIATES_AGREED':
+    case 'ASSOCIATES_ONBOARDED':
+    case 'ASSOCIATE_OFFICE_VISITS':
+    case 'ASSOCIATE_LEADS': {
+      const w = await associateWork(employeeId, { start, end });
+      return {
+        ASSOCIATE_CALLS: w.calls,
+        NEW_ASSOCIATE_CALLS: w.new_calls,
+        ASSOCIATES_AGREED: w.agreed,
+        ASSOCIATES_ONBOARDED: w.enrolled,
+        ASSOCIATE_OFFICE_VISITS: w.office_visits,
+        ASSOCIATE_LEADS: w.leads,
+      }[metric];
+    }
     case 'BOOKINGS_CONFIRMED': {
       const ids = [...(await bookingIdsConfirmedIn({ start, end })).keys()];
       if (ids.length === 0) return 0;

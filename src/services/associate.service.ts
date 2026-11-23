@@ -10,6 +10,7 @@ import { getISTComponents, getISTMidnightInstant } from '../utils/time';
 import { updateLeadStatus } from './lead/status';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import { logger } from '../utils/logger';
+import { SPOKE_OUTCOMES } from './associateWork';
 
 // Associates (freelance agents who bring leads) and the Channel Partner
 // Manager's work with them: the list, follow-ups, the daily queue and lead
@@ -24,15 +25,32 @@ const DAY = 24 * 60 * 60 * 1000;
 export const PIPELINES = [
   'INVITED',
   'CONTACTED',
+  'AGREED',
   'DOCUMENTS',
   'ENROLLED',
   'ACTIVE',
   'DORMANT',
   'LEFT',
 ] as const;
-export const PROSPECT_STAGES = ['INVITED', 'CONTACTED', 'DOCUMENTS'];
+export const PROSPECT_STAGES = ['INVITED', 'CONTACTED', 'AGREED', 'DOCUMENTS'];
 export const LOGIN_STAGES = ['ENROLLED', 'ACTIVE', 'DORMANT'];
-export const OUTCOMES = ['REACHED', 'NO_ANSWER', 'BUSY', 'WRONG_NUMBER', 'CALL_BACK'] as const;
+export const OUTCOMES = [
+  'REACHED',
+  'NO_ANSWER',
+  'BUSY',
+  'WRONG_NUMBER',
+  'CALL_BACK',
+  // Answers when calling someone who has not joined yet (2026-11-23)
+  'AGREED',
+  'THINKING',
+  'DECLINED',
+  // Answers when calling an associate who has joined
+  'HAS_LEAD',
+  'WANTS_VISIT',
+  'NO_UPDATE',
+] as const;
+export const PROSPECT_OUTCOMES = ['AGREED', 'THINKING', 'DECLINED'];
+export const JOINED_OUTCOMES = ['HAS_LEAD', 'WANTS_VISIT', 'NO_UPDATE'];
 export const CHANNELS = ['CALL', 'WHATSAPP', 'OFFICE_VISIT', 'SITE_VISIT'] as const;
 /** Leads that need no more follow-up. */
 export const CLOSED_LEAD = ['BOOKED', 'DROPPED', 'RECOVERED_TO_POOL'];
@@ -508,10 +526,18 @@ export const associatePortalEnabled = () => process.env.ASSOCIATE_PORTAL_ENABLED
 // ---- Follow-ups ----
 
 /** Next follow-up when none is given: a day for a missed call, a week after a talk. */
+const NEXT_DAYS: Record<string, number> = {
+  REACHED: 7,
+  AGREED: 2, // send the form, then check it is filled
+  THINKING: 3,
+  DECLINED: 30, // not closed: one more try in a month
+  HAS_LEAD: 1, // add the lead
+  WANTS_VISIT: 1, // book the visit
+  NO_UPDATE: 7,
+};
 function suggestNext(outcome: string, now: Date) {
   if (outcome === 'WRONG_NUMBER') return null;
-  const days = outcome === 'REACHED' ? 7 : 1;
-  return dayStart(new Date(now.getTime() + days * DAY));
+  return dayStart(new Date(now.getTime() + (NEXT_DAYS[outcome] ?? 1) * DAY));
 }
 
 export async function logFollowUp(
@@ -522,18 +548,30 @@ export async function logFollowUp(
   const a = await getInScope(user, id);
   const now = new Date();
   const channel = body.channel || 'CALL';
+  // Each answer fits one kind of associate: someone not yet joined, or someone who has.
+  if (PROSPECT_OUTCOMES.includes(body.outcome) && !PROSPECT_STAGES.includes(a.pipeline)) {
+    throw new AppError(400, 'That answer is for someone who has not joined yet.');
+  }
+  if (JOINED_OUTCOMES.includes(body.outcome) && !LOGIN_STAGES.includes(a.pipeline)) {
+    throw new AppError(400, 'That answer is for an associate who has joined.');
+  }
   const next =
     body.next_follow_up_at === undefined
       ? suggestNext(body.outcome, now)
       : body.next_follow_up_at
         ? parseDay(body.next_follow_up_at)
         : null;
-  const reached = body.outcome === 'REACHED' || channel !== 'CALL';
+  const reached = SPOKE_OUTCOMES.includes(body.outcome) || channel !== 'CALL';
   const data: Prisma.AssociateUncheckedUpdateInput = { next_follow_up_at: next };
   if (reached) data.last_contacted_at = now;
   // The first real conversation moves a new prospect on.
   if (reached && a.pipeline === 'INVITED') {
     data.pipeline = 'CONTACTED';
+    data.pipeline_changed_at = now;
+  }
+  // "Agreed to work with us": the next step is the onboarding form.
+  if (body.outcome === 'AGREED' && ['INVITED', 'CONTACTED'].includes(a.pipeline)) {
+    data.pipeline = 'AGREED';
     data.pipeline_changed_at = now;
   }
   const [followUp] = await p.$transaction([
@@ -701,7 +739,7 @@ export async function getQueue(
     if (a.next_follow_up_at && a.next_follow_up_at < end) {
       reasons.push({
         code: 'DUE',
-        label: a.next_follow_up_at < start ? 'Follow-up overdue' : 'Follow-up due today',
+        label: a.next_follow_up_at < start ? 'Call was due earlier' : 'Call due today',
       });
     }
     // Followed up today already: only a promised call-back keeps them on.
@@ -711,7 +749,7 @@ export async function getQueue(
       if (stale.length) {
         reasons.push({
           code: 'STALE_LEAD',
-          label: `${stale.length} lead${stale.length === 1 ? '' : 's'} with no update for ${s.stale_days}+ days`,
+          label: `${stale.length} lead${stale.length === 1 ? '' : 's'} with no news for ${s.stale_days}+ days`,
         });
       }
       if (!scheduled) {
@@ -722,7 +760,7 @@ export async function getQueue(
         if (newest && days(newest) >= s.quiet_days) {
           reasons.push({
             code: 'QUIET',
-            label: `No update on their leads for ${days(newest)} days`,
+            label: `No news on their leads for ${days(newest)} days`,
           });
         }
         if (
@@ -732,7 +770,11 @@ export async function getQueue(
           reasons.push({
             code: 'PROSPECT',
             label:
-              a.pipeline === 'INVITED' ? 'New prospect, not spoken to yet' : 'Prospect to enrol',
+              a.pipeline === 'INVITED'
+                ? 'New, not spoken to yet'
+                : a.pipeline === 'AGREED'
+                  ? 'Agreed: send them the form'
+                  : 'Ready to join',
           });
         }
       }
@@ -837,7 +879,7 @@ export async function weeklyNumbers(user: TokenPayload, dateStr?: string) {
     const r = row(f.employee_id);
     r.follow_ups++;
     if (f.channel === 'CALL') r.calls_attempted++;
-    if (f.outcome === 'REACHED') {
+    if (SPOKE_OUTCOMES.includes(f.outcome)) {
       if (f.channel === 'CALL') r.calls_reached++;
       r.reached.add(f.associate_id);
     }
@@ -879,7 +921,7 @@ export async function weeklyNumbers(user: TokenPayload, dateStr?: string) {
       calls_attempted: sum('calls_attempted'),
       calls_reached: sum('calls_reached'),
       associates_contacted: new Set(
-        followUps.filter((f) => f.outcome === 'REACHED').map((f) => f.associate_id),
+        followUps.filter((f) => SPOKE_OUTCOMES.includes(f.outcome)).map((f) => f.associate_id),
       ).size,
       enrolled: sum('enrolled'),
       dormant: sum('dormant'),

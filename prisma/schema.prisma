@@ -3767,6 +3767,13 @@ model CpApplication {
   place              String?   @db.VarChar(80)
   agreed_terms_at    DateTime?
   terms_version      String?   @db.VarChar(20) // which wording they accepted
+  // Profile photo: a small square JPEG (base64) made on the phone, and a tiny copy for lists.
+  photo_data         String?   @db.MediumText
+  photo_thumb        String?   @db.Text
+  // Set when HR gives partner access: the partner-area account (an Employee with the external channel partner role).
+  employee_id        Int?
+  access_given_at    DateTime?
+  access_given_by    Int?
   // Filled by HR, not by the applicant.
   designation        String?   @db.VarChar(80)
   commission         String?   @db.VarChar(80)
@@ -3775,5 +3782,6 @@ model CpApplication {
 
   @@unique([company_id, phone])
   @@unique([company_id, partner_no])
+  @@unique([employee_id])
   @@index([status, created_at])
 }

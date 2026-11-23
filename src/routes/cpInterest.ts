@@ -8,6 +8,16 @@ import { cpInterestRateLimiter } from '../middleware/rateLimiter';
 import { normalizeCpPhone } from '../services/cpLeadImport';
 import { getAccessibleCompanyIds } from '../authz/dataScope';
 import { decryptData, encryptData } from '../utils/crypto';
+import bcrypt from 'bcryptjs';
+import { requireAuthz } from '../middleware/authz';
+import { Permissions } from '../shared';
+import { generateTemporaryPassword } from '../utils/tempPassword';
+import {
+  employeeContactConflictMessage,
+  findEmployeeContactConflict,
+  normaliseEmployeeEmail,
+  normaliseEmployeePhone,
+} from '../services/employeeContact.service';
 
 /**
  * The channel partner registration form (2026-11-23): the paper form, online.
@@ -23,6 +33,19 @@ import { decryptData, encryptData } from '../utils/crypto';
  */
 /** Bump when the terms in the web form change, so each entry shows which wording was accepted. */
 const TERMS_VERSION = '2026-11-23';
+
+/** A photo from the form: a small JPEG as base64 (the phone shrinks it first). Checked by its real bytes. */
+const MAX_PHOTO_BYTES = 150 * 1024;
+const MAX_THUMB_BYTES = 15 * 1024;
+const jpegBase64 = (limit: number) =>
+  z
+    .string()
+    .max(Math.ceil((limit * 4) / 3) + 8, 'The photo is too large')
+    .refine((v) => /^[A-Za-z0-9+/]+={0,2}$/.test(v), 'The photo could not be read')
+    .refine((v) => {
+      const b = Buffer.from(v, 'base64');
+      return b.length > 0 && b.length <= limit && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+    }, 'Please use a JPG or PNG photo');
 
 const router = Router();
 const p = prisma as any;
@@ -76,6 +99,8 @@ const FormSchema = z.object({
       .transform((v) => v.replace(/[\s-]/g, ''))
       .pipe(z.string().regex(/^[2-9]\d{11}$/, 'Aadhaar should be 12 digits')),
   ),
+  photo: optional(jpegBase64(MAX_PHOTO_BYTES)),
+  photo_thumb: optional(jpegBase64(MAX_THUMB_BYTES)),
   place: z.string().trim().min(2, 'Enter your place').max(80),
   agreed: z.literal(true, {
     errorMap: () => ({ message: 'Please accept the terms and conditions to continue' }),
@@ -146,6 +171,8 @@ router.post('/', cpInterestRateLimiter, async (req, res: Response) => {
       pan_enc: d.pan ? encryptData(d.pan) : null,
       aadhaar_enc: d.aadhaar ? encryptData(d.aadhaar) : null,
       place: d.place,
+      // A photo is kept only when the new entry has one: sending again without it keeps the old one.
+      ...(d.photo && d.photo_thumb ? { photo_data: d.photo, photo_thumb: d.photo_thumb } : {}),
       agreed_terms_at: new Date(),
       terms_version: TERMS_VERSION,
     };
@@ -198,7 +225,7 @@ const onlyHr = (req: AuthenticatedRequest, res: Response, next: () => void) =>
 
 /** What the list shows: everything except the secrets, which are masked. */
 function present(row: any) {
-  const { bank_account_enc, pan_enc, aadhaar_enc, ...rest } = row;
+  const { bank_account_enc, pan_enc, aadhaar_enc, photo_data, photo_thumb, ...rest } = row;
   const account = decryptData(bank_account_enc);
   const pan = decryptData(pan_enc);
   const aadhaar = decryptData(aadhaar_enc);
@@ -210,6 +237,9 @@ function present(row: any) {
     has_bank: !!(account && rest.ifsc && rest.bank_name),
     has_pan: !!pan,
     has_aadhaar: !!aadhaar,
+    has_photo: !!photo_data,
+    has_access: !!rest.employee_id,
+    photo_thumb: photo_thumb ? `data:image/jpeg;base64,${photo_thumb}` : null,
   };
 }
 
@@ -238,6 +268,153 @@ router.get('/', authenticateToken, onlyHr, async (req: AuthenticatedRequest, res
     return res.status(500).json({ error: 'Could not load the partner details.' });
   }
 });
+
+// Give partner access: makes the partner-area account for this entry. The sign-in ID is the partner number
+// (RRH-CP-0001) and the password is made here and shown ONCE to the person who pressed the button.
+router.post(
+  '/:id/give-access',
+  authenticateToken,
+  onlyHr,
+  requireAuthz(Permissions.EMPLOYEES_CREATE),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0)
+        return res.status(400).json({ error: 'Check the details.' });
+      const companyIds = await getAccessibleCompanyIds(req.user!);
+      const row = await p.cpApplication.findFirst({
+        where: { id, company_id: { in: companyIds } },
+      });
+      if (!row) return res.status(404).json({ error: 'Not found' });
+      if (row.employee_id) {
+        return res.status(409).json({
+          error:
+            'Partner access was already given. Reset the password from the employee page if they forgot it.',
+        });
+      }
+      const companyId: number = row.company_id ?? req.user!.companyId;
+      const partnerNo: string = row.partner_no || (await nextPartnerNo(row.company_id));
+
+      const phone = normaliseEmployeePhone(row.phone);
+      const email = normaliseEmployeeEmail(row.email);
+      const conflict = await findEmployeeContactConflict(prisma, { companyId, phone, email });
+      if (conflict) {
+        return res.status(409).json({
+          error: employeeContactConflictMessage(conflict),
+          conflict: { field: conflict.field, employee_code: conflict.employee.employee_code },
+        });
+      }
+      if (
+        await p.employee.findFirst({ where: { employee_code: partnerNo }, select: { id: true } })
+      ) {
+        return res.status(409).json({ error: `The sign-in ID ${partnerNo} is already in use.` });
+      }
+      const role = await p.role.findUnique({ where: { name: Roles.CHANNEL_PARTNER_EXTERNAL } });
+      if (!role) return res.status(400).json({ error: 'The channel partner role is missing.' });
+      // The branch of the person giving access, else the company's first branch.
+      const branch =
+        (req.user!.branchId
+          ? await p.branch.findFirst({ where: { id: req.user!.branchId, company_id: companyId } })
+          : null) ??
+        (await p.branch.findFirst({ where: { company_id: companyId }, orderBy: { id: 'asc' } }));
+      if (!branch) return res.status(400).json({ error: 'This company has no branch yet.' });
+
+      const password = generateTemporaryPassword();
+      const created = await p.$transaction(async (tx: any) => {
+        const emp = await tx.employee.create({
+          data: {
+            employee_code: partnerNo,
+            full_name: row.full_name,
+            phone,
+            whatsapp_number: row.whatsapp || phone,
+            email,
+            current_address: row.address,
+            permanent_address: row.address,
+            // The bank and ID values are already encrypted the same way as employee records.
+            pan_number: row.pan_enc,
+            aadhaar_number: row.aadhaar_enc,
+            bank_account_number: row.bank_account_enc,
+            bank_name: encryptData(row.bank_name),
+            bank_ifsc: encryptData(row.ifsc),
+            bank_branch: encryptData(row.bank_branch),
+            job_title: row.designation || 'Channel partner',
+            department: 'Channel partners',
+            employment_type: 'CONTRACT',
+            report_required: false,
+            attendance_required: false,
+            salary_ctc: 0,
+            date_of_joining: new Date(),
+            company_id: companyId,
+            branch_id: branch.id,
+            password_hash: await bcrypt.hash(password, 12),
+            status: 'ACTIVE',
+            first_login_done: false,
+            roles: { create: { role_id: role.id } },
+            company_access: { create: [{ company_id: companyId }] },
+          },
+        });
+        await tx.cpApplication.update({
+          where: { id },
+          data: {
+            partner_no: partnerNo,
+            employee_id: emp.id,
+            access_given_at: new Date(),
+            access_given_by: req.user!.employeeId,
+            status: 'REVIEWED',
+          },
+        });
+        await tx.auditEvent.create({
+          data: {
+            actor_id: req.user!.employeeId,
+            action: 'CP_ACCESS_GIVEN',
+            entity_type: 'EMPLOYEE',
+            entity_id: emp.id,
+            reason: `Partner area account made for ${row.full_name} (${partnerNo})`,
+          },
+        });
+        return emp;
+      });
+      return res.status(201).json({
+        employee_id: created.id,
+        sign_in_id: partnerNo,
+        password,
+        name: row.full_name,
+        phone: row.phone,
+        whatsapp: row.whatsapp || row.phone,
+      });
+    } catch (e) {
+      logger.error({ err: e }, 'Channel partner give access error');
+      return res.status(500).json({ error: 'Could not give access. Please try again.' });
+    }
+  },
+);
+
+// The full-size photo of one entry, as an image.
+router.get(
+  '/:id/photo',
+  authenticateToken,
+  onlyHr,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0)
+        return res.status(400).json({ error: 'Check the details.' });
+      const companyIds = await getAccessibleCompanyIds(req.user!);
+      const row = await p.cpApplication.findFirst({
+        where: { id, company_id: { in: companyIds } },
+        select: { photo_data: true },
+      });
+      if (!row?.photo_data) return res.status(404).json({ error: 'No photo' });
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.status(200).send(Buffer.from(row.photo_data, 'base64'));
+    } catch (e) {
+      logger.error({ err: e }, 'Channel partner registration photo error');
+      return res.status(500).json({ error: 'Could not load the photo.' });
+    }
+  },
+);
 
 // The full bank account, PAN and Aadhaar of one entry. Every read is written to the audit log.
 router.get(

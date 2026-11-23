@@ -1,3 +1,4 @@
+import { markReferralBooked } from './lead/cpReferral';
 import { num } from '../utils/money';
 import { pmScope, pmMaySee } from '../authz/pmScope';
 import { prisma } from '../lib/prisma';
@@ -538,6 +539,9 @@ export class BookingService {
 
       return { updated, contributorIds: [...contributorIds] };
     });
+
+    // A lead that was with a channel partner: close the referral and tell everyone.
+    await markReferralBooked(id, booking.customer_id);
 
     if (result.contributorIds.length > 0) {
       await notifyEmployee(result.contributorIds, {

@@ -1063,6 +1063,8 @@ model PerformanceSnapshot {
 model Lead {
   /// Set when a channel partner's customer is booked for a site visit: the partner (Employee id) who gets the credit.
   cp_owner_id              Int?
+  /// Set while the lead is with a channel partner (2026-11-23): the partner's Employee id. The lead stays ours; this only hides it from our queues and shows "With partner".
+  referred_to_cp_id        Int?
   id                       Int               @id @default(autoincrement())
   lead_code                String            @unique
   company_id               Int
@@ -1157,6 +1159,7 @@ model Lead {
   @@index([company_id])
   @@index([branch_id])
   @@index([assigned_to_id])
+  @@index([referred_to_cp_id])
   @@index([status])
   @@index([company_id, created_at])
   @@index([phone])
@@ -3691,4 +3694,44 @@ model CpTask {
 
   @@index([cp_id, done_at, due_at])
   @@index([cp_lead_id])
+}
+
+/// A company lead handed to an external partner (2026-11-23). Kept apart from the partner's own private
+/// leads (CpLead) so the two never mix: it is its own inbox, "Referred by RRH".
+model CpReferral {
+  id                Int       @id @default(autoincrement())
+  company_id        Int
+  lead_id           Int
+  cp_id             Int // partner Employee id
+  referred_by_id    Int // our Employee who referred it
+  brief             String?   @db.Text // written for the partner; never our internal notes
+  stage_at_referral String    @db.VarChar(30)
+  status            String    @default("OFFERED") @db.VarChar(12) // OFFERED | ACCEPTED | DECLINED | RETURNED | BOOKED | LOST
+  partner_stage     String?   @db.VarChar(20) // the partner's own progress: CONTACTED | INTERESTED | NEGOTIATING | VISIT_BOOKED | NOT_INTERESTED
+  assigned_to_id    Int? // partner's telecaller (CpUser id); empty = the partner holds it
+  open_lead_id      Int?      @unique // = lead_id while open, empty once closed: only one open referral per lead
+  offered_at        DateTime  @default(now())
+  accepted_at       DateTime?
+  last_activity_at  DateTime  @default(now())
+  closed_at         DateTime?
+  closed_reason     String?   @db.VarChar(300)
+  stale_notified_at DateTime?
+
+  @@index([cp_id, status])
+  @@index([lead_id])
+  @@index([company_id, status])
+}
+
+model CpReferralActivity {
+  id            Int      @id @default(autoincrement())
+  referral_id   Int
+  cp_id         Int
+  actor_user_id Int? // CpUser id; empty = the partner
+  actor_name    String   @db.VarChar(120)
+  kind          String   @db.VarChar(12) // CALL | NOTE | STATUS | ASSIGN | VISIT
+  outcome       String?  @db.VarChar(30)
+  notes         String?  @db.Text
+  created_at    DateTime @default(now())
+
+  @@index([referral_id, created_at])
 }

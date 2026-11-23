@@ -3,6 +3,8 @@ import { auditContext } from '../utils/requestContext';
 import { dbGuard } from './dbGuard';
 import { forgetAuthRows } from './authRowCache';
 import { currentPushLink, pushForNotificationRows } from '../utils/pushDispatch';
+import { createMdLookup, isImportantForMd } from '../utils/mdNotificationPolicy';
+import { Roles } from '../shared';
 import { recordQueryTime } from './queryTiming';
 
 /**
@@ -127,6 +129,41 @@ prisma.$use(async (params, next) => {
       const data = params.args?.data;
       if (data) params.args.data = Array.isArray(data) ? data.map(fill) : fill(data);
     }
+  }
+  return next(params);
+});
+
+// The Managing Director only gets important notifications (utils/mdNotificationPolicy.ts).
+// Applied here so it holds for every code path that creates a Notification row, and
+// before the push below, so a dropped row is not pushed to the phone either.
+const isManagingDirector = createMdLookup((employeeId) =>
+  prisma.employeeRole.count({ where: { employee_id: employeeId, role: { name: Roles.MD } } }),
+);
+prisma.$use(async (params, next) => {
+  if (
+    params.model !== 'Notification' ||
+    (params.action !== 'create' && params.action !== 'createMany')
+  ) {
+    return next(params);
+  }
+  const link = currentPushLink();
+  const keep = async (row: any) =>
+    !row ||
+    row.employee_id == null ||
+    isImportantForMd({ type: row.type, title: row.title, link }) ||
+    !(await isManagingDirector(Number(row.employee_id)));
+
+  const data = params.args?.data;
+  if (params.action === 'create') {
+    if (data && !(await keep(data))) {
+      // Not created. Callers only use the row for its fields, never read it back.
+      return { ...data, id: 0 };
+    }
+  } else if (Array.isArray(data)) {
+    const kept: any[] = [];
+    for (const row of data) if (await keep(row)) kept.push(row);
+    if (kept.length === 0) return { count: 0 };
+    params.args.data = kept;
   }
   return next(params);
 });

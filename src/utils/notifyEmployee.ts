@@ -1,4 +1,6 @@
 import { logger } from './logger';
+import { Roles } from '../shared';
+import { createMdLookup, isImportantForMd } from './mdNotificationPolicy';
 /**
  * notifyEmployee.ts
  *
@@ -15,6 +17,13 @@ import { prisma } from '../lib/prisma';
 import { runWithPushLink } from './pushDispatch';
 
 const p = prisma;
+
+const isManagingDirector = createMdLookup((employeeId) =>
+  p.employeeRole.count({ where: { employee_id: employeeId, role: { name: Roles.MD } } }),
+);
+
+/** The same message sent to the same person again within this window is dropped. */
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 
 export interface NotifyPayload {
   type: string; // e.g. 'EXPENSE_REFUND_APPROVED', 'SALARY_CHANGED'
@@ -44,6 +53,21 @@ export async function notifyEmployee(
 
   for (const employeeId of ids) {
     try {
+      if (!isImportantForMd(payload) && (await isManagingDirector(employeeId))) continue;
+
+      // Two copies of a scheduled job (or a retry) used to send the same alert twice,
+      // seconds apart. An identical alert in the last few minutes is not sent again.
+      const duplicate = await p.notification.count({
+        where: {
+          employee_id: employeeId,
+          type: payload.type,
+          title: payload.title,
+          message: payload.message,
+          created_at: { gt: new Date(Date.now() - DUPLICATE_WINDOW_MS) },
+        },
+      });
+      if (duplicate > 0) continue;
+
       // The middleware pushes this row; the link travels to it via the store.
       // (async + await inside: Prisma runs the query lazily, when awaited, and
       // that must happen inside the context.)

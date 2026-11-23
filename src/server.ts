@@ -28,6 +28,7 @@ import financeExportRoutes from './routes/financeExport';
 import cpRoutes from './routes/cp';
 import cpWorkRoutes from './routes/cpWork';
 import cpAdminRoutes from './routes/cpAdmin';
+import cpReferredRoutes from './routes/cpReferred';
 import pettyCashRoutes from './routes/pettyCash';
 import workUpdateRoutes from './routes/workUpdates';
 import assetRoutes from './routes/assets';
@@ -345,6 +346,7 @@ if (mountInternal) {
   // External channel partners: their own sign-in and token (item 5).
   app.use('/api/v1/cp', cpRoutes);
   app.use('/api/v1/cp', cpWorkRoutes);
+  app.use('/api/v1/cp', cpReferredRoutes);
   app.use('/api/v1/cp-admin', cpAdminRoutes);
   // Petty cash and the monthly budget (item 4).
   app.use('/api/v1/petty-cash', pettyCashRoutes);

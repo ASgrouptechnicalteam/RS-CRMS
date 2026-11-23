@@ -59,7 +59,11 @@ export async function followUpsDue(
       ...openCallBackWhere,
       assignee_id: { in: employeeIds },
       target_date: { lte: endOfToday },
-      lead: { company_id: companyId, status: { in: CALLABLE_STATUSES } },
+      lead: {
+        company_id: companyId,
+        status: { in: CALLABLE_STATUSES },
+        referred_to_cp_id: null,
+      },
     },
     select: { assignee_id: true, target_date: true, lead: { select: { assigned_to_id: true } } },
   });
@@ -82,6 +86,7 @@ export async function followUpsDue(
      WHERE l.company_id = ?
        AND l.assigned_to_id IN (${idMarks})
        AND l.status IN (${statusMarks})
+       AND l.referred_to_cp_id IS NULL
        AND a.created_at < ?
        AND (a.call_outcome IN ('NO_ANSWER', 'BUSY_OR_SWITCHED_OFF')
             OR (a.call_outcome IS NULL

@@ -25,6 +25,12 @@ import { z } from 'zod';
 import { getPipelineHealth } from '../services/lead/pipelineHealth';
 import { logCall, addLeadFeedback, getCallQueueMeta, splitCalls } from '../services/lead/calls';
 import { getMyQueue } from '../services/lead/myQueue';
+import {
+  listPartnersForReferral,
+  referLead,
+  takeBackLead,
+  getLeadReferral,
+} from '../services/lead/cpReferral';
 import { listUploadBatches, moveUploadBatch, stageTotals } from '../services/lead/batches';
 import {
   getTelecallerReport,
@@ -79,6 +85,73 @@ const parseLeadFilters = (req: AuthenticatedRequest): LeadListFilters => {
     created_to: parseDate(req.query.created_to),
   };
 };
+
+// ---- Refer a lead to an external channel partner (2026-11-23) -----------------------------
+// GET /leads/cp-partners - active partners to pick from (registered before /:id routes).
+router.get(
+  '/cp-partners',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      return res.json({ partners: await listPartnersForReferral(req.user!) });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
+const ReferSchema = z.object({
+  cp_id: z.number().int().positive(),
+  brief: z.string().trim().max(1500).optional(),
+});
+router.post(
+  '/:id/refer-to-partner',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  validateRequestBody(ReferSchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      await referLead(req.user!, leadId, req.body);
+      return res.status(200).json({ message: 'Lead referred to the partner' });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
+router.post(
+  '/:id/take-back-from-partner',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  validateRequestBody(z.object({ reason: z.string().trim().min(3).max(500) })),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      await takeBackLead(req.user!, leadId, req.body.reason);
+      return res.status(200).json({ message: 'Lead taken back' });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
+router.get(
+  '/:id/partner-referral',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      return res.json({ referral: await getLeadReferral(req.user!, leadId) });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
 
 // GET /api/v1/leads/assignees - colleagues a lead can be handed to when it is added
 // (company-wide, names only, and only people whose role can work leads).

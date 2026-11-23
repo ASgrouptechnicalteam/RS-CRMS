@@ -1200,7 +1200,9 @@ const visitSelect = {
   project_manager_id: true,
   rating: true,
   feedback_notes: true,
-  lead: { select: { customer_name: true, phone: true, cp_owner_id: true } },
+  lead: {
+    select: { customer_name: true, phone: true, cp_owner_id: true, referred_to_cp_id: true },
+  },
   project: { select: { name: true, location: true, city: true, maps_link: true } },
   property: { select: { title: true, location: true, city: true } },
   project_manager: { select: { full_name: true, phone: true } },
@@ -1208,7 +1210,8 @@ const visitSelect = {
 
 /** The partner's view of a visit: built field by field, never by spreading a record. */
 const toCpVisit = (v: any, cpId: number) => {
-  const own = v.lead?.cp_owner_id === cpId;
+  // Your own customers, and the customers our office referred to you, are shown in full.
+  const own = v.lead?.cp_owner_id === cpId || v.lead?.referred_to_cp_id === cpId;
   return {
     id: v.id,
     booking_code: v.booking_code,
@@ -1249,7 +1252,11 @@ const visitScope = async (req: CpRequest) => {
   const cpId = req.cp!.id;
   if (!req.cp!.user) {
     return {
-      OR: [{ assigned_agent_id: cpId }, { lead: { cp_owner_id: cpId } }],
+      OR: [
+        { assigned_agent_id: cpId },
+        { lead: { cp_owner_id: cpId } },
+        { lead: { referred_to_cp_id: cpId } },
+      ],
       lead: { company_id: req.cp!.company_id },
     };
   }
@@ -1257,7 +1264,20 @@ const visitScope = async (req: CpRequest) => {
     where: { ...(leadScope(req) as any), lead_id: { not: null } },
     select: { lead_id: true },
   });
-  return { lead_id: { in: mine.map((m: any) => m.lead_id) }, lead: { cp_owner_id: cpId } };
+  const referred = await p.cpReferral.findMany({
+    where: {
+      cp_id: cpId,
+      assigned_to_id: req.cp!.user.id,
+      status: { in: ['OFFERED', 'ACCEPTED'] },
+    },
+    select: { lead_id: true },
+  });
+  return {
+    OR: [
+      { lead_id: { in: mine.map((m: any) => m.lead_id) }, lead: { cp_owner_id: cpId } },
+      { lead_id: { in: referred.map((m: any) => m.lead_id) }, lead: { referred_to_cp_id: cpId } },
+    ],
+  };
 };
 
 router.get(
@@ -1433,7 +1453,11 @@ router.post(
     const id = idOf(req.params.id);
     const scope = await visitScope(req);
     const v = await p.siteVisitBooking.findFirst({ where: { id, ...scope }, select: visitSelect });
-    if (!v || v.lead?.cp_owner_id !== req.cp!.id || v.assigned_agent_id !== req.cp!.id) {
+    if (
+      !v ||
+      (v.lead?.cp_owner_id !== req.cp!.id && v.lead?.referred_to_cp_id !== req.cp!.id) ||
+      v.assigned_agent_id !== req.cp!.id
+    ) {
       throw fail(404, 'Visit not found');
     }
     if (!['CONFIRMED', 'ACTIVE', 'ACCEPTED'].includes(v.status))
@@ -1474,7 +1498,11 @@ router.post(
     const id = idOf(req.params.id);
     const scope = await visitScope(req);
     const v = await p.siteVisitBooking.findFirst({ where: { id, ...scope }, select: visitSelect });
-    if (!v || v.lead?.cp_owner_id !== req.cp!.id || v.assigned_agent_id !== req.cp!.id) {
+    if (
+      !v ||
+      (v.lead?.cp_owner_id !== req.cp!.id && v.lead?.referred_to_cp_id !== req.cp!.id) ||
+      v.assigned_agent_id !== req.cp!.id
+    ) {
       throw fail(404, 'Visit not found');
     }
     if (['COMPLETED', 'CANCELLED'].includes(v.status))

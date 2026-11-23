@@ -1,5 +1,4 @@
 import { prisma } from '../lib/prisma';
-import { Roles } from '../shared';
 import { logger } from '../utils/logger';
 
 const p = prisma;
@@ -44,7 +43,7 @@ export async function sweepOverdueTasks(now: Date = new Date()): Promise<number>
     select: {
       id: true,
       title: true,
-      assignee: { select: { company_id: true, employee_code: true } },
+      assignee: { select: { company_id: true, employee_code: true, reporting_manager_id: true } },
     },
     take: 5000,
   });
@@ -55,37 +54,26 @@ export async function sweepOverdueTasks(now: Date = new Date()): Promise<number>
     data: { status: 'OVERDUE' },
   });
 
-  const byCompany = new Map<number, typeof due>();
+  // The MD is not told about every overdue task in the company (owner, 2026-11-22):
+  // each person's reporting manager gets one summary of their team's overdue tasks.
+  const byManager = new Map<number, typeof due>();
   for (const t of due) {
-    const cid = t.assignee?.company_id;
-    if (cid == null) continue;
-    byCompany.set(cid, [...(byCompany.get(cid) || []), t]);
+    const managerId = t.assignee?.reporting_manager_id;
+    if (managerId == null) continue;
+    byManager.set(managerId, [...(byManager.get(managerId) || []), t]);
   }
-  const mds = await p.employee.findMany({
-    where: {
-      company_id: { in: [...byCompany.keys()] },
-      status: 'ACTIVE',
-      roles: { some: { role: { name: Roles.MD } } },
-    },
-    select: { id: true, company_id: true },
+  const notifications = [...byManager.entries()].map(([managerId, tasks]) => {
+    const sample = tasks
+      .slice(0, 3)
+      .map((t) => `"${t.title}" (${t.assignee?.employee_code || 'staff'})`)
+      .join(', ');
+    return {
+      employee_id: managerId,
+      title: '🚨 OVERDUE TASK ALERT',
+      message: `${tasks.length} task${tasks.length === 1 ? ' is' : 's are'} now past deadline: ${sample}${tasks.length > 3 ? ` and ${tasks.length - 3} more` : ''}.`,
+      type: 'TASK_OVERDUE' as const,
+    };
   });
-  const mdByCompany = new Map<number, number>();
-  for (const md of mds) if (!mdByCompany.has(md.company_id)) mdByCompany.set(md.company_id, md.id);
-
-  const notifications = [...byCompany.entries()]
-    .filter(([cid]) => mdByCompany.has(cid))
-    .map(([cid, tasks]) => {
-      const sample = tasks
-        .slice(0, 3)
-        .map((t) => `"${t.title}" (${t.assignee?.employee_code || 'staff'})`)
-        .join(', ');
-      return {
-        employee_id: mdByCompany.get(cid)!,
-        title: '🚨 OVERDUE TASK ALERT',
-        message: `${tasks.length} task${tasks.length === 1 ? ' is' : 's are'} now past deadline: ${sample}${tasks.length > 3 ? ` and ${tasks.length - 3} more` : ''}.`,
-        type: 'TASK_OVERDUE' as const,
-      };
-    });
   if (notifications.length > 0) await p.notification.createMany({ data: notifications });
 
   logger.info(`[Jobs] Overdue task sweep flipped ${flipped.count} task(s).`);

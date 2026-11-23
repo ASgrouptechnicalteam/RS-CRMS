@@ -43,6 +43,7 @@ async function leadsInactiveSince(
     where: {
       status: { notIn: LEAD_INACTIVE_TERMINAL_STATUSES },
       assigned_to_id: { not: null },
+      referred_to_cp_id: null, // with a partner: not our caller's to chase
     },
     select: {
       id: true,
@@ -768,19 +769,27 @@ function parseDatabaseUrl(url: string) {
   };
 }
 
-// A backup covers the whole shared database, not one company — so a failure
-// notification goes to every company's MD, not an arbitrary "first" one.
-async function notifyAllCompanyMDs(title: string, message: string) {
-  const admins = await prisma.employee.findMany({
-    where: { status: 'ACTIVE', roles: { some: { role: { name: Roles.MD } } } },
+// A failed backup is a technical problem, so it goes to the Admin and Technical
+// Manager, not the MD (owner, 2026-11-22). The same failure is repeated at most once
+// a week: on a host with no mysqldump (such as Render) it would otherwise fail, and
+// alert, every single night.
+async function notifyBackupFailure(title: string, message: string, repeatAfterDays = 7) {
+  const people = await prisma.employee.findMany({
+    where: {
+      status: 'ACTIVE',
+      roles: { some: { role: { name: { in: [Roles.ADMIN, Roles.TECHNICAL_MANAGER] } } } },
+    },
     select: { id: true },
   });
-  if (admins.length > 0) {
-    await notifyEmployee(
-      admins.map((a) => a.id),
-      { type: 'BACKUP_VERIFICATION', title, message },
-    );
+  const since = new Date(Date.now() - repeatAfterDays * 24 * 60 * 60 * 1000);
+  const ids: number[] = [];
+  for (const person of people) {
+    const recent = await prisma.notification.count({
+      where: { employee_id: person.id, type: 'BACKUP_VERIFICATION', created_at: { gt: since } },
+    });
+    if (recent === 0) ids.push(person.id);
   }
+  if (ids.length > 0) await notifyEmployee(ids, { type: 'BACKUP_VERIFICATION', title, message });
 }
 
 export const backupVerificationJob = async () => {
@@ -841,10 +850,10 @@ export const backupVerificationJob = async () => {
   } catch (err: any) {
     const isMissingBinary = err?.code === 'ENOENT';
     const reason = isMissingBinary
-      ? 'mysqldump is not installed / not on PATH in this environment — this job cannot run here at all.'
+      ? 'mysqldump is not installed / not on PATH on this server, so the nightly self-check backup cannot run here. The database is backed up by Hostinger; check its backups in hPanel, or move this check to a machine that has mysqldump. This message repeats once a week.'
       : err?.message || String(err);
     logger.error(`[Jobs] Backup verification FAILED: ${reason}`);
-    await notifyAllCompanyMDs('⚠️ Nightly backup verification failed', reason).catch(() => {});
+    await notifyBackupFailure('⚠️ Nightly backup verification failed', reason).catch(() => {});
   }
 };
 
@@ -923,7 +932,8 @@ export const siteVisitEscalationJob = async () => {
       (visit.scheduled_date.getTime() - visit.created_at.getTime()) / (1000 * 60 * 60);
 
     const isOverdue = hoursUntilVisit < 0;
-    const needsMD = isOverdue || hoursUntilVisit <= 10 || hoursNotice <= 10;
+    // The MD is told only when a visit is overdue and still not accepted (owner, 2026-11-22).
+    const needsMD = isOverdue;
     const needsMarketing = hoursUntilVisit <= 12 || hoursNotice <= 12;
 
     const directors = await getDirectors(visit.telecaller.company_id);

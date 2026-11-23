@@ -45,6 +45,7 @@ export async function getMyQueue(
         assigned_to_id: user.employeeId,
         company_id: user.companyId,
         status: { in: QUEUE_STATUSES },
+        referred_to_cp_id: null, // a lead with a partner is not in our callers' queue
       },
       select: { id: true, status: true, source: true, assigned_at: true, created_at: true },
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],

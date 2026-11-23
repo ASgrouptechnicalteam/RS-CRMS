@@ -64,7 +64,7 @@ router.get(
       orderBy: { full_name: 'asc' },
     });
     const ids = partners.map((x: any) => x.id);
-    const [users, leads, visits, drafts] = ids.length
+    const [users, leads, visits, drafts, referrals] = ids.length
       ? await Promise.all([
           p.cpUser.groupBy({
             by: ['cp_id'],
@@ -86,14 +86,22 @@ router.get(
             where: { submitted_by: { in: ids } },
             _count: { _all: true },
           }),
+          p.cpReferral.groupBy({
+            by: ['cp_id', 'status'],
+            where: { cp_id: { in: ids } },
+            _count: { _all: true },
+          }),
         ])
-      : [[], [], [], []];
+      : [[], [], [], [], []];
     const m = (rows: any[], key: string) =>
       new Map<number, number>(rows.map((r) => [r[key], r._count._all]));
     const u = m(users, 'cp_id');
     const l = m(leads, 'cp_id');
     const v = m(visits, 'cp_owner_id');
     const d = m(drafts, 'submitted_by');
+    // Leads our office referred to each partner: waiting for acceptance, being worked, booked.
+    const refCount = (id: number, status: string) =>
+      referrals.find((r: any) => r.cp_id === id && r.status === status)?._count._all ?? 0;
     return res.status(200).json({
       partners: partners.map((x: any) => ({
         id: x.id,
@@ -105,6 +113,9 @@ router.get(
         leads: l.get(x.id) ?? 0,
         customers_in_our_crm: v.get(x.id) ?? 0,
         listings_sent: d.get(x.id) ?? 0,
+        referred_waiting: refCount(x.id, 'OFFERED'),
+        referred_working: refCount(x.id, 'ACCEPTED'),
+        referred_booked: refCount(x.id, 'BOOKED'),
       })),
     });
   }),

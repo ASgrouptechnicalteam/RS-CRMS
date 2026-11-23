@@ -479,7 +479,60 @@ export async function remindProjectReviews(d: Day) {
   return sendOnce('REMINDER_PROJECT_REVIEWS', d, targets);
 }
 
+// ---- Leads referred to a partner who has not responded: tell the referrer and the MD ----
+// No automatic return (owner, 2026-11-23): the people who can act are told once a day while it stays
+// stale, and take the lead back by hand from the lead page.
+const CP_REFERRAL_ACCEPT_HOURS = 24;
+const CP_REFERRAL_IDLE_DAYS = 5;
+
+export async function remindCpReferrals(d: Day) {
+  const waitingSince = new Date(d.now.getTime() - CP_REFERRAL_ACCEPT_HOURS * 3600e3);
+  const idleSince = new Date(d.now.getTime() - CP_REFERRAL_IDLE_DAYS * DAY_MS);
+  const stale = await p.cpReferral.findMany({
+    where: {
+      OR: [
+        { status: 'OFFERED', offered_at: { lte: waitingSince } },
+        { status: 'ACCEPTED', last_activity_at: { lte: idleSince } },
+      ],
+    },
+    select: {
+      id: true,
+      company_id: true,
+      lead_id: true,
+      cp_id: true,
+      status: true,
+      referred_by_id: true,
+    },
+  });
+  if (stale.length === 0) return 0;
+  const leads = await p.lead.findMany({
+    where: { id: { in: stale.map((r: any) => r.lead_id) } },
+    select: { id: true, customer_name: true, assigned_to_id: true },
+  });
+  const leadBy = new Map<number, any>(leads.map((l: any) => [l.id, l]));
+  const mds = await holdersByCompany(Roles.MD, false);
+
+  const per = new Map<number, string[]>();
+  for (const r of stale) {
+    const lead = leadBy.get(r.lead_id);
+    const line = `${lead?.customer_name || 'A customer'} (${
+      r.status === 'OFFERED' ? 'not accepted' : 'no activity'
+    })`;
+    const people = new Set<number>([r.referred_by_id, ...(mds.get(r.company_id) || [])]);
+    if (lead?.assigned_to_id) people.add(lead.assigned_to_id);
+    for (const id of people) per.set(id, [...(per.get(id) || []), line]);
+  }
+  const targets = [...per].map(([id, lines]) => ({
+    id,
+    title: 'Partner has not responded',
+    message: `${lines.length} lead${lines.length === 1 ? '' : 's'} with a partner need${lines.length === 1 ? 's' : ''} attention: ${lines.slice(0, 3).join(', ')}${lines.length > 3 ? ` and ${lines.length - 3} more` : ''}. Open the lead to take it back.`,
+    link: '/leads',
+  }));
+  return sendOnce('CP_REFERRAL_STALE', d, targets);
+}
+
 export const REMINDERS: Reminder[] = [
+  { type: 'CP_REFERRAL_STALE', from: '10:30', until: '17:00', run: remindCpReferrals },
   { type: 'REMINDER_PROJECT_REVIEWS', from: '10:30', until: '17:00', run: remindProjectReviews },
   { type: 'REMINDER_VISITS_TODAY', from: '08:30', until: '12:00', run: remindVisitsToday },
   { type: 'REMINDER_TASKS_TODAY', from: '09:30', until: '13:00', run: remindTasksDue },

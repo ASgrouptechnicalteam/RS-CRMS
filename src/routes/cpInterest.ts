@@ -47,7 +47,7 @@ const FormSchema = z.object({
   projects_handled: z
     .string()
     .trim()
-    .min(3, 'Tell us which projects you handle')
+    .min(3, 'Tell us about your projects')
     .max(2000, 'Please keep this under 2000 characters'),
   // Bank and ID details are optional here; HR can collect them later.
   bank_name: optional(z.string().trim().max(80)),

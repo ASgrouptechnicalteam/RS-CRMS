@@ -44,6 +44,7 @@ async function leadsInactiveSince(
       status: { notIn: LEAD_INACTIVE_TERMINAL_STATUSES },
       assigned_to_id: { not: null },
       referred_to_cp_id: null, // with a partner: not our caller's to chase
+      referred_to_associate_id: null, // nor with an associate
     },
     select: {
       id: true,

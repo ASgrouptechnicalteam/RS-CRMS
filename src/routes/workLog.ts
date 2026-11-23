@@ -327,7 +327,10 @@ router.get('/cpm-summary', authenticateToken, async (req: AuthenticatedRequest, 
         }),
         p.siteVisitBooking.count({
           where: {
-            lead: { created_by_id: employeeId, external_agent_name: { not: null } },
+            lead: {
+              created_by_id: employeeId,
+              OR: [{ associate_id: { not: null } }, { external_agent_name: { not: null } }],
+            },
             created_at: { gte: monthStart },
             status: { not: 'CANCELLED' },
           },

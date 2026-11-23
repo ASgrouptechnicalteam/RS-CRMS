@@ -310,6 +310,12 @@ const CPM_FIELDS: FieldDef[] = [
     recorded: withAssociateCalls(['ASSOCIATE_CALL', 'ASSOCIATE_NEW_CALL'], 'all'),
   },
   {
+    id: 'associateVisitsBooked',
+    label: "Site visits booked for associates' customers",
+    recorded: async (c: Ctx) =>
+      (await associateWork(c.employeeId, { start: c.start, end: c.end })).visits_booked,
+  },
+  {
     id: 'agreed',
     label: 'Associates who agreed to work with us',
     recorded: async (c: Ctx) =>

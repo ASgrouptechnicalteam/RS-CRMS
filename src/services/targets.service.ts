@@ -48,6 +48,7 @@ export const TARGET_METRICS = [
   'ASSOCIATES_ONBOARDED',
   'ASSOCIATE_OFFICE_VISITS',
   'ASSOCIATE_LEADS',
+  'ASSOCIATE_VISITS_BOOKED',
 ] as const;
 export const TARGET_PERIODS = ['DAY', 'WEEK', 'MONTH'] as const;
 export type TargetMetric = (typeof TARGET_METRICS)[number];
@@ -85,6 +86,7 @@ export const METRIC_LABELS: Record<TargetMetric, string> = {
   ASSOCIATES_ONBOARDED: 'Associates onboarded',
   ASSOCIATE_OFFICE_VISITS: 'Associate office visits',
   ASSOCIATE_LEADS: 'Leads added from associates',
+  ASSOCIATE_VISITS_BOOKED: 'Site visits booked for associates’ customers',
 };
 
 const G_CALL = 'Calling (Telecaller, Sales Manager, Agent, every role)';
@@ -127,6 +129,7 @@ export const METRIC_GROUPS: Record<TargetMetric, string> = {
   ASSOCIATES_ONBOARDED: G_ASSOC,
   ASSOCIATE_OFFICE_VISITS: G_ASSOC,
   ASSOCIATE_LEADS: G_ASSOC,
+  ASSOCIATE_VISITS_BOOKED: G_ASSOC,
 };
 
 /** Target metric -> the work-log platform it counts. */
@@ -323,7 +326,8 @@ export async function measureMetric(
     case 'ASSOCIATES_AGREED':
     case 'ASSOCIATES_ONBOARDED':
     case 'ASSOCIATE_OFFICE_VISITS':
-    case 'ASSOCIATE_LEADS': {
+    case 'ASSOCIATE_LEADS':
+    case 'ASSOCIATE_VISITS_BOOKED': {
       const w = await associateWork(employeeId, { start, end });
       return {
         ASSOCIATE_CALLS: w.calls,
@@ -332,6 +336,7 @@ export async function measureMetric(
         ASSOCIATES_ONBOARDED: w.enrolled,
         ASSOCIATE_OFFICE_VISITS: w.office_visits,
         ASSOCIATE_LEADS: w.leads,
+        ASSOCIATE_VISITS_BOOKED: w.visits_booked,
       }[metric];
     }
     case 'BOOKINGS_CONFIRMED': {

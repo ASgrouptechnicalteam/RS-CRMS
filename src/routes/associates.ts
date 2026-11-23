@@ -29,6 +29,13 @@ import {
   weeklyNumbers,
 } from '../services/associate.service';
 import { commitImport, previewImport } from '../services/associateImport';
+import { associateReport } from '../services/associateReport';
+import {
+  OFFICE_PURPOSES,
+  listOfficeVisits,
+  planOfficeVisit,
+  updateOfficeVisit,
+} from '../services/associateOfficeVisit';
 
 const router = Router();
 router.use(
@@ -83,6 +90,18 @@ const FollowUpSchema = z.object({
   notes: text(1000).optional(),
   next_follow_up_at: day.nullable().optional(),
 });
+const OfficeVisitSchema = z.object({
+  associate_id: z.number().int().positive(),
+  scheduled_at: z.string().min(8).max(40),
+  purpose: z.enum(OFFICE_PURPOSES),
+  met_by_id: z.number().int().positive().nullable().optional(),
+  notes: text(1000).optional(),
+});
+const OfficeVisitUpdateSchema = z.object({
+  status: z.enum(['ARRIVED', 'DONE', 'NO_SHOW', 'CANCELLED']).optional(),
+  notes: text(1000).optional(),
+  scheduled_at: z.string().min(8).max(40).optional(),
+});
 const ReportSchema = z.object({
   report: z.enum(Object.keys(REPORTS) as [string, ...string[]]),
   note: text(500).optional(),
@@ -113,6 +132,29 @@ router.get(
       page: Number(req.query.page) || 1,
     }),
   ),
+);
+// The associates report: a week per manager against the week before, and who needs a call (before '/:id').
+router.get(
+  '/report',
+  handle((req) =>
+    associateReport(req.user!, typeof req.query.date === 'string' ? req.query.date : undefined),
+  ),
+);
+
+// Office visits: associates coming to our office (before the '/:id' routes).
+router.get(
+  '/office-visits',
+  handle((req) => listOfficeVisits(req.user!)),
+);
+router.post(
+  '/office-visits',
+  validateRequestBody(OfficeVisitSchema),
+  handle((req) => planOfficeVisit(req.user!, req.body), 201),
+);
+router.patch(
+  '/office-visits/:id',
+  validateRequestBody(OfficeVisitUpdateSchema),
+  handle((req) => updateOfficeVisit(req.user!, id(req.params.id), req.body)),
 );
 router.get(
   '/queue',

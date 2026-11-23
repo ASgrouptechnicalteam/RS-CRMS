@@ -33,7 +33,10 @@ export interface AssociateWork {
   /** "Agreed to work with us" answers. */
   agreed: number;
   office_visits: number;
+  /** Visits the associate made themselves (logged as a visit). */
   site_visits: number;
+  /** Site visits this CPM booked for customers who came through an associate. */
+  visits_booked: number;
   /** Associates of this CPM who were enrolled in the period. */
   enrolled: number;
   /** Leads this CPM added that come from an associate. */
@@ -45,7 +48,7 @@ export async function associateWork(
   range: { start: Date; end: Date },
 ): Promise<AssociateWork> {
   const when = { gte: range.start, lt: range.end };
-  const [followUps, enrolled, leads] = await Promise.all([
+  const [followUps, enrolled, leads, visitsBooked] = await Promise.all([
     p.associateFollowUp.findMany({
       where: { employee_id: employeeId, created_at: when },
       select: {
@@ -58,6 +61,14 @@ export async function associateWork(
     p.associate.count({ where: { owner_cpm_id: employeeId, enrolled_at: when } }),
     p.lead.count({
       where: { created_by_id: employeeId, associate_id: { not: null }, created_at: when },
+    }),
+    p.siteVisitBooking.count({
+      where: {
+        telecaller_id: employeeId,
+        status: { not: 'CANCELLED' },
+        created_at: when,
+        lead: { associate_id: { not: null } },
+      },
     }),
   ]);
   const calls = followUps.filter((f: any) => f.channel === 'CALL');
@@ -75,5 +86,6 @@ export async function associateWork(
     site_visits: followUps.filter((f: any) => f.channel === 'SITE_VISIT').length,
     enrolled,
     leads,
+    visits_booked: visitsBooked,
   };
 }

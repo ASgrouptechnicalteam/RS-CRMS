@@ -24,6 +24,12 @@ import prisma from '../lib/prisma';
 import { z } from 'zod';
 import { getPipelineHealth } from '../services/lead/pipelineHealth';
 import { logCall, addLeadFeedback, getCallQueueMeta, splitCalls } from '../services/lead/calls';
+import {
+  getLeadAssociateReferral,
+  listAssociatesForReferral,
+  referLeadToAssociate,
+  takeBackFromAssociate,
+} from '../services/lead/associateReferral';
 import { getMyQueue } from '../services/lead/myQueue';
 import {
   listPartnersForReferral,
@@ -133,6 +139,70 @@ router.post(
       if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
       await takeBackLead(req.user!, leadId, req.body.reason);
       return res.status(200).json({ message: 'Lead taken back' });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+
+// ---- Forward a lead to an associate (2026-11-23), registered before the /:id routes -------------
+router.get(
+  '/associate-targets',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      return res.json({ associates: await listAssociatesForReferral(req.user!) });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+router.post(
+  '/:id/refer-to-associate',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  validateRequestBody(
+    z.object({
+      associate_id: z.number().int().positive(),
+      brief: z.string().trim().max(1500).optional(),
+    }),
+  ),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      await referLeadToAssociate(req.user!, leadId, req.body);
+      return res.status(200).json({ message: 'Lead forwarded to the associate' });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+router.post(
+  '/:id/take-back-from-associate',
+  authenticateToken,
+  requireAuthz(Permissions.LEADS_UPDATE),
+  validateRequestBody(z.object({ reason: z.string().trim().min(3).max(500) })),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      await takeBackFromAssociate(req.user!, leadId, req.body.reason);
+      return res.status(200).json({ message: 'Lead taken back' });
+    } catch (error: any) {
+      return handleServiceError(error, res);
+    }
+  },
+);
+router.get(
+  '/:id/associate-referral',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const leadId = parseInt(req.params.id, 10);
+      if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
+      return res.json({ referral: await getLeadAssociateReferral(req.user!, leadId) });
     } catch (error: any) {
       return handleServiceError(error, res);
     }

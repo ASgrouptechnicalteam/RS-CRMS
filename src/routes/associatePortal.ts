@@ -9,6 +9,13 @@ import { validateRequestBody } from '../middleware/validate';
 import { associatePortalSwitch, requireAssociate } from '../middleware/associateAuth';
 import { clientIp } from '../middleware/rateLimiter';
 import { AssociatePortalService } from '../services/associatePortal.service';
+import {
+  acceptReferral,
+  addCustomer,
+  declineReferral,
+  referredToMe,
+  updateReferral,
+} from '../services/associatePortalWork';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -118,6 +125,65 @@ router.get(
   requireAssociate(),
   readLimiter,
   handle((req) => AssociatePortalService.lead(req.associate, Number(req.params.id) || 0)),
+);
+// ---- Work the leads we forward ("From RRH") and add a customer (2026-11-23) ----
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req: any) => `associate-write:${req.associate?.id ?? clientIp(req)}`,
+  message: { error: 'Too many requests. Please wait a minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+router.get(
+  '/referred',
+  requireAssociate(),
+  readLimiter,
+  handle((req) => referredToMe(req.associate)),
+);
+router.post(
+  '/referred/:id/accept',
+  requireAssociate(),
+  writeLimiter,
+  handle((req) => acceptReferral(req.associate, Number(req.params.id) || 0)),
+);
+router.post(
+  '/referred/:id/decline',
+  requireAssociate(),
+  writeLimiter,
+  validateRequestBody(z.object({ reason: z.string().trim().min(3, 'Say why').max(300) })),
+  handle((req) => declineReferral(req.associate, Number(req.params.id) || 0, req.body.reason)),
+);
+router.post(
+  '/referred/:id/update',
+  requireAssociate(),
+  writeLimiter,
+  validateRequestBody(
+    z.object({
+      progress: z.enum(['CALLED', 'INTERESTED', 'VISIT_PLANNED', 'NOT_INTERESTED']),
+      note: z.string().trim().max(500).optional(),
+    }),
+  ),
+  handle((req) =>
+    updateReferral(req.associate, Number(req.params.id) || 0, {
+      progress: req.body.progress,
+      note: req.body.note,
+    }),
+  ),
+);
+router.post(
+  '/customers',
+  requireAssociate(),
+  writeLimiter,
+  validateRequestBody(
+    z.object({
+      customer_name: z.string().trim().min(2, 'Enter the customer’s name').max(120),
+      phone: z.string().min(10, 'Enter the customer’s mobile number').max(20),
+      project_id: z.number().int().positive().nullable().optional(),
+      note: z.string().trim().max(1000).optional(),
+    }),
+  ),
+  handle((req) => addCustomer(req.associate, req.body)),
 );
 router.get(
   '/projects',

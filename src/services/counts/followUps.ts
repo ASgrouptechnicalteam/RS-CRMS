@@ -63,6 +63,7 @@ export async function followUpsDue(
         company_id: companyId,
         status: { in: CALLABLE_STATUSES },
         referred_to_cp_id: null,
+        referred_to_associate_id: null,
       },
     },
     select: { assignee_id: true, target_date: true, lead: { select: { assigned_to_id: true } } },
@@ -87,6 +88,7 @@ export async function followUpsDue(
        AND l.assigned_to_id IN (${idMarks})
        AND l.status IN (${statusMarks})
        AND l.referred_to_cp_id IS NULL
+       AND l.referred_to_associate_id IS NULL
        AND a.created_at < ?
        AND (a.call_outcome IN ('NO_ANSWER', 'BUSY_OR_SWITCHED_OFF')
             OR (a.call_outcome IS NULL

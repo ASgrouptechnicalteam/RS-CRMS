@@ -531,7 +531,157 @@ export async function remindCpReferrals(d: Day) {
   return sendOnce('CP_REFERRAL_STALE', d, targets);
 }
 
+// ---- 10. Associates: calls still to make today (the manager), and the manager's boss when far behind ----
+// "You still have 20 associates to call today." Counted the way the Today list is: associates whose call is
+// due by today, minus those already followed up today, plus office visits still open.
+
+/** Associates a manager still has to call today, how many they have already called, and open office visits. */
+export async function associateCallsToday(managerId: number, d: Day) {
+  const [due, touched, openVisits] = await Promise.all([
+    p.associate.findMany({
+      where: {
+        owner_cpm_id: managerId,
+        pipeline: { not: 'LEFT' },
+        next_follow_up_at: { lt: d.end },
+      },
+      select: { id: true },
+    }),
+    p.associateFollowUp.findMany({
+      where: { employee_id: managerId, created_at: { gte: d.start, lt: d.end } },
+      select: { associate_id: true },
+      distinct: ['associate_id'],
+    }),
+    p.associateOfficeVisit.count({
+      where: {
+        met_by_id: managerId,
+        scheduled_at: { gte: d.start, lt: d.end },
+        status: { in: ['PLANNED', 'ARRIVED'] },
+      },
+    }),
+  ]);
+  const done = new Set<number>(touched.map((t: any) => t.associate_id));
+  const left = due.filter((a: any) => !done.has(a.id)).length;
+  return { left, called: done.size, open_office_visits: openVisits };
+}
+
+const cpmManagers = () =>
+  p.employee.findMany({
+    where: { status: 'ACTIVE', roles: { some: { role: { name: Roles.CHANNEL_PARTNER_MANAGER } } } },
+    select: {
+      id: true,
+      full_name: true,
+      employee_code: true,
+      company_id: true,
+      reporting_manager_id: true,
+    },
+  });
+
+export async function remindAssociateCalls(d: Day) {
+  const targets: { id: number; title: string; message: string; link: string }[] = [];
+  for (const m of await cpmManagers()) {
+    const c = await associateCallsToday(m.id, d);
+    if (c.left === 0 && c.open_office_visits === 0) continue;
+    const parts = [
+      c.left > 0 ? `${c.left} associate${c.left === 1 ? '' : 's'} still to call` : '',
+      c.open_office_visits > 0
+        ? `${c.open_office_visits} office visit${c.open_office_visits === 1 ? '' : 's'} to close`
+        : '',
+    ].filter(Boolean);
+    targets.push({
+      id: m.id,
+      title: 'Associate calls still to make',
+      message: `Today you have ${parts.join(' and ')}.${c.called ? ` You have called ${c.called} so far.` : ''}`,
+      link: '/associates',
+    });
+  }
+  return sendOnce('ASSOCIATE_CALLS_LEFT', d, targets);
+}
+
+const BEHIND_MIN_LEFT = 5;
+export async function escalateAssociateCalls(d: Day) {
+  const mds = await holdersByCompany(Roles.MD, false);
+  const per = new Map<number, string[]>();
+  for (const m of await cpmManagers()) {
+    const c = await associateCallsToday(m.id, d);
+    // Far behind: many left and fewer called than still waiting.
+    if (c.left < BEHIND_MIN_LEFT || c.called >= c.left) continue;
+    const boss = m.reporting_manager_id ? [m.reporting_manager_id] : mds.get(m.company_id) || [];
+    const line = `${m.full_name || m.employee_code}: ${c.called} called, ${c.left} still waiting`;
+    for (const id of boss) per.set(id, [...(per.get(id) || []), line]);
+  }
+  const targets = [...per].map(([id, lines]) => ({
+    id,
+    title: 'Associate calls are behind today',
+    message: `${lines.slice(0, 4).join('; ')}${lines.length > 4 ? ` and ${lines.length - 4} more` : ''}.`,
+    link: '/associates?tab=report',
+  }));
+  return sendOnce('ASSOCIATE_CALLS_BEHIND', d, targets);
+}
+
+// ---- 11. A lead forwarded to an associate that nobody has answered: tell who forwarded it ----
+// Not accepted in a day, or accepted but silent for five days. No automatic return: they take it back by hand.
+export async function remindAssociateReferrals(d: Day) {
+  const waitingSince = new Date(d.now.getTime() - CP_REFERRAL_ACCEPT_HOURS * 3600e3);
+  const idleSince = new Date(d.now.getTime() - CP_REFERRAL_IDLE_DAYS * DAY_MS);
+  const stale = await p.associateReferral.findMany({
+    where: {
+      OR: [
+        { status: 'OFFERED', offered_at: { lte: waitingSince } },
+        { status: 'ACCEPTED', last_activity_at: { lte: idleSince } },
+      ],
+    },
+    select: {
+      id: true,
+      company_id: true,
+      lead_id: true,
+      associate_id: true,
+      status: true,
+      referred_by_id: true,
+    },
+  });
+  if (stale.length === 0) return 0;
+  const [leads, assocs] = await Promise.all([
+    p.lead.findMany({
+      where: { id: { in: stale.map((r: any) => r.lead_id) } },
+      select: { id: true, customer_name: true, assigned_to_id: true },
+    }),
+    p.associate.findMany({
+      where: { id: { in: stale.map((r: any) => r.associate_id) } },
+      select: { id: true, full_name: true, owner_cpm_id: true },
+    }),
+  ]);
+  const leadBy = new Map<number, any>(leads.map((l: any) => [l.id, l]));
+  const assocBy = new Map<number, any>(assocs.map((x: any) => [x.id, x]));
+  const per = new Map<number, string[]>();
+  for (const r of stale) {
+    const lead = leadBy.get(r.lead_id);
+    const who = assocBy.get(r.associate_id);
+    const line = `${lead?.customer_name || 'A customer'} with ${who?.full_name || 'an associate'} (${
+      r.status === 'OFFERED' ? 'not accepted' : 'no news'
+    })`;
+    const people = new Set<number>([r.referred_by_id]);
+    if (lead?.assigned_to_id) people.add(lead.assigned_to_id);
+    if (who?.owner_cpm_id) people.add(who.owner_cpm_id);
+    for (const id of people) per.set(id, [...(per.get(id) || []), line]);
+  }
+  const targets = [...per].map(([id, lines]) => ({
+    id,
+    title: 'An associate has not answered',
+    message: `${lines.length} forwarded lead${lines.length === 1 ? '' : 's'} need${lines.length === 1 ? 's' : ''} attention: ${lines.slice(0, 3).join(', ')}${lines.length > 3 ? ` and ${lines.length - 3} more` : ''}. Open the lead to take it back.`,
+    link: '/leads',
+  }));
+  return sendOnce('ASSOCIATE_REFERRAL_STALE', d, targets);
+}
+
 export const REMINDERS: Reminder[] = [
+  {
+    type: 'ASSOCIATE_REFERRAL_STALE',
+    from: '10:30',
+    until: '17:00',
+    run: remindAssociateReferrals,
+  },
+  { type: 'ASSOCIATE_CALLS_LEFT', from: '15:00', until: '18:30', run: remindAssociateCalls },
+  { type: 'ASSOCIATE_CALLS_BEHIND', from: '17:30', until: '19:00', run: escalateAssociateCalls },
   { type: 'CP_REFERRAL_STALE', from: '10:30', until: '17:00', run: remindCpReferrals },
   { type: 'REMINDER_PROJECT_REVIEWS', from: '10:30', until: '17:00', run: remindProjectReviews },
   { type: 'REMINDER_VISITS_TODAY', from: '08:30', until: '12:00', run: remindVisitsToday },

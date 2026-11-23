@@ -1065,6 +1065,8 @@ model Lead {
   cp_owner_id              Int?
   /// Set while the lead is with a channel partner (2026-11-23): the partner's Employee id. The lead stays ours; this only hides it from our queues and shows "With partner".
   referred_to_cp_id        Int?
+  // Our lead forwarded to an associate to push (2026-11-23): hidden from our callers' queues while with them.
+  referred_to_associate_id Int?
   id                       Int               @id @default(autoincrement())
   lead_code                String            @unique
   company_id               Int
@@ -1160,6 +1162,7 @@ model Lead {
   @@index([branch_id])
   @@index([assigned_to_id])
   @@index([referred_to_cp_id])
+  @@index([referred_to_associate_id])
   @@index([status])
   @@index([company_id, created_at])
   @@index([phone])
@@ -1204,6 +1207,7 @@ model Associate {
   follow_ups AssociateFollowUp[]
   leads      Lead[]
   credential AssociateCredential?
+  office_visits AssociateOfficeVisit[]
 
   @@unique([company_id, phone])
   @@unique([company_id, associate_code])
@@ -1211,6 +1215,30 @@ model Associate {
   @@index([owner_cpm_id])
   @@index([upline_id])
   @@index([company_id, next_follow_up_at])
+}
+
+/// An associate coming to our office to meet someone (planned ahead, then arrived, done or did not come).
+/// Always called an "office visit" so it is never confused with a customer's site visit.
+model AssociateOfficeVisit {
+  id            Int       @id @default(autoincrement())
+  company_id    Int
+  associate_id  Int
+  scheduled_at  DateTime
+  purpose       String    @default("OTHER") @db.VarChar(20) // NEW_ASSOCIATE, CATCH_UP, OTHER
+  met_by_id     Int? // the manager who will meet them
+  status        String    @default("PLANNED") @db.VarChar(12) // PLANNED, ARRIVED, DONE, NO_SHOW, CANCELLED
+  arrived_at    DateTime?
+  done_at       DateTime?
+  notes         String?   @db.VarChar(1000)
+  created_by_id Int
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  associate Associate @relation(fields: [associate_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id, scheduled_at])
+  @@index([associate_id, scheduled_at])
+  @@index([met_by_id, scheduled_at])
 }
 
 /// One follow-up with an associate (a call, WhatsApp or visit). These are
@@ -3698,6 +3726,32 @@ model CpTask {
 
 /// A company lead handed to an external partner (2026-11-23). Kept apart from the partner's own private
 /// leads (CpLead) so the two never mix: it is its own inbox, "Referred by RRH".
+/// One of our leads forwarded to an associate (their own "From RRH" list in the associate app). The lead
+/// stays ours; this row is only the associate's view and progress. Never mixed with the associate's own customers.
+model AssociateReferral {
+  id                Int       @id @default(autoincrement())
+  company_id        Int
+  lead_id           Int
+  associate_id      Int
+  referred_by_id    Int // our Employee who forwarded it
+  brief             String?   @db.Text // written for the associate; never our internal notes
+  stage_at_referral String    @db.VarChar(30)
+  status            String    @default("OFFERED") @db.VarChar(12) // OFFERED | ACCEPTED | DECLINED | RETURNED | BOOKED | LOST
+  associate_stage   String?   @db.VarChar(20) // CALLED | INTERESTED | VISIT_PLANNED | NOT_INTERESTED
+  associate_note    String?   @db.VarChar(500)
+  open_lead_id      Int?      @unique // = lead_id while open, empty once closed: one open referral per lead
+  offered_at        DateTime  @default(now())
+  accepted_at       DateTime?
+  last_activity_at  DateTime  @default(now())
+  closed_at         DateTime?
+  closed_reason     String?   @db.VarChar(300)
+  stale_notified_at DateTime?
+
+  @@index([associate_id, status])
+  @@index([lead_id])
+  @@index([company_id, status])
+}
+
 model CpReferral {
   id                Int       @id @default(autoincrement())
   company_id        Int
@@ -3780,8 +3834,14 @@ model CpApplication {
   travel_allowance   String?   @db.VarChar(80)
   superior           String?   @db.VarChar(120)
 
-  @@unique([company_id, phone])
-  @@unique([company_id, partner_no])
+  // CP (channel partner) or ASSOCIATE: the same form for two kinds of people (2026-11-23).
+  kind               String    @default("CP") @db.VarChar(12)
+  // Set when an associate registration is onboarded into the Associates list.
+  associate_id       Int?
+
+  @@unique([company_id, kind, phone])
+  @@unique([company_id, kind, partner_no])
   @@unique([employee_id])
+  @@unique([associate_id])
   @@index([status, created_at])
 }

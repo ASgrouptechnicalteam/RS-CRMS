@@ -270,6 +270,8 @@ export const LeadCreateSchema = z.object({
   external_agent_name: z.string().optional().nullable(),
   external_agent_phone: z.string().optional().nullable(),
   external_agent_associate_id: z.string().optional().nullable(),
+  // Added from an associate's own page: the associate is named directly (their details are filled in).
+  associate_id: z.number().int().positive().optional().nullable(),
   external_agent_company: z.string().optional().nullable(),
   // Anyone keeping the lead ("Me") can add it at the stage it has already
   // reached, with that stage's details (services/lead/stage.ts).

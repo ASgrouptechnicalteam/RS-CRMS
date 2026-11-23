@@ -29,7 +29,7 @@ import cpRoutes from './routes/cp';
 import cpWorkRoutes from './routes/cpWork';
 import cpAdminRoutes from './routes/cpAdmin';
 import cpReferredRoutes from './routes/cpReferred';
-import cpInterestRoutes from './routes/cpInterest';
+import cpInterestRoutes, { associateRegistrationRouter } from './routes/cpInterest';
 import pettyCashRoutes from './routes/pettyCash';
 import workUpdateRoutes from './routes/workUpdates';
 import assetRoutes from './routes/assets';
@@ -350,6 +350,8 @@ if (mountInternal) {
   app.use('/api/v1/cp', cpReferredRoutes);
   app.use('/api/v1/cp-admin', cpAdminRoutes);
   app.use('/api/v1/cp-interest', cpInterestRoutes);
+  // The associate registration form (public link) and its list for the Channel Partner Manager.
+  app.use('/api/v1/associate-registration', associateRegistrationRouter);
   // Petty cash and the monthly budget (item 4).
   app.use('/api/v1/petty-cash', pettyCashRoutes);
   app.use('/api/v1/work-updates', workUpdateRoutes);

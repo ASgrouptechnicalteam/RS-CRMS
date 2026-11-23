@@ -11,6 +11,7 @@ import { updateLeadStatus } from './lead/status';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import { logger } from '../utils/logger';
 import { SPOKE_OUTCOMES } from './associateWork';
+import { officeVisitsOf } from './associateOfficeVisit';
 
 // Associates (freelance agents who bring leads) and the Channel Partner
 // Manager's work with them: the list, follow-ups, the daily queue and lead
@@ -512,6 +513,7 @@ export async function getAssociate(user: TokenPayload, id: number) {
       };
     }),
     follow_ups: followUps,
+    office_visits: await officeVisitsOf(a.id),
     portal: {
       enabled: associatePortalEnabled(),
       has_login: !!credential,

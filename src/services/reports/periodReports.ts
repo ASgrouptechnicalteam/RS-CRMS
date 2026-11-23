@@ -1354,6 +1354,7 @@ async function channelReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
     ['enrollments', 'Enrollments', ['ASSOCIATE_ENROLLMENT'], (w) => w.enrolled],
     ['site', 'Associate site visits', ['ASSOCIATE_SITE_VISIT'], (w) => w.site_visits],
     ['leads', 'Leads from associates', [], (w) => w.leads],
+    ['visits_booked', 'Site visits booked for their customers', [], (w) => w.visits_booked],
     ['bookings', 'Associate bookings', ['ASSOCIATE_BOOKING'], () => 0],
   ];
   const value = (kinds: string[], pick: (w: typeof now) => number, r: Range, w: typeof now) =>

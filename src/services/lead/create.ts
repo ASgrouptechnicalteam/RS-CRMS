@@ -10,7 +10,7 @@ import { findBestAssigneeForLead } from '../../utils/distributionService';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { cleanPhone } from '../../shared/zodHelpers';
-import { associateIdForNewLead } from '../associate.service';
+import { associateIdForNewLead, associateScope } from '../associate.service';
 const p = prisma;
 
 export async function createLead(
@@ -260,21 +260,44 @@ export async function createLead(
   // number". Other sources need only the customer's name and phone.
   // Anyone who sends associate details (older app versions always did) has
   // them kept, even under another source.
+  // Added from an associate's own page: they are named directly, so the lead is linked to them whoever is
+  // adding it (a Channel Partner Manager, the MD...), and their details are filled in from their record.
+  const chosen = dto.associate_id
+    ? await p.associate.findFirst({
+        where: { id: dto.associate_id, ...(await associateScope(user)) },
+      })
+    : null;
+  if (dto.associate_id && !chosen) throw new AppError(404, 'Associate not found');
   const fromAssociate =
-    isChannelPartner && (dto.source === 'ASSOCIATE' || !!dto.external_agent_name?.trim());
-  if (fromAssociate) {
+    !!chosen ||
+    (isChannelPartner && (dto.source === 'ASSOCIATE' || !!dto.external_agent_name?.trim()));
+  if (fromAssociate && !chosen) {
     if (!dto.external_agent_name || !dto.external_agent_phone || !dto.external_agent_associate_id) {
       throw new AppError(400, "Enter the associate's name, phone and associate ID.");
     }
   }
+  const agent = chosen
+    ? {
+        name: chosen.full_name,
+        phone: chosen.phone,
+        // Someone without an ID yet is identified by their mobile number.
+        code: chosen.associate_code || chosen.phone,
+      }
+    : {
+        name: dto.external_agent_name,
+        phone: dto.external_agent_phone,
+        code: dto.external_agent_associate_id,
+      };
   // Linked to the associate's record when the code or phone matches exactly one.
-  const associateId = fromAssociate
-    ? await associateIdForNewLead(
-        user.companyId,
-        dto.external_agent_associate_id,
-        dto.external_agent_phone,
-      )
-    : null;
+  const associateId = chosen
+    ? chosen.id
+    : fromAssociate
+      ? await associateIdForNewLead(
+          user.companyId,
+          dto.external_agent_associate_id,
+          dto.external_agent_phone,
+        )
+      : null;
 
   // Anyone keeping the lead can add it at the stage it has already reached.
   let resolvedStage: ResolvedStage | null = null;
@@ -429,9 +452,9 @@ export async function createLead(
         sla_breach_at: slaBreachAt,
         referral_person_name: dto.source === 'REFERRAL' ? dto.referral_person_name || null : null,
         referral_employee_id: validReferralEmployeeId ?? (colleague ? user.employeeId : null),
-        external_agent_name: fromAssociate ? dto.external_agent_name : null,
-        external_agent_phone: fromAssociate ? dto.external_agent_phone : null,
-        external_agent_associate_id: fromAssociate ? dto.external_agent_associate_id : null,
+        external_agent_name: fromAssociate ? agent.name : null,
+        external_agent_phone: fromAssociate ? agent.phone : null,
+        external_agent_associate_id: fromAssociate ? agent.code : null,
         external_agent_company: fromAssociate ? dto.external_agent_company || null : null,
         associate_id: associateId,
         last_contacted_at: resolvedStage?.contactedAt || null,

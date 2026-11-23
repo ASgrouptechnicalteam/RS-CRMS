@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { TokenPayload } from '../utils/jwt';
 import { AppError } from './lead/errors';
+import { Roles } from '../shared';
 import { seesAllAssociates, tenDigits, wouldLoop } from './associate.service';
 
 // Import of associates from the old portal's export or a spreadsheet saved as
@@ -36,7 +37,7 @@ const FIELDS: Record<string, string[]> = {
     'contactnumber',
   ],
   email: ['email', 'emailid', 'emailaddress', 'mail'],
-  designation: ['designation', 'rank'],
+  designation: ['designation', 'position', 'rank'],
   upline: [
     'upline',
     'uplinecode',
@@ -44,6 +45,7 @@ const FIELDS: Record<string, string[]> = {
     'referralid',
     'referraluserid',
     'referredby',
+    'broughtinby',
     'parent',
     'parentid',
     'parentcode',
@@ -140,6 +142,7 @@ export async function planImport(user: TokenPayload, csv: string) {
   const repeats_in_file: { row: number; phone: string; first_row: number }[] = [];
   const code_conflicts: { row: number; code: string; reason: string }[] = [];
   const items: Item[] = [];
+  const shown = new Map<number, { name: string; phone: string }>();
   const seenPhone = new Map<string, number>();
   const seenCode = new Map<string, number>();
 
@@ -153,6 +156,7 @@ export async function planImport(user: TokenPayload, csv: string) {
             .slice(0, MAX_LEN[f] ?? 200);
     const phone = tenDigits(get('phone'));
     const full_name = get('full_name');
+    shown.set(row, { name: full_name, phone: get('phone') });
     if (!/^\d{10}$/.test(phone))
       return invalid.push({
         row,
@@ -216,13 +220,13 @@ export async function planImport(user: TokenPayload, csv: string) {
 
   const fresh: Item[] = [];
   const already_in_crm: { row: number; id: number; name: string; fills: string[] }[] = [];
-  const other_cpm: { row: number }[] = [];
+  const other_cpm: { row: number; name: string }[] = [];
   const fills = new Map<number, Record<string, string>>();
   for (const it of items) {
     const ex = exPhone.get(it.phone);
     if (ex) {
       if (!all && ex.owner_cpm_id !== null && ex.owner_cpm_id !== user.employeeId) {
-        other_cpm.push({ row: it.row });
+        other_cpm.push({ row: it.row, name: ex.full_name });
         continue;
       }
       const f: Record<string, string> = {};
@@ -262,11 +266,47 @@ export async function planImport(user: TokenPayload, csv: string) {
     })
     .map((i) => ({ row: i.row, upline: i.upline! }));
 
+  // Every spreadsheet row with what will happen to it, in file order (for the preview table).
+  type RowStatus = 'NEW' | 'EXISTS' | 'REPEAT' | 'PROBLEM' | 'CLASH' | 'OTHER';
+  const rowsOut = new Map<
+    number,
+    { row: number; name: string; phone: string; status: RowStatus; note: string }
+  >();
+  const put = (row: number, status: RowStatus, note: string) =>
+    rowsOut.set(row, {
+      row,
+      name: shown.get(row)?.name || '',
+      phone: shown.get(row)?.phone || '',
+      status,
+      note,
+    });
+  for (const i of fresh)
+    put(
+      i.row,
+      'NEW',
+      i.associate_code ? `Will be added as joined (ID ${i.associate_code})` : 'Will be added',
+    );
+  for (const r of already_in_crm)
+    put(
+      r.row,
+      'EXISTS',
+      r.fills.length
+        ? `Already added. Will fill in: ${r.fills.join(', ')}`
+        : 'Already added, nothing to change',
+    );
+  for (const r of repeats_in_file)
+    put(r.row, 'REPEAT', `Same mobile as row ${r.first_row}, skipped`);
+  for (const r of invalid) put(r.row, 'PROBLEM', r.reason);
+  for (const r of code_conflicts) put(r.row, 'CLASH', r.reason);
+  for (const r of other_cpm) put(r.row, 'OTHER', 'Already looked after by someone else, skipped');
+  const rows = [...rowsOut.values()].sort((a, b) => a.row - b.row);
+
   return {
     items,
     fresh,
     fills,
     summary: {
+      rows,
       total_rows: table.length - 1,
       new_count: fresh.length,
       already_in_crm_count: already_in_crm.length,
@@ -304,10 +344,16 @@ export async function commitImport(
 ) {
   const plan = await planImport(user, csv);
   const companyId = user.companyId;
-  const owner = seesAllAssociates(user) ? (opts.owner_cpm_id ?? null) : null;
+  // A CPM adds for themselves. The MD, Admin and Technical Manager choose a CPM, or nobody yet.
+  const owner = seesAllAssociates(user) ? (opts.owner_cpm_id ?? null) : user.employeeId;
   if (owner !== null) {
     const ok = await p.employee.findFirst({
-      where: { id: owner, company_id: companyId, status: 'ACTIVE' },
+      where: {
+        id: owner,
+        company_id: companyId,
+        status: 'ACTIVE',
+        roles: { some: { role: { name: Roles.CHANNEL_PARTNER_MANAGER } } },
+      },
     });
     if (!ok) throw new AppError(400, 'Choose an active Channel Partner Manager of this company.');
   }
@@ -364,5 +410,5 @@ export async function commitImport(
       uplines_linked++;
     }
   }
-  return { ...plan.summary, created, updated, uplines_linked };
+  return { ...plan.summary, created, updated, uplines_linked, owner_cpm_id: owner };
 }

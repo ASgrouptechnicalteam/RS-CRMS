@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
 import { Roles, Permissions } from '../shared';
-import { calculatePerformanceScore } from '../services/performance-metric';
+import { calculatePerformanceScore, PERFORMANCE_WEIGHTS } from '../services/performance-metric';
 import { getISTComponents, getISTMonthRange, calculateAttendancePoints } from '../utils/time';
 import { AttendanceStatusType } from '../shared';
 import { isManagerOf } from '../utils/hierarchy';
@@ -128,6 +128,26 @@ router.get('/my-score', authenticateToken, async (req: AuthenticatedRequest, res
   }
 });
 
+// Night-job events that belong to the day they are about (the run is often after midnight).
+const STAMPED_ACTIONS = [
+  'UNINFORMED_ABSENT',
+  'ATTENDANCE_AUTO_CHECKOUT_MIDNIGHT',
+  'MISSING_DAILY_REPORT',
+  'COMPLETED_ALL_WORK',
+  'TARGET_DAY_MET',
+  'TARGET_DAY_MISSED',
+  'TARGET_WEEK_MET',
+  'TARGET_WEEK_MISSED',
+  'TARGET_MONTH_MET',
+  'TARGET_MONTH_MISSED',
+];
+
+/** When a night-job event happened: the day it is about (noon IST), else when it was written. */
+const aboutTime = (e: { new_value: string | null; created_at: Date }) => {
+  const day = e.new_value?.match(/"date":"(\d{4}-\d{2}-\d{2})"/)?.[1];
+  return day ? new Date(`${day}T12:00:00+05:30`) : e.created_at;
+};
+
 router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const employeeId = req.user!.employeeId;
@@ -166,23 +186,13 @@ router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res:
         OR: [
           {
             action: {
-              in: [
-                'UNINFORMED_ABSENT',
-                'ATTENDANCE_AUTO_CHECKOUT_MIDNIGHT',
-                'MISSING_DAILY_REPORT',
-                'COMPLETED_ALL_WORK',
-              ],
+              in: STAMPED_ACTIONS,
             },
             ...aboutThisMonth,
           },
           {
             action: {
-              notIn: [
-                'UNINFORMED_ABSENT',
-                'ATTENDANCE_AUTO_CHECKOUT_MIDNIGHT',
-                'MISSING_DAILY_REPORT',
-                'COMPLETED_ALL_WORK',
-              ],
+              notIn: STAMPED_ACTIONS,
             },
             created_at: { gte: startOfMonth, lte: endOfMonth },
           },
@@ -281,7 +291,60 @@ router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res:
           points: -2.0,
           type: 'PENALTY',
           description: 'Absent without prior approval',
-          timestamp: b.created_at,
+          timestamp: aboutTime(b),
+        });
+      } else if (b.action === 'ATTENDANCE_AUTO_CHECKOUT_MIDNIGHT') {
+        events.push({
+          id: `mc-${b.id}`,
+          action: b.action,
+          title: 'Forgot to Check Out',
+          points: -PERFORMANCE_WEIGHTS.midnightAutoCheckoutPenalty,
+          type: 'PENALTY',
+          description: 'Still checked in at midnight, so the system checked you out',
+          timestamp: aboutTime(b),
+        });
+      } else if (b.action === 'MISSING_DAILY_REPORT') {
+        events.push({
+          id: `mr-${b.id}`,
+          action: b.action,
+          title: 'Daily Report Not Sent',
+          points: -PERFORMANCE_WEIGHTS.missingDailyReportPenalty,
+          type: 'PENALTY',
+          description: 'No end-of-day report was sent for a working day',
+          timestamp: aboutTime(b),
+        });
+      } else if (b.action === 'COMPLETED_ALL_WORK') {
+        events.push({
+          id: `ca-${b.id}`,
+          action: b.action,
+          title: 'Finished All Work',
+          points: PERFORMANCE_WEIGHTS.completedAllWorkBoost,
+          type: 'BOOST',
+          description: 'Every task and follow-up due that day was done',
+          timestamp: aboutTime(b),
+        });
+      } else if (/^TARGET_(DAY|WEEK|MONTH)_(MET|MISSED)$/.test(b.action)) {
+        const [, span, result] = b.action.match(/^TARGET_(DAY|WEEK|MONTH)_(MET|MISSED)$/)!;
+        const pts =
+          span === 'DAY'
+            ? PERFORMANCE_WEIGHTS.dayTargetPoints
+            : span === 'WEEK'
+              ? PERFORMANCE_WEIGHTS.weekTargetPoints
+              : PERFORMANCE_WEIGHTS.monthTargetPoints;
+        const met = result === 'MET';
+        const word = span.toLowerCase();
+        events.push({
+          id: `tg-${b.id}`,
+          action: b.action,
+          title: met
+            ? `${span[0]}${word.slice(1)} Target Met`
+            : `${span[0]}${word.slice(1)} Target Missed`,
+          points: met ? pts : -pts,
+          type: met ? 'BOOST' : 'PENALTY',
+          description: met
+            ? `You reached your ${word} targets`
+            : `You did not reach your ${word} targets`,
+          timestamp: aboutTime(b),
         });
       } else if (b.action === 'PROPERTY_BOOKED_CONTRIBUTION') {
         events.push({

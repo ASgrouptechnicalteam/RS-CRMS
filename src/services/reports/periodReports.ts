@@ -8,7 +8,14 @@ import { getDownstreamEmployeeIds, isManagerOf } from '../../utils/hierarchy';
 import { CRM_ACTION } from '../../middleware/recordCrmAction';
 import { WORK_LOG_ACTION, parseWorkLog } from '../../routes/workLog';
 import { calculatePerformanceScore } from '../performance-metric';
-import { chooseTargets, METRIC_LABELS, TargetMetric } from '../targets.service';
+import {
+  chooseTargets,
+  measureMetric,
+  METRIC_LABELS,
+  scaledTarget,
+  TargetMetric,
+  workShare,
+} from '../targets.service';
 import {
   Period,
   PeriodType,
@@ -50,7 +57,8 @@ import { Person, groupOf, nameOf, rankBy, staffOf } from '../counts/people';
  */
 
 const p = prisma;
-export const REPORT_VERSION = 1;
+/** Bump when a report's layout changes: closed periods saved with an older version are rebuilt. */
+export const REPORT_VERSION = 2;
 
 export const REPORT_KINDS = {
   COMPANY: 'Company (MD)',
@@ -228,8 +236,21 @@ export async function getReport(subject: Subject, period: Period, now: Date = ne
     const saved = await p.reportSnapshot.findUnique({
       where: { company_id_scope_period_type_period_start: key },
     });
-    if (saved) {
+    if (saved && (saved.version ?? 1) >= REPORT_VERSION) {
       return { ...(saved.data as unknown as ReportDoc), live: false, saved_at: saved.generated_at };
+    }
+    // Saved with an older layout: build it again and keep the new copy.
+    if (saved) {
+      const fresh = await buildReport(subject, period, now);
+      const row = await p.reportSnapshot.update({
+        where: { company_id_scope_period_type_period_start: key },
+        data: {
+          version: REPORT_VERSION,
+          generated_at: new Date(),
+          data: fresh as unknown as Prisma.InputJsonValue,
+        },
+      });
+      return { ...fresh, live: false, saved_at: row.generated_at };
     }
   }
   const doc = await buildReport(subject, period, now);
@@ -340,14 +361,14 @@ export async function targetAttainment(
   const rows = await p.performanceTarget.findMany({
     where: { company_id: { in: companyIds }, is_active: true, period: period.type },
   });
-  const done = (s: PersonStats, m: string) =>
-    m === 'CALLS'
-      ? s.calls
-      : m === 'VISITS_BOOKED'
-        ? s.visits_booked
-        : m === 'VISITS_COMPLETED'
-          ? s.visits_done
-          : s.deals;
+  const known: Record<string, keyof PersonStats> = {
+    CALLS: 'calls',
+    VISITS_BOOKED: 'visits_booked',
+    VISITS_COMPLETED: 'visits_done',
+    BOOKINGS_CONFIRMED: 'deals',
+  };
+  // Only the four sales measures can be read from the counts; others are left out of the average.
+  const done = (s: PersonStats, m: string) => (known[m] ? (s[known[m]] as number) : null);
   const out = new Map<number, number | null>();
   const detail: { id: number; metric: string; target: number; done: number }[] = [];
   const at = new Date(Math.min(period.end.getTime() - 1, now.getTime()));
@@ -362,12 +383,14 @@ export async function targetAttainment(
       continue;
     }
     const s = stats.get(x.id)!;
-    const pcts = chosen.map((t) => {
+    const pcts: number[] = [];
+    for (const t of chosen) {
       const d = done(s, t.metric);
+      if (d === null) continue;
       detail.push({ id: x.id, metric: t.metric, target: t.value, done: d });
-      return t.value > 0 ? Math.min(100, (d / t.value) * 100) : 0;
-    });
-    out.set(x.id, Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length));
+      pcts.push(t.value > 0 ? Math.min(100, (d / t.value) * 100) : 0);
+    }
+    out.set(x.id, pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null);
   }
   return { byPerson: out, detail };
 }
@@ -880,6 +903,61 @@ async function salesReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
   };
 }
 
+/**
+ * One person's own targets for the period, judged the way the Targets page does: the same measures,
+ * a week or month lowered for leave and days off. A daily target is shown as its daily goal times
+ * the days the person could work, against what was done over the whole period.
+ */
+async function personTargets(ctx: Ctx, me: Person) {
+  const [rows, emp] = await Promise.all([
+    p.performanceTarget.findMany({
+      where: {
+        company_id: me.company_id,
+        is_active: true,
+        OR: [{ employee_id: me.id }, { employee_id: null, role_name: { in: me.roles } }],
+      },
+    }),
+    p.employee.findUnique({
+      where: { id: me.id },
+      select: { id: true, company_id: true, weekly_off_day: true },
+    }),
+  ]);
+  const at = new Date(Math.min(ctx.range.end.getTime() - 1, ctx.now.getTime()));
+  const wanted = ctx.monthly ? ['DAY', 'WEEK', 'MONTH'] : ['DAY', 'WEEK'];
+  const chosen = [...chooseTargets(rows, me.id, at).values()].filter((t) =>
+    wanted.includes(t.period),
+  );
+  const share = emp ? await workShare(emp, ctx.range.start, ctx.range.end) : null;
+  const order: Record<string, number> = { DAY: 0, WEEK: 1, MONTH: 2 };
+  const out: { ord: number; period: string; metric: string; goal: number; done: number }[] = [];
+  for (const t of chosen) {
+    // A week target belongs to a week report and a month target to a month report: the other
+    // period's target is shown only where it can be judged over this range.
+    if (ctx.period.type === 'WEEK' && t.period === 'MONTH') continue;
+    const done = await measureMetric(
+      me.id,
+      t.metric as TargetMetric,
+      ctx.range.start,
+      ctx.range.end,
+    );
+    const goal =
+      t.period === 'DAY'
+        ? t.value * Math.max(1, Math.round(share?.available ?? 1))
+        : share && t.period === ctx.period.type
+          ? scaledTarget(t.value, share.factor)
+          : t.value;
+    out.push({
+      ord: order[t.period],
+      period:
+        t.period === 'DAY' ? 'Daily goal x working days' : t.period === 'WEEK' ? 'Week' : 'Month',
+      metric: METRIC_LABELS[t.metric as TargetMetric] || t.metric,
+      goal,
+      done,
+    });
+  }
+  return out.sort((a, b) => a.ord - b.ord || a.metric.localeCompare(b.metric));
+}
+
 async function personalReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
   const me = ctx.subject.person!;
   const { companyIds } = ctx.subject;
@@ -900,46 +978,106 @@ async function personalReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
   ]);
   const s = stats.get(me.id)!;
   const ps = prevStats.get(me.id)!;
-  const { detail } = await targetAttainment(
-    ctx.subject.companyIds,
-    ctx.period,
-    ctx.now,
-    [me],
-    stats,
-  );
-  const score = calculatePerformanceScore(inputs.get(me.id)!).score;
+  const inp = inputs.get(me.id)!;
+  const isPm = me.roles.includes(Roles.PROJECT_MANAGER);
+  const [targets, leave, pmDone, pmVerified, pmFeedback] = await Promise.all([
+    personTargets(ctx, me),
+    leaveDays([me.id], ctx.range),
+    isPm
+      ? p.siteVisitBooking.count({ where: { ...visitDoneWhere(ctx.range), ...visitDoneBy(me.id) } })
+      : 0,
+    isPm
+      ? p.property.count({
+          where: {
+            assigned_pm_id: me.id,
+            verified_by_pm_at: { gte: ctx.range.start, lt: ctx.range.end },
+          },
+        })
+      : 0,
+    isPm
+      ? p.siteVisitBooking.count({
+          where: {
+            project_manager_id: me.id,
+            ...visitDoneWhere(ctx.range),
+            feedback: { isNot: null },
+          },
+        })
+      : 0,
+  ]);
+  const score = calculatePerformanceScore(inp).score;
   const isSales = groupOf(me.roles) === 'SALES';
   const tables: Table[] = [
     {
       key: 'targets',
       title: 'Targets',
+      hint: 'A week or month goal is lowered for your leave and days off.',
       columns: [
-        { key: 'metric', label: 'Target', format: 'text' },
-        { key: 'target', label: 'Target' },
+        { key: 'metric', label: 'What', format: 'text' },
+        { key: 'period', label: 'Goal for', format: 'text' },
+        { key: 'goal', label: 'Goal' },
         { key: 'done', label: 'Done' },
         { key: 'percent', label: 'Reached', format: 'percent' },
       ],
-      rows: detail.map((t) => ({
-        metric: METRIC_LABELS[t.metric as TargetMetric] || t.metric,
-        target: t.target,
+      rows: targets.map((t) => ({
+        metric: t.metric,
+        period: t.period,
+        goal: t.goal,
         done: t.done,
-        percent: t.target ? Math.round((t.done / t.target) * 100) : 0,
+        percent: t.goal ? Math.round((t.done / t.goal) * 100) : 0,
       })),
-      empty: `No ${ctx.period.type === 'WEEK' ? 'weekly' : 'monthly'} targets are set for you.`,
+      empty: 'No targets are set for you.',
     },
     {
-      key: 'below',
-      title: 'Days below target',
+      key: 'attendance',
+      title: 'Attendance',
+      columns: [
+        { key: 'present', label: 'Days present' },
+        { key: 'late', label: 'Late' },
+        { key: 'half', label: 'Half days' },
+        { key: 'leave', label: 'Leave days' },
+        { key: 'absent', label: 'Absent without telling' },
+        { key: 'auto', label: 'Forgot to check out' },
+      ],
+      rows: [
+        {
+          present: inp.presentCount,
+          late: inp.lateCount,
+          half: inp.halfDayCount,
+          leave: leave.get(me.id) || 0,
+          absent: inp.uninformedAbsentEvents,
+          auto: inp.midnightAutoCheckoutEvents,
+        },
+      ],
+    },
+    {
+      key: 'days',
+      title: 'Daily reports',
       columns: [
         { key: 'date', label: 'Day', format: 'text' },
+        { key: 'calls', label: 'Calls' },
+        { key: 'met', label: 'Target', format: 'text' },
         { key: 'reason', label: 'Reason you gave', format: 'text' },
       ],
-      rows: reports
-        .filter((r) => !r.target_met)
-        .map((r) => ({ date: istDate(r.submitted_at), reason: r.below_target_reason || '' })),
-      empty: 'No day below target.',
+      rows: reports.map((r) => ({
+        date: istDate(r.submitted_at),
+        calls: r.call_count ?? 0,
+        met: r.target_met ? 'Met' : 'Below',
+        reason: r.below_target_reason || '',
+      })),
+      empty: 'No daily report was sent in this period.',
     },
   ];
+  if (isPm)
+    tables.push({
+      key: 'pm_visits',
+      title: 'Site visits I ran',
+      columns: [
+        { key: 'done', label: 'Visits done' },
+        { key: 'feedback', label: 'With customer feedback' },
+        { key: 'verified', label: 'Properties verified' },
+      ],
+      rows: [{ done: pmDone, feedback: pmFeedback, verified: pmVerified }],
+    });
   if (isSales)
     tables.push(funnelTable(f, 'Your new leads this period, by the furthest stage reached'));
   if (ctx.monthly) {
@@ -967,27 +1105,45 @@ async function personalReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
       rows: [{ best_day: best?.[0] || '', best_calls: best?.[1] || 0, score, conversion: f.rate }],
     });
   }
-  const headline = isSales
-    ? [
-        h('calls', 'Calls', s.calls, ps.calls),
-        h('connected', 'Connected calls', s.connected, ps.connected),
-        h('qualified', 'Leads qualified', s.qualified, ps.qualified),
-        h(
-          'visits_booked',
-          'Visits booked',
-          s.visits_booked,
-          ps.visits_booked,
-          'number',
-          '/site-visits',
-        ),
-        h('visits_done', 'Visits done', s.visits_done, ps.visits_done, 'number', '/site-visits'),
-        h('deals', 'Bookings confirmed', s.deals, ps.deals, 'number', '/bookings'),
-      ]
-    : [
-        h('reports', 'Daily reports sent', reports.length, null, 'number', '/my-day'),
-        h('tasks', 'Tasks done', inputs.get(me.id)!.completedTasks, null, 'number', '/tasks'),
-        h('leads_added', 'Leads added by hand', s.leads_added, ps.leads_added, 'number', '/leads'),
-      ];
+  const headline = [
+    ...(isSales
+      ? [
+          h('calls', 'Calls', s.calls, ps.calls),
+          h('connected', 'Connected calls', s.connected, ps.connected),
+          h('qualified', 'Leads qualified', s.qualified, ps.qualified),
+          h(
+            'visits_booked',
+            'Visits booked',
+            s.visits_booked,
+            ps.visits_booked,
+            'number',
+            '/site-visits',
+          ),
+        ]
+      : [
+          h(
+            'leads_added',
+            'Leads added by hand',
+            s.leads_added,
+            ps.leads_added,
+            'number',
+            '/leads',
+          ),
+        ]),
+    h(
+      'visits_done',
+      'Visits done',
+      isPm ? pmDone : s.visits_done,
+      isPm ? null : ps.visits_done,
+      'number',
+      '/site-visits',
+    ),
+    h('deals', 'Bookings confirmed', s.deals, ps.deals, 'number', '/bookings'),
+    h('sales_value', 'Sales value', s.sales_value, ps.sales_value, 'money', '/bookings'),
+    h('reports', 'Daily reports sent', reports.length, null, 'number', '/my-day'),
+    h('tasks', 'Tasks done', inp.completedTasks, null, 'number', '/tasks'),
+    h('present', 'Days present', inp.presentCount, null),
+  ];
   headline.push(h('score', 'Performance score', score, null, 'number', '/my-performance'));
   const below = reports.filter((r) => !r.target_met).length;
   return {

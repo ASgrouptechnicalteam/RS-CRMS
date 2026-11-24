@@ -72,19 +72,34 @@ export async function buildLeadScope(user: TokenPayload): Promise<Prisma.LeadWhe
 }
 
 /**
+ * People who are never shown in team lists and pick-lists: the system placeholder (SYSTEM-DEFAULT-nnn, it
+ * cannot sign in) and the accounts of an invisible role (the Admin account). Not even to Admin-level
+ * users. Add to a where as `...visibleEmployees` (it only uses the NOT key).
+ */
+export const visibleEmployees: Prisma.EmployeeWhereInput = {
+  NOT: {
+    OR: [
+      { employee_code: { startsWith: 'SYSTEM-' } },
+      { roles: { some: { role: { is_invisible: true } } } },
+    ],
+  },
+};
+
+/**
  * Builds the read-visibility scope for Employees.
  */
 export async function buildEmployeeScope(user: TokenPayload): Promise<Prisma.EmployeeWhereInput> {
   // 1. ADMIN
   if (user.roles.includes(Roles.ADMIN)) {
-    return {}; // Global access
+    return { ...visibleEmployees }; // Every real person, in every company
   }
 
   const baseScope = await getBaseScope(user);
 
-  // Hide system/invisible roles for everyone except Admin
+  // Hide system/invisible roles for everyone (the Admin account and the system placeholder too)
   const invisibleFilter = {
     roles: { none: { role: { is_invisible: true } } },
+    NOT: { employee_code: { startsWith: 'SYSTEM-' } },
   };
 
   // 3. MANAGEMENT

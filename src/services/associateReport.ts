@@ -31,6 +31,7 @@ const NUMBERS: (keyof AssociateWork)[] = [
 const empty = (): AssociateWork => ({
   calls: 0,
   new_calls: 0,
+  follow_up_calls: 0,
   spoke: 0,
   agreed: 0,
   office_visits: 0,
@@ -43,6 +44,7 @@ const add = (a: AssociateWork, b: AssociateWork): AssociateWork => {
   const out = { ...a };
   for (const k of NUMBERS) out[k] += b[k];
   out.new_calls += b.new_calls;
+  out.follow_up_calls += b.follow_up_calls;
   return out;
 };
 

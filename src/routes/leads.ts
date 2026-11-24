@@ -2,6 +2,7 @@ import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
+import { visibleEmployees } from '../authz/dataScope';
 import { requirePermission } from '../middleware/auth';
 import {
   Roles,
@@ -237,6 +238,7 @@ router.get(
           status: 'ACTIVE',
           deleted_at: null,
           id: { not: req.user!.employeeId },
+          ...visibleEmployees,
           roles: {
             some: {
               role: { permissions: { some: { permission: { name: Permissions.LEADS_UPDATE } } } },
@@ -411,7 +413,7 @@ router.get(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const employees = await prisma.employee.findMany({
-        where: { company_id: req.user!.companyId, status: 'ACTIVE' },
+        where: { company_id: req.user!.companyId, status: 'ACTIVE', ...visibleEmployees },
         select: {
           id: true,
           full_name: true,

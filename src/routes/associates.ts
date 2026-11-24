@@ -20,6 +20,7 @@ import {
   getSettings,
   listAssociates,
   listCpms,
+  giveToManager,
   logFollowUp,
   reportLeadStatus,
   saveSettings,
@@ -158,7 +159,12 @@ router.patch(
 );
 router.get(
   '/queue',
-  handle((req) => getQueue(req.user!, { limit: Number(req.query.limit) || undefined })),
+  handle((req) =>
+    getQueue(req.user!, {
+      limit: Number(req.query.limit) || undefined,
+      more: req.query.more === '1',
+    }),
+  ),
 );
 router.get(
   '/weekly',
@@ -195,6 +201,19 @@ router.post(
   '/import',
   validateRequestBody(ImportSchema),
   handle((req) => commitImport(req.user!, req.body.csv, req.body)),
+);
+router.post(
+  '/give-to-manager',
+  validateRequestBody(
+    z.object({
+      owner_cpm_id: z.number().int().positive(),
+      count: z.number().int().min(1).max(5000).optional(),
+    }),
+  ),
+  handle((req) => {
+    onlyAll(req);
+    return giveToManager(req.user!, req.body);
+  }),
 );
 router.post(
   '/backfill',

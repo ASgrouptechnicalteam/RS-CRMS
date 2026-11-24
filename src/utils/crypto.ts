@@ -9,6 +9,10 @@ const ENCRYPTION_KEY =
 const IV_LENGTH = 16; // For AES, this is always 16
 
 function deriveKey(): Buffer {
+  // Never fall back to an empty key: it would "encrypt" personal data with no real protection.
+  if (!ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY is not set: personal data cannot be encrypted or read.');
+  }
   // Create a 32-byte key from the env variable (pad or truncate if necessary)
   return Buffer.from(
     crypto.createHash('sha256').update(String(ENCRYPTION_KEY)).digest('base64').substring(0, 32),

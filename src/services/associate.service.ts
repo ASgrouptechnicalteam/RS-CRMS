@@ -10,7 +10,7 @@ import { getISTComponents, getISTMidnightInstant } from '../utils/time';
 import { updateLeadStatus } from './lead/status';
 import { notifyEmployee } from '../utils/notifyEmployee';
 import { logger } from '../utils/logger';
-import { SPOKE_OUTCOMES } from './associateWork';
+import { SPOKE_OUTCOMES, associateWork } from './associateWork';
 import { officeVisitsOf } from './associateOfficeVisit';
 
 // Associates (freelance agents who bring leads) and the Channel Partner
@@ -431,6 +431,27 @@ export async function updateAssociate(user: TokenPayload, id: number, body: Asso
   return p.associate.update({ where: { id: a.id }, data });
 }
 
+/** MD / Technical Manager: hand associates nobody looks after yet to one Channel Partner Manager (all, or the first `count`). */
+export async function giveToManager(
+  user: TokenPayload,
+  body: { owner_cpm_id: number; count?: number },
+) {
+  const companyIds = await getAccessibleCompanyIds(user);
+  const owner = await checkOwner(user, user.companyId, body.owner_cpm_id);
+  const rows = await p.associate.findMany({
+    where: { company_id: { in: companyIds }, owner_cpm_id: null },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+    ...(body.count ? { take: body.count } : {}),
+  });
+  if (rows.length === 0) return { moved: 0 };
+  const res = await p.associate.updateMany({
+    where: { id: { in: rows.map((r) => r.id) }, owner_cpm_id: null },
+    data: { owner_cpm_id: owner },
+  });
+  return { moved: res.count };
+}
+
 export async function listCpms(user: TokenPayload) {
   const companyIds = await getAccessibleCompanyIds(user);
   return p.employee.findMany({
@@ -698,21 +719,52 @@ export async function reportLeadStatus(
 
 const REASON_ORDER = ['DUE', 'STALE_LEAD', 'QUIET', 'PROSPECT'];
 
+/**
+ * Today's two call targets, from the Targets screen only (nothing is fixed in code, so the MD can raise them
+ * any time): a person's own target replaces their role's; null when none is set.
+ */
+async function dailyCallTargets(user: TokenPayload, now: Date) {
+  const rows = await p.performanceTarget.findMany({
+    where: {
+      company_id: user.companyId,
+      is_active: true,
+      period: 'DAY',
+      metric: { in: ['NEW_ASSOCIATE_CALLS', 'ASSOCIATE_FOLLOWUP_CALLS'] },
+      valid_from: { lte: now },
+      OR: [{ employee_id: user.employeeId }, { employee_id: null, role_name: { in: user.roles } }],
+    },
+    select: { metric: true, value: true, employee_id: true, valid_to: true },
+  });
+  const pick = (metric: string): number | null => {
+    const live = rows.filter(
+      (r) => r.metric === metric && (!r.valid_to || r.valid_to.getTime() >= now.getTime()),
+    );
+    const own = live.filter((r) => r.employee_id);
+    const use = own.length ? own : live;
+    return use.length ? Math.max(...use.map((r) => r.value)) : null;
+  };
+  return {
+    new: pick('NEW_ASSOCIATE_CALLS'),
+    follow_ups: pick('ASSOCIATE_FOLLOWUP_CALLS'),
+  };
+}
+
 export async function getQueue(
   user: TokenPayload,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; more?: boolean } = {},
   now = new Date(),
 ) {
   const scope = await associateScope(user);
   const list = await p.associate.findMany({
     where: { AND: [scope, { pipeline: { not: 'LEFT' } }] },
     select: SUMMARY_SELECT,
+    orderBy: { id: 'asc' },
     take: 5000,
   });
   const start = dayStart(now);
   const end = new Date(start.getTime() + DAY);
   const ids = list.map((a) => a.id);
-  const [settings, leads, touched, mine] = await Promise.all([
+  const [settings, leads, touched, mine, calledEver, targets, doneToday] = await Promise.all([
     settingsFor([...new Set(list.map((a) => a.company_id))]),
     openLeadSilence(ids),
     ids.length
@@ -726,6 +778,21 @@ export async function getQueue(
       where: { employee_id: user.employeeId, created_at: { gte: start, lt: end } },
       select: { channel: true, outcome: true },
     }),
+    // Who has been called at least once (by anyone): the rest are new, the first call is still to come.
+    (async () => {
+      const seen = new Set<number>();
+      for (let i = 0; i < ids.length; i += 1000) {
+        const rows = await p.associateFollowUp.findMany({
+          where: { associate_id: { in: ids.slice(i, i + 1000) }, channel: 'CALL' },
+          select: { associate_id: true },
+          distinct: ['associate_id'],
+        });
+        for (const r of rows) seen.add(r.associate_id);
+      }
+      return seen;
+    })(),
+    dailyCallTargets(user, now),
+    associateWork(user.employeeId, { start, end }),
   ]);
   const touchedToday = new Set(touched.map((t) => t.associate_id));
   const byAssociate = new Map<number, typeof leads>();
@@ -733,7 +800,7 @@ export async function getQueue(
     byAssociate.set(l.associate_id, [...(byAssociate.get(l.associate_id) || []), l]);
   const days = (d: Date) => Math.floor((now.getTime() - d.getTime()) / DAY);
 
-  const rows = [];
+  const rows: any[] = [];
   for (const a of list) {
     const s = settings.get(a.company_id) || DEFAULT_SETTINGS;
     const open = byAssociate.get(a.id) || [];
@@ -788,6 +855,8 @@ export async function getQueue(
     );
     rows.push({
       ...a,
+      // NEW: a prospect nobody has called yet. FOLLOW_UP: called before (thinking, call back...) or already joined.
+      kind: PROSPECT_STAGES.includes(a.pipeline) && !calledEver.has(a.id) ? 'NEW' : 'FOLLOW_UP',
       open_leads: open.length,
       oldest_silence_days: oldest ? days(oldest) : null,
       reasons,
@@ -797,7 +866,24 @@ export async function getQueue(
   rows.sort(
     (x, y) => x._rank - y._rank || (y.oldest_silence_days ?? -1) - (x.oldest_silence_days ?? -1),
   );
-  const limit = Math.min(Math.max(opts.limit || 60, 1), 500);
+  // Two lists, each only as long as what is left to reach today's target ("Show more" lifts that).
+  // With no target set there is nothing to count down to, so each list shows its first 60.
+  const MORE_LIMIT = 100;
+  const NO_TARGET_LIMIT = 60;
+  const section = (kind: 'NEW' | 'FOLLOW_UP', target: number | null, done: number) => {
+    const all = rows.filter((r) => r.kind === kind);
+    const left = target === null ? null : Math.max(target - done, 0);
+    const room = opts.more ? MORE_LIMIT : (left ?? NO_TARGET_LIMIT);
+    return {
+      target,
+      done,
+      remaining: left,
+      total: all.length,
+      rows: all.slice(0, room).map(({ _rank, ...r }) => r),
+    };
+  };
+  const fresh = section('NEW', targets.new, doneToday.new_calls);
+  const followUps = section('FOLLOW_UP', targets.follow_ups, doneToday.follow_up_calls);
   return {
     date: getISTComponents(now).dateString,
     total: rows.length,
@@ -806,7 +892,10 @@ export async function getQueue(
       reached: mine.filter((m) => m.outcome === 'REACHED').length,
       follow_ups: mine.length,
     },
-    rows: rows.slice(0, limit).map(({ _rank, ...r }) => r),
+    new: fresh,
+    follow_ups: followUps,
+    // For small panels (the dashboard asks for a handful): follow-up calls first, then new ones.
+    rows: [...followUps.rows, ...fresh.rows].slice(0, opts.limit ?? 120),
   };
 }
 

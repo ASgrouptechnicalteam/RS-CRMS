@@ -44,6 +44,7 @@ export const TARGET_METRICS = [
   // Added 2026-11-23: the Channel Partner Manager's work with associates, from the Associates page.
   'ASSOCIATE_CALLS',
   'NEW_ASSOCIATE_CALLS',
+  'ASSOCIATE_FOLLOWUP_CALLS',
   'ASSOCIATES_AGREED',
   'ASSOCIATES_ONBOARDED',
   'ASSOCIATE_OFFICE_VISITS',
@@ -81,7 +82,8 @@ export const METRIC_LABELS: Record<TargetMetric, string> = {
   LISTING_EDITS: 'Property and project edits',
   MASTER_DATA_ACTIONS: 'Master data actions',
   ASSOCIATE_CALLS: 'Calls to associates',
-  NEW_ASSOCIATE_CALLS: 'Calls to new associates (not joined yet)',
+  NEW_ASSOCIATE_CALLS: 'New calls to associates (first call, not joined yet)',
+  ASSOCIATE_FOLLOWUP_CALLS: 'Follow-up calls to associates (called before, or joined)',
   ASSOCIATES_AGREED: 'Associates who agreed to work with us',
   ASSOCIATES_ONBOARDED: 'Associates onboarded',
   ASSOCIATE_OFFICE_VISITS: 'Associate office visits',
@@ -125,6 +127,7 @@ export const METRIC_GROUPS: Record<TargetMetric, string> = {
   TASKS_DONE: G_MGMT,
   ASSOCIATE_CALLS: G_ASSOC,
   NEW_ASSOCIATE_CALLS: G_ASSOC,
+  ASSOCIATE_FOLLOWUP_CALLS: G_ASSOC,
   ASSOCIATES_AGREED: G_ASSOC,
   ASSOCIATES_ONBOARDED: G_ASSOC,
   ASSOCIATE_OFFICE_VISITS: G_ASSOC,
@@ -323,6 +326,7 @@ export async function measureMetric(
       });
     case 'ASSOCIATE_CALLS':
     case 'NEW_ASSOCIATE_CALLS':
+    case 'ASSOCIATE_FOLLOWUP_CALLS':
     case 'ASSOCIATES_AGREED':
     case 'ASSOCIATES_ONBOARDED':
     case 'ASSOCIATE_OFFICE_VISITS':
@@ -332,6 +336,7 @@ export async function measureMetric(
       return {
         ASSOCIATE_CALLS: w.calls,
         NEW_ASSOCIATE_CALLS: w.new_calls,
+        ASSOCIATE_FOLLOWUP_CALLS: w.follow_up_calls,
         ASSOCIATES_AGREED: w.agreed,
         ASSOCIATES_ONBOARDED: w.enrolled,
         ASSOCIATE_OFFICE_VISITS: w.office_visits,

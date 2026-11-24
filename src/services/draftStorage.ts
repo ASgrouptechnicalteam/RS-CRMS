@@ -10,6 +10,16 @@ import sharp from 'sharp';
 import { UPLOAD_DIR } from './storage.service';
 import { logger } from '../utils/logger';
 
+// The server has 512 MB. Re-saving a big photo needs far more memory than its file size, so the image
+// processor keeps a small cache and works on one photo at a time (the files are still uploaded in parallel).
+sharp.cache({ memory: 50, files: 0, items: 20 });
+let photoQueue: Promise<unknown> = Promise.resolve();
+const onePhotoAtATime = <T>(job: () => Promise<T>): Promise<T> => {
+  const run = photoQueue.then(job, job);
+  photoQueue = run.catch(() => undefined);
+  return run;
+};
+
 // New-listing files (photos, videos, price sheets, documents) are private.
 // They are NEVER added to server.ts's static mounts, and the storage path is
 // never sent to a client: a file is read back only through
@@ -377,11 +387,13 @@ export async function prepareDraftFile(
     try {
       // Any quality: only re-encoded as high-quality WebP (up to 4096 px, q90,
       // turned upright by the phone's orientation tag).
-      const processed = await sharp(original, { limitInputPixels: 400_000_000 })
-        .rotate()
-        .resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 90 })
-        .toBuffer();
+      const processed = await onePhotoAtATime(() =>
+        sharp(original, { limitInputPixels: 400_000_000 })
+          .rotate()
+          .resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 90 })
+          .toBuffer(),
+      );
       return {
         source: processed,
         storedName: `${base}.webp`,

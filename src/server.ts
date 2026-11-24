@@ -20,6 +20,8 @@ import cookieParser from 'cookie-parser';
 import fs from 'fs';
 
 import healthRoutes from './routes/health';
+import telemetryRoutes from './routes/telemetry';
+import { productionConfigProblems } from './config/validateEnv';
 import authRoutes from './routes/auth';
 import attendanceRoutes from './routes/attendance';
 import mdRoutes from './routes/md';
@@ -172,6 +174,9 @@ app.use(
       callback(null, false);
     },
     credentials: true,
+    // The browser asks "may I send this?" before an upload; remember the answer for 10 minutes so a phone on a
+    // weak signal makes one trip per file instead of two.
+    maxAge: 600,
     // Lets the public sites read the pagination total on GET /public/:brand/properties.
     exposedHeaders: ['X-Total-Count'],
   }),
@@ -289,6 +294,8 @@ logger.info(
 
 // Every role needs a health check (deployment platforms poll this).
 app.use('/api/v1/health', healthRoutes);
+// Crash reports from the website (no database use, its own strict limit).
+app.use('/api/v1/telemetry', telemetryRoutes);
 
 // Database unreachable: answer at once instead of adding failed connection
 // attempts (lib/dbGuard.ts). The web app treats 503 as "try again"; a refresh
@@ -449,23 +456,16 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// Ensure required JWT secrets are present before starting
-if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET.length < 32) {
-    logger.warn('WARNING: JWT_ACCESS_SECRET is missing or too short for production.');
-  }
-  if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET.length < 32) {
-    logger.warn('WARNING: JWT_REFRESH_SECRET is missing or too short for production.');
-  }
-  if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length < 32) {
-    logger.warn(
-      'WARNING: ENCRYPTION_KEY is missing or too short for production. KYC data cannot be encrypted safely.',
+// Production refuses to start with a missing or weak secret (names only are logged, never values). A server that
+// only forwards requests (FORWARD_ALL_TO) holds no data and needs none of them.
+if (process.env.NODE_ENV === 'production' && !FORWARD_ALL_TO) {
+  const problems = productionConfigProblems();
+  if (problems.length) {
+    for (const p of problems) logger.error(`[config] ${p}`);
+    logger.error(
+      '[config] The server will not start until these are fixed in the environment settings.',
     );
-  }
-  if (!process.env.QR_HMAC_SECRET || process.env.QR_HMAC_SECRET.length < 32) {
-    logger.warn(
-      'WARNING: QR_HMAC_SECRET is missing or too short for production. Kiosk QR codes cannot be securely signed.',
-    );
+    process.exit(1);
   }
 }
 
@@ -479,12 +479,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 import { initJobs } from './jobs/scheduler';
+import { jobManager } from './jobs/index';
 import { syncRolePermissions } from './authz/syncRolePermissions';
 
 // In a Serverless environment (like Vercel), we must not call app.listen() or start background cron jobs
 // because Vercel handles the port binding and crons keep the event loop alive, causing timeouts/crashes.
 if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     logger.info(`[server]: API running at http://localhost:${port}`);
     if (FORWARD_ALL_TO) {
       logger.info(`[server]: forwarding every request to ${FORWARD_ALL_TO}`);
@@ -504,6 +505,38 @@ if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
     // Enable explicitly when the Customer Portal is available.
     PortalWorker.start();
   });
+
+  // The proxy in front keeps connections open for a while; answer on them instead of dropping them
+  // (a dropped one shows up as a failed request on a phone).
+  server.keepAliveTimeout = 120_000;
+  server.headersTimeout = 125_000;
+
+  // A redeploy sends SIGTERM and gives about 30 seconds: stop the schedules, finish the requests in
+  // progress, close the database connections, then exit, instead of cutting everything off.
+  let stopping = false;
+  const shutDown = (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    logger.info(`[server] ${signal} received: finishing current requests, then stopping.`);
+    jobManager.stopAll();
+    const force = setTimeout(() => {
+      logger.warn('[server] Still busy after 25 s: stopping now.');
+      process.exit(0);
+    }, 25_000);
+    force.unref();
+    server.close(async () => {
+      try {
+        const { prisma } = await import('./lib/prisma');
+        await prisma.$disconnect();
+      } catch {
+        /* closing anyway */
+      }
+      logger.info('[server] Stopped cleanly.');
+      process.exit(0);
+    });
+  };
+  process.on('SIGTERM', () => shutDown('SIGTERM'));
+  process.on('SIGINT', () => shutDown('SIGINT'));
 }
 
 export default app; // clean commit test

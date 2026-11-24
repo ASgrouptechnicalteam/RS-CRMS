@@ -22,7 +22,10 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const employeeId = parseInt(req.params.id, 10);
-      const targetEmployee = await prisma.employee.findUnique({ where: { id: employeeId } });
+      const targetEmployee = await prisma.employee.findUnique({
+        where: { id: employeeId },
+        include: { roles: { include: { role: { select: { name: true, is_invisible: true } } } } },
+      });
       if (!targetEmployee) {
         return res.status(404).json({ error: 'Employee not found' });
       }
@@ -31,6 +34,42 @@ router.post(
         return res
           .status(403)
           .json({ error: 'Forbidden: Cannot reset password for employee outside your company' });
+      }
+
+      // Nobody resets their own password here (use Change password), and a reset hands over a working
+      // sign-in, so the top accounts can only be reset by the top: HR cannot take over the MD, an Admin,
+      // the Technical Manager or another HR account.
+      if (employeeId === req.user!.employeeId) {
+        return res
+          .status(403)
+          .json({ error: 'Use Change password for your own account.', code: 'SELF_RESET' });
+      }
+      const targetRoles = targetEmployee.roles.map((r) => r.role.name);
+      const targetIsTop =
+        targetRoles.some((r) =>
+          [Roles.MD, Roles.ADMIN, Roles.TECHNICAL_MANAGER, Roles.HR_MANAGER].includes(r as any),
+        ) || targetEmployee.roles.some((r) => r.role.is_invisible);
+      const actorIsTop =
+        req.user!.roles.includes(Roles.ADMIN) ||
+        req.user!.roles.includes(Roles.MD) ||
+        req.user!.roles.includes(Roles.TECHNICAL_MANAGER);
+      if (targetIsTop && !actorIsTop) {
+        await prisma.auditEvent
+          .create({
+            data: {
+              actor_id: req.user!.employeeId,
+              action: 'PASSWORD_RESET_REFUSED',
+              entity_type: 'EMPLOYEE',
+              entity_id: employeeId,
+              new_value: JSON.stringify({ reason: 'target holds a top-level role' }),
+            },
+          })
+          .catch(() => undefined);
+        return res.status(403).json({
+          error:
+            'Only the MD or Admin can reset the password of the MD, an Admin, the Technical Manager or HR.',
+          code: 'TOP_ACCOUNT',
+        });
       }
 
       const newPassword = generateTemporaryPassword();
@@ -49,6 +88,17 @@ router.post(
         await tx.authSession.updateMany({
           where: { employee_id: employeeId, revoked: false },
           data: { revoked: true, revocation_reason: 'ADMIN_PASSWORD_RESET' },
+        });
+
+        // Every reset is on the record: who did it, to whom (never the password itself).
+        await tx.auditEvent.create({
+          data: {
+            actor_id: req.user!.employeeId,
+            action: 'PASSWORD_RESET',
+            entity_type: 'EMPLOYEE',
+            entity_id: employeeId,
+            new_value: JSON.stringify({ target_code: targetEmployee.employee_code }),
+          },
         });
       });
 

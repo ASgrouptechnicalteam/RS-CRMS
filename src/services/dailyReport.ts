@@ -264,26 +264,9 @@ const F = {
  * "first" = the first call ever to that associate.
  */
 async function associateCalls(c: Ctx) {
-  const today = await p.associateFollowUp.findMany({
-    where: { employee_id: c.employeeId, channel: 'CALL', created_at: day(c) },
-    select: { associate_id: true },
-    orderBy: { id: 'asc' },
-  });
-  const ids = [...new Set(today.map((t) => t.associate_id))];
-  const before = ids.length
-    ? await p.associateFollowUp.findMany({
-        where: { associate_id: { in: ids }, channel: 'CALL', created_at: { lt: c.start } },
-        select: { associate_id: true },
-        distinct: ['associate_id'],
-      })
-    : [];
-  const called = new Set(before.map((b) => b.associate_id));
-  let first = 0;
-  for (const t of today) {
-    if (!called.has(t.associate_id)) first++;
-    called.add(t.associate_id);
-  }
-  return { first, repeat: today.length - first };
+  // One set of numbers with the targets and the report: first call ever to someone who has not joined = new.
+  const w = await associateWork(c.employeeId, { start: c.start, end: c.end });
+  return { first: w.new_calls, repeat: w.follow_up_calls };
 }
 const withAssociateCalls =
   (kinds: string[], part: 'first' | 'repeat' | 'all') => async (c: Ctx) => {

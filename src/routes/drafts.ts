@@ -248,6 +248,37 @@ router.post(
 
 // ── files ─────────────────────────────────────────────────────
 
+/**
+ * Writes one line when a file arrives and one when it is answered, so a failed upload can be traced (the
+ * hosting logs do not keep individual requests). If the server answers before the whole file has arrived (not
+ * signed in, no permission), the rest of the file is read and thrown away: otherwise a phone on a weak
+ * connection can see the connection drop instead of the real answer, and report "cut off".
+ */
+const traceUpload = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const started = Date.now();
+  const size = Number(req.headers['content-length']) || 0;
+  const who = () => req.user?.employeeCode || 'not signed in';
+  logger.info(
+    `[Listings] file arriving: listing ${req.params.id}, ${Math.round(size / 1024)} KB, ${who()}`,
+  );
+  let answered = false;
+  res.on('finish', () => {
+    answered = true;
+    logger.info(
+      `[Listings] file answered ${res.statusCode} in ${Date.now() - started} ms: listing ${req.params.id}, ${who()}`,
+    );
+    if (!req.complete) req.resume();
+  });
+  res.on('close', () => {
+    if (!answered) {
+      logger.warn(
+        `[Listings] connection closed before the file was answered after ${Date.now() - started} ms: listing ${req.params.id}, ${who()}, ${Math.round((req.socket?.bytesRead || 0) / 1024)} KB read`,
+      );
+    }
+  });
+  next();
+};
+
 // One file per request, written to a temp file (videos are up to 500 MB).
 const uploadOne = (req: AuthenticatedRequest, res: Response, next: NextFunction) =>
   draftAttachmentUpload.single('file')(req as any, res as any, (err: any) => {
@@ -262,6 +293,7 @@ const uploadOne = (req: AuthenticatedRequest, res: Response, next: NextFunction)
 
 router.post(
   '/:id/attachments',
+  traceUpload,
   authenticateToken,
   requireAuthz(Permissions.DRAFTS_SUBMIT),
   uploadOne,

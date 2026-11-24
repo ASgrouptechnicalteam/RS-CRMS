@@ -7,6 +7,7 @@ import { DailyTargetSetSchema, Roles, Permissions } from '../shared';
 import { requireAuthz } from '../middleware/authz';
 import { can } from '../authz/authorization';
 import { getDownstreamEmployeeIds } from '../utils/hierarchy';
+import { visibleEmployees } from '../authz/dataScope';
 import {
   TARGET_METRICS,
   METRIC_GROUPS,
@@ -354,7 +355,12 @@ router.get(
   requireAuthz(Permissions.REPORTS_TARGETS_CONFIGURE),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const where: any = { company_id: req.user!.companyId, status: 'ACTIVE', deleted_at: null };
+      const where: any = {
+        company_id: req.user!.companyId,
+        status: 'ACTIVE',
+        deleted_at: null,
+        ...visibleEmployees,
+      };
       if (!isTopManagement(req.user!.roles)) {
         where.id = {
           in: await getDownstreamEmployeeIds(req.user!.companyId, req.user!.employeeId),

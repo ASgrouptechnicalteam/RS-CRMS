@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { logger } from '../utils/logger';
 import { dbGuard } from '../lib/dbGuard';
+import { withJobLock } from '../lib/jobLock';
 
 const JOB_FAILED_TYPE = 'JOB_FAILED';
 
@@ -47,6 +48,19 @@ interface JobConfig {
 
 export class JobManager {
   private jobs: JobConfig[] = [];
+  private tasks: { stop: () => unknown }[] = [];
+
+  /** Stops every schedule (a redeploy is shutting this copy down). */
+  stopAll() {
+    for (const t of this.tasks) {
+      try {
+        t.stop();
+      } catch {
+        /* stopping anyway */
+      }
+    }
+    this.tasks = [];
+  }
 
   register(config: JobConfig) {
     this.jobs.push(config);
@@ -66,7 +80,7 @@ export class JobManager {
       // dependency, not a guarantee; a deploy target that doesn't load .env
       // (or overrides TZ) would silently shift every job's fire time, the
       // same bug class already found and fixed elsewhere for attendance.
-      cron.schedule(
+      const task = cron.schedule(
         job.schedule,
         async () => {
           // Database unreachable: skip this run. The next one catches up, and
@@ -78,9 +92,10 @@ export class JobManager {
           try {
             logger.info(`[Jobs] Starting ${job.name}...`);
             const start = performance.now();
-            await job.handler();
+            const result = await withJobLock(job.name, () => job.handler());
             const duration = Math.round(performance.now() - start);
-            logger.info(`[Jobs] Completed ${job.name} successfully in ${duration}ms.`);
+            if (result === 'ran')
+              logger.info(`[Jobs] Completed ${job.name} successfully in ${duration}ms.`);
           } catch (error) {
             logger.error({ err: error }, `[Jobs] FAILURE in ${job.name}: Alerting system!`);
             alertJobFailure(job.name, error).catch((err) =>
@@ -90,6 +105,7 @@ export class JobManager {
         },
         { timezone: 'Asia/Kolkata' },
       );
+      this.tasks.push(task as any);
     });
   }
 

@@ -26,8 +26,10 @@ const PROSPECT_STAGES = ['INVITED', 'CONTACTED', 'AGREED', 'DOCUMENTS'];
 export interface AssociateWork {
   /** Calls to associates (not customer calls). */
   calls: number;
-  /** Of those, to people who had not joined yet at the time. */
+  /** Of those, the first call ever to someone who had not joined yet at the time. */
   new_calls: number;
+  /** The rest: calling again someone already called (thinking, call back...), and calls to joined associates. */
+  follow_up_calls: number;
   /** Calls where the associate was actually spoken to. */
   spoke: number;
   /** "Agreed to work with us" answers. */
@@ -52,11 +54,14 @@ export async function associateWork(
     p.associateFollowUp.findMany({
       where: { employee_id: employeeId, created_at: when },
       select: {
+        id: true,
+        associate_id: true,
         channel: true,
         outcome: true,
         created_at: true,
         associate: { select: { enrolled_at: true, pipeline: true } },
       },
+      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
     }),
     p.associate.count({ where: { owner_cpm_id: employeeId, enrolled_at: when } }),
     p.lead.count({
@@ -72,14 +77,35 @@ export async function associateWork(
     }),
   ]);
   const calls = followUps.filter((f: any) => f.channel === 'CALL');
+  // Who was called before this period, by anyone: their next call is a follow-up, not a new call.
+  const ids = [...new Set(calls.map((f: any) => f.associate_id as number))];
+  const calledBefore = new Set<number>();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const rows = await p.associateFollowUp.findMany({
+      where: {
+        associate_id: { in: ids.slice(i, i + 1000) },
+        channel: 'CALL',
+        created_at: { lt: range.start },
+      },
+      select: { associate_id: true },
+      distinct: ['associate_id'],
+    });
+    for (const r of rows) calledBefore.add(r.associate_id);
+  }
+  // New call = the first call ever to someone who had not joined yet (a prospect now, or joined after this call).
+  let newCalls = 0;
+  for (const f of calls) {
+    const first = !calledBefore.has(f.associate_id);
+    calledBefore.add(f.associate_id);
+    const prospect =
+      PROSPECT_STAGES.includes(f.associate?.pipeline) ||
+      (!!f.associate?.enrolled_at && f.associate.enrolled_at > f.created_at);
+    if (first && prospect) newCalls++;
+  }
   return {
     calls: calls.length,
-    // A call to someone who had not joined yet: they are a prospect now, or they joined after this call.
-    new_calls: calls.filter(
-      (f: any) =>
-        PROSPECT_STAGES.includes(f.associate?.pipeline) ||
-        (!!f.associate?.enrolled_at && f.associate.enrolled_at > f.created_at),
-    ).length,
+    new_calls: newCalls,
+    follow_up_calls: calls.length - newCalls,
     spoke: calls.filter((f: any) => SPOKE_OUTCOMES.includes(f.outcome)).length,
     agreed: followUps.filter((f: any) => f.outcome === 'AGREED').length,
     office_visits: followUps.filter((f: any) => f.channel === 'OFFICE_VISIT').length,

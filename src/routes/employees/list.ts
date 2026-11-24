@@ -6,7 +6,11 @@ import { requireAuthz } from '../../middleware/authz';
 import { Roles, Permissions } from '../../shared';
 import { can } from '../../authz/authorization';
 import { decryptData } from '../../utils/crypto';
-import { buildEmployeeScope, getAccessibleCompanyIds } from '../../authz/dataScope';
+import {
+  buildEmployeeScope,
+  getAccessibleCompanyIds,
+  visibleEmployees,
+} from '../../authz/dataScope';
 
 const router = Router();
 
@@ -62,6 +66,7 @@ router.get(
             company_id: { in: await getAccessibleCompanyIds(req.user!) },
             status: 'ACTIVE',
             roles: { none: { role: { is_invisible: true } } },
+            ...visibleEmployees,
           }
         : await buildEmployeeScope(req.user!);
 

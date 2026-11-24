@@ -3845,3 +3845,11 @@ model CpApplication {
   @@unique([associate_id])
   @@index([status, created_at])
 }
+
+// Run-once lock for scheduled jobs (lib/jobLock.ts): which copy of the server is running a job right now.
+model JobLock {
+  name         String   @id @db.VarChar(100)
+  locked_until DateTime @db.DateTime(3)
+  holder       String   @db.VarChar(120)
+  updated_at   DateTime @default(now()) @updatedAt @db.DateTime(3)
+}

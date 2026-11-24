@@ -6,7 +6,7 @@ import { Router, Response, NextFunction } from 'express';
 import { TokenPayload } from '../utils/jwt';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
-import { getAccessibleCompanyIds, buildEmployeeScope } from '../authz/dataScope';
+import { getAccessibleCompanyIds, buildEmployeeScope, visibleEmployees } from '../authz/dataScope';
 import { getISTComponents, getISTMidnightInstant } from '../utils/time';
 import { WORK_LOG_ACTION, parseWorkLog, WorkLogEntry, platformCounts } from './workLog';
 import { associateWork } from '../services/associateWork';
@@ -17,7 +17,7 @@ import { Roles, Permissions } from '../shared';
 import { AnalyticsService } from '../services/analytics.service';
 import { OPEN_TASK_STATUSES } from '../services/taskOverdue';
 
-import { dayInfoMany } from '../services/workCalendar';
+import { dayInfoMany, TEAM_REQUEST_TYPES } from '../services/workCalendar';
 import { listTeamPlans } from '../services/dayPlan.service';
 
 const router = Router();
@@ -129,6 +129,7 @@ const dayOfPeople =
           attendance_required: true,
           company_id: true,
           weekly_off_day: true,
+          employment_type: true,
           roles: { select: { role: { select: { name: true } } } },
         },
         orderBy: { full_name: 'asc' },
@@ -591,6 +592,8 @@ const dayOfPeople =
           id: e.id,
           name: e.full_name || e.employee_code,
           employee_code: e.employee_code,
+          // So the page can list part-time people after the full-time team.
+          employment_type: e.employment_type || 'FULL_TIME',
           roles: roleNames,
           kind,
           site,
@@ -826,7 +829,9 @@ export async function buildApprovalsInbox(user: TokenPayload) {
     }),
     p.expenseRefund.count({ where: { ...co, status: 'ACCOUNTANT_APPROVED' } }),
     p.attendanceProposal.findMany({
-      where: { status: 'PENDING', ...empCo },
+      // Leave, late, early, work from home and field work. Duty days, comp-offs, swaps and attendance
+      // claims are the "duty" section below: counted once, on their own.
+      where: { status: 'PENDING', type: { notIn: [...TEAM_REQUEST_TYPES] }, ...empCo },
       select: {
         id: true,
         type: true,
@@ -914,6 +919,14 @@ export async function buildApprovalsInbox(user: TokenPayload) {
     p.attendanceProposal.count({ where: earlyWhere }),
   ]);
 
+  // Duty days, comp-offs, swaps and attendance claims, plus phone check-in photos waiting for a decision.
+  const [dutyRequestsN, dutyCheckinsN] = await Promise.all([
+    p.attendanceProposal.count({
+      where: { status: 'PENDING', type: { in: [...TEAM_REQUEST_TYPES] }, ...empCo },
+    }),
+    p.attendanceCheckinProof.count({ where: { review_status: 'PENDING', ...empCo } }),
+  ]);
+
   type ProposalRow = (typeof proposals)[number];
   const proposalGroups: { first: ProposalRow; last: ProposalRow; days: number }[] = [];
   const groupIndex = new Map<string, number>();
@@ -988,6 +1001,13 @@ export async function buildApprovalsInbox(user: TokenPayload) {
             : `for ${getISTComponents(g.first.target_date).dateString}`,
         since: g.first.created_at,
       })),
+    },
+    {
+      key: 'duty',
+      label: 'Duty days, comp-offs and check-ins',
+      link: '/approvals?tab=attendance&sub=duty',
+      count: dutyRequestsN + dutyCheckinsN,
+      items: [],
     },
     {
       key: 'early_reviews',
@@ -1154,6 +1174,8 @@ router.get(
               },
             },
           },
+          // ...and the system placeholder, which has no role at all.
+          ...visibleEmployees,
         },
         include: {
           company: true,

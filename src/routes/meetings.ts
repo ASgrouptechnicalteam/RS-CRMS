@@ -4,6 +4,7 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { validateRequestBody } from '../middleware/validate';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
+import { visibleEmployees } from '../authz/dataScope';
 import { Roles } from '../shared';
 import { notifyEmployee } from '../utils/notifyEmployee';
 
@@ -56,7 +57,12 @@ router.get('/people', async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!canOrganise(req.user!.roles)) return res.status(403).json({ error: 'Not allowed' });
     const people = await p.employee.findMany({
-      where: { company_id: req.user!.companyId, status: 'ACTIVE', deleted_at: null },
+      where: {
+        company_id: req.user!.companyId,
+        status: 'ACTIVE',
+        deleted_at: null,
+        ...visibleEmployees,
+      },
       select: {
         id: true,
         full_name: true,
@@ -86,7 +92,8 @@ router.post('/', validateRequestBody(Body), async (req: AuthenticatedRequest, re
     }
     const start = new Date(req.body.start_at);
     const end = req.body.end_at ? new Date(req.body.end_at) : null;
-    if (Number.isNaN(start.getTime())) return res.status(400).json({ error: 'Choose the date and time.' });
+    if (Number.isNaN(start.getTime()))
+      return res.status(400).json({ error: 'Choose the date and time.' });
     if (start.getTime() < Date.now() - 5 * 60 * 1000) {
       return res.status(400).json({ error: 'The meeting cannot start in the past.' });
     }
@@ -105,7 +112,8 @@ router.post('/', validateRequestBody(Body), async (req: AuthenticatedRequest, re
     const ids: number[] = people
       .map((x: { id: number }) => x.id)
       .filter((id: number) => id !== req.user!.employeeId);
-    if (!ids.length) return res.status(400).json({ error: 'Choose at least one person to invite.' });
+    if (!ids.length)
+      return res.status(400).json({ error: 'Choose at least one person to invite.' });
 
     const meeting = await p.meeting.create({
       data: {
@@ -200,7 +208,8 @@ router.post(
         where: { meeting_id: id, employee_id: req.user!.employeeId },
         data: { response: req.body.response, responded_at: new Date() },
       });
-      if (!done.count) return res.status(404).json({ error: 'You are not invited to this meeting.' });
+      if (!done.count)
+        return res.status(404).json({ error: 'You are not invited to this meeting.' });
       return res.json({ message: req.body.response === 'YES' ? 'See you there.' : 'Noted.' });
     } catch (error) {
       return fail(res, error, 'save your answer');

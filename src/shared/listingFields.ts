@@ -65,6 +65,7 @@ export const LISTING_PROPERTY_CATEGORIES = [
 
 export const LISTING_PROJECT_TYPES = [
   { value: 'PLOTTED', label: 'Plotted layout' },
+  { value: 'RESIDENTIAL_PLOTS', label: 'Residential plots' },
   { value: 'APARTMENT', label: 'Apartments / flats' },
   { value: 'VILLA', label: 'Villas' },
   { value: 'INDEPENDENT_HOUSE', label: 'Independent houses' },
@@ -168,7 +169,7 @@ export const LISTING_PROPERTY_FIELDS: Record<ListingPropertyGroup, ListingField[
 export type ListingProjectGroup = 'LAYOUT' | 'FLATS' | 'HOUSES' | 'FARM' | 'COMMERCIAL' | 'OTHER';
 
 export const listingProjectGroup = (projectType: string): ListingProjectGroup => {
-  if (projectType === 'PLOTTED') return 'LAYOUT';
+  if (projectType === 'PLOTTED' || projectType === 'RESIDENTIAL_PLOTS') return 'LAYOUT';
   if (projectType === 'APARTMENT') return 'FLATS';
   if (['VILLA', 'INDEPENDENT_HOUSE', 'ROW_HOUSE', 'GATED_COMMUNITY'].includes(projectType))
     return 'HOUSES';

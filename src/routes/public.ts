@@ -281,7 +281,7 @@ const cachedList = (req: any, res: Response, next: () => void) => {
 };
 /** What the Radha Real Home site is allowed to show: open plots and residential land. */
 const RRH_PROPERTY_CATEGORY = 'PLOT';
-const RRH_PROJECT_TYPE = 'PLOTTED';
+const RRH_PROJECT_TYPES: ('PLOTTED' | 'RESIDENTIAL_PLOTS')[] = ['PLOTTED', 'RESIDENTIAL_PLOTS'];
 
 router.get('/:brand/properties', cachedList);
 router.get('/:brand/projects', cachedList);
@@ -718,7 +718,7 @@ router.get('/:brand/projects', async (req: any, res: Response) => {
         // drafts still carry is_published = true.
         verification_status: 'VERIFIED',
         status: { not: 'CANCELLED' },
-        ...(brandLower === 'rrh' ? { project_type: RRH_PROJECT_TYPE } : {}),
+        ...(brandLower === 'rrh' ? { project_type: { in: RRH_PROJECT_TYPES } } : {}),
       },
       select: PUBLIC_PROJECT_SELECT,
       orderBy: { created_at: 'desc' },
@@ -779,7 +779,7 @@ router.get('/:brand/projects/:id', async (req: any, res: Response) => {
         verification_status: 'VERIFIED',
         // Same as the list: a cancelled project is not on the websites.
         status: { not: 'CANCELLED' },
-        ...(brandLower === 'rrh' ? { project_type: RRH_PROJECT_TYPE } : {}),
+        ...(brandLower === 'rrh' ? { project_type: { in: RRH_PROJECT_TYPES } } : {}),
       },
       select: PUBLIC_PROJECT_DETAIL_SELECT,
     });

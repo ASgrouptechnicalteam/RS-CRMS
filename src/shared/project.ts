@@ -21,6 +21,7 @@ export const ProjectTypeEnum = z.enum([
   'MIXED',
   'COMMERCIAL',
   'OTHER',
+  'RESIDENTIAL_PLOTS',
 ]);
 const AreaUnitEnum = z.enum(['SQFT', 'SQYD', 'SQM', 'ACRE', 'GUNTA', 'CENT', 'ANKANAM', 'HECTARE']);
 const PriceBasisEnum = z.enum(['CARPET', 'BUILT_UP', 'SUPER_BUILT_UP', 'PLOT_AREA', 'LUMPSUM']);

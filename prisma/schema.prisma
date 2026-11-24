@@ -112,6 +112,9 @@ enum ProjectType {
   MIXED
   COMMERCIAL
   OTHER
+  // Added 2026-11-24 (owner): a second name for plots in a layout. Added at the END on purpose: appending to
+  // a MySQL ENUM is instant, inserting in the middle rewrites the table. SQL: 2026-11-29_project_type_residential_plots.sql
+  RESIDENTIAL_PLOTS
 }
 
 enum AreaUnit {

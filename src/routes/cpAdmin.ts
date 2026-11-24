@@ -39,6 +39,7 @@ const partnerOf = async (req: AuthenticatedRequest, id: number) => {
       full_name: true,
       status: true,
       cp_telecaller_limit: true,
+      cp_project_limit: true,
     },
   });
 };
@@ -60,6 +61,7 @@ router.get(
         full_name: true,
         status: true,
         cp_telecaller_limit: true,
+        cp_project_limit: true,
       },
       orderBy: { full_name: 'asc' },
     });
@@ -109,6 +111,7 @@ router.get(
         full_name: x.full_name,
         status: x.status,
         telecaller_limit: x.cp_telecaller_limit ?? 3,
+        project_limit: x.cp_project_limit ?? null,
         telecallers: u.get(x.id) ?? 0,
         leads: l.get(x.id) ?? 0,
         customers_in_our_crm: v.get(x.id) ?? 0,
@@ -137,6 +140,150 @@ router.patch(
   }),
 );
 
+// How many listings the partner may send. Empty means no limit.
+router.patch(
+  '/:id/project-limit',
+  authenticateToken,
+  only,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const body = z
+      .object({ limit: z.number().int().min(0).max(1000).nullable() })
+      .safeParse(req.body);
+    if (!Number.isInteger(id) || id <= 0 || !body.success) {
+      return res.status(400).json({ error: 'Enter a number from 0 to 1000, or leave it empty.' });
+    }
+    if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+    await p.employee.update({ where: { id }, data: { cp_project_limit: body.data.limit } });
+    return res.status(200).json({ ok: true, limit: body.data.limit });
+  }),
+);
+
+// Our live projects, with the ones given to this partner marked.
+router.get(
+  '/:id/projects',
+  authenticateToken,
+  only,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0)
+      return res.status(400).json({ error: 'Invalid ID format' });
+    if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+    const companyIds = await getAccessibleCompanyIds(req.user!);
+    const [projects, given] = await Promise.all([
+      p.project.findMany({
+        where: {
+          company_id: { in: companyIds },
+          verification_status: 'VERIFIED',
+          status: { notIn: ['CANCELLED', 'ON_HOLD'] },
+        },
+        select: { id: true, name: true, location: true, city: true, project_type: true },
+        orderBy: { name: 'asc' },
+        take: 500,
+      }),
+      p.cpProjectAssignment.findMany({ where: { cp_id: id }, select: { project_id: true } }),
+    ]);
+    const mine = new Set<number>(given.map((g: any) => g.project_id));
+    return res.status(200).json({
+      projects: projects.map((x: any) => ({ ...x, assigned: mine.has(x.id) })),
+    });
+  }),
+);
+
+// Replace the list of projects given to this partner.
+router.put(
+  '/:id/projects',
+  authenticateToken,
+  only,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const body = z
+      .object({ project_ids: z.array(z.number().int().positive()).max(500) })
+      .safeParse(req.body);
+    if (!Number.isInteger(id) || id <= 0 || !body.success)
+      return res.status(400).json({ error: 'Pick the projects again.' });
+    if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+    const companyIds = await getAccessibleCompanyIds(req.user!);
+    const ids = [...new Set(body.data.project_ids)];
+    const valid = ids.length
+      ? await p.project.findMany({
+          where: { id: { in: ids }, company_id: { in: companyIds } },
+          select: { id: true },
+        })
+      : [];
+    const okIds: number[] = valid.map((v: any) => v.id);
+    await p.$transaction([
+      p.cpProjectAssignment.deleteMany({ where: { cp_id: id } }),
+      ...(okIds.length
+        ? [
+            p.cpProjectAssignment.createMany({
+              data: okIds.map((project_id) => ({
+                cp_id: id,
+                project_id,
+                assigned_by: req.user!.employeeId,
+              })),
+            }),
+          ]
+        : []),
+    ]);
+    return res.status(200).json({ ok: true, assigned: okIds.length });
+  }),
+);
+
+// Make one of our own employees a member of this partner's team. They sign in with their CRM employee code
+// and password. Done here by the office, so a partner can never look up who our employees are.
+router.post(
+  '/:id/members/employee',
+  authenticateToken,
+  only,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const body = z
+      .object({
+        employee_code: z.string().trim().toUpperCase().min(1).max(40),
+        member_role: z.enum(['TELECALLER', 'PM']),
+      })
+      .safeParse(req.body);
+    if (!Number.isInteger(id) || id <= 0 || !body.success)
+      return res.status(400).json({ error: 'Enter the employee code and pick a role.' });
+    if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+    const companyIds = await getAccessibleCompanyIds(req.user!);
+    const emp = await p.employee.findFirst({
+      where: {
+        employee_code: body.data.employee_code,
+        company_id: { in: companyIds },
+        status: 'ACTIVE',
+      },
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        roles: { select: { role: { select: { name: true } } } },
+      },
+    });
+    if (!emp) return res.status(404).json({ error: 'No active employee has that code.' });
+    if (emp.roles.some((r: any) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL))
+      return res.status(400).json({ error: 'That is a partner, not one of our employees.' });
+    const taken = await p.cpUser.findFirst({
+      where: { OR: [{ employee_id: emp.id }, { login_id: emp.employee_code }] },
+    });
+    if (taken)
+      return res.status(409).json({ error: 'That employee is already on a partner team.' });
+    const made = await p.cpUser.create({
+      data: {
+        cp_id: id,
+        full_name: emp.full_name,
+        login_id: emp.employee_code,
+        password_hash: '!', // never used: an employee signs in with their CRM password
+        member_role: body.data.member_role,
+        employee_id: emp.id,
+      },
+      select: { id: true, full_name: true, login_id: true, member_role: true, employee_id: true },
+    });
+    return res.status(201).json({ member: made });
+  }),
+);
+
 router.get(
   '/:id',
   authenticateToken,
@@ -150,7 +297,14 @@ router.get(
     const [team, leads, byStatus] = await Promise.all([
       p.cpUser.findMany({
         where: { cp_id: id },
-        select: { id: true, full_name: true, login_id: true, is_active: true },
+        select: {
+          id: true,
+          full_name: true,
+          login_id: true,
+          is_active: true,
+          member_role: true,
+          employee_id: true,
+        },
         orderBy: { id: 'asc' },
       }),
       p.cpLead.findMany({
@@ -171,7 +325,11 @@ router.get(
       p.cpLead.groupBy({ by: ['status'], where: { cp_id: id }, _count: { _all: true } }),
     ]);
     return res.status(200).json({
-      partner: { ...partner, telecaller_limit: partner.cp_telecaller_limit ?? 3 },
+      partner: {
+        ...partner,
+        telecaller_limit: partner.cp_telecaller_limit ?? 3,
+        project_limit: partner.cp_project_limit ?? null,
+      },
       team,
       leads,
       counts: Object.fromEntries(byStatus.map((s: any) => [s.status, s._count._all])),

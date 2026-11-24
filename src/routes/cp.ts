@@ -29,7 +29,7 @@ export interface CpRequest extends Request {
     company_id: number;
     employee_code: string;
     full_name: string | null;
-    user: { id: number; full_name: string } | null;
+    user: { id: number; full_name: string; member_role: string } | null;
   };
 }
 
@@ -75,13 +75,21 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
     if (!e || e.status !== 'ACTIVE' || e.company_id !== payload.companyId || !isPartner(e.roles)) {
       return expired();
     }
-    let user: { id: number; full_name: string } | null = null;
+    let user: { id: number; full_name: string; member_role: string } | null = null;
     if (payload.uid) {
       // A partner's telecaller: must still be active and belong to this partner.
       const u = await (p as any).cpUser.findUnique({ where: { id: payload.uid } });
       if (!u || !u.is_active || u.cp_id !== e.id || u.token_version !== payload.tv)
         return expired();
-      user = { id: u.id, full_name: u.full_name };
+      if (u.employee_id) {
+        // One of our own employees: they must still be an active employee.
+        const emp = await p.employee.findUnique({
+          where: { id: u.employee_id },
+          select: { status: true },
+        });
+        if (!emp || emp.status !== 'ACTIVE') return expired();
+      }
+      user = { id: u.id, full_name: u.full_name, member_role: u.member_role || 'TELECALLER' };
     } else if (e.token_version !== payload.tv) {
       return expired();
     }
@@ -101,6 +109,33 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
 /** Only the partner themselves (not one of their telecallers). */
 export const requireOwner = (req: CpRequest, res: Response, next: NextFunction) =>
   req.cp?.user ? res.status(403).json({ error: 'Only the partner can do this.' }) : next();
+
+/** The partner, or a PM member of their team (a PM sends listings for the partner). */
+export const requireOwnerOrPm = (req: CpRequest, res: Response, next: NextFunction) =>
+  !req.cp?.user || req.cp.user.member_role === 'PM'
+    ? next()
+    : res.status(403).json({ error: 'Only the partner or their PM can do this.' });
+
+/** The role the app shows for this person. */
+export const cpRoleOf = (req: CpRequest) =>
+  !req.cp?.user ? 'OWNER' : req.cp.user.member_role === 'PM' ? 'PM' : 'TELECALLER';
+
+/** Stops a partner who has used all their listing uploads (empty limit = no limit). */
+export const assertUploadRoom = async (cpId: number) => {
+  const e = await (p as any).employee.findUnique({
+    where: { id: cpId },
+    select: { cp_project_limit: true },
+  });
+  const limit: number | null = e?.cp_project_limit ?? null;
+  if (limit === null) return;
+  const used = await p.draftSubmission.count({ where: { submitted_by: cpId } });
+  if (used >= limit) {
+    throw {
+      status: 409,
+      message: `You have sent ${used} of ${limit} listings you may send. Ask the office to raise the limit.`,
+    };
+  }
+};
 
 // POST /cp/auth/login { employee_code, password }
 const LoginSchema = z.object({
@@ -124,8 +159,17 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
       },
     });
     if (!e || !isPartner(e.roles)) {
-      // Not a partner: it may be one of a partner's telecallers (their login is their phone number).
-      const u = await (p as any).cpUser.findUnique({ where: { login_id: employee_code } });
+      // Not a partner: it may be one of our own employees added to a partner's team (they use their CRM
+      // employee code and password), or one of a partner's telecallers (their login is their phone number).
+      const asEmployee =
+        e && e.status === 'ACTIVE'
+          ? await (p as any).cpUser.findFirst({ where: { employee_id: e.id, is_active: true } })
+          : null;
+      const viaEmployee = !!asEmployee && (await bcrypt.compare(password, e!.password_hash));
+      // A member who is one of our employees signs in ONLY with their CRM password, never by the phone path.
+      const u = viaEmployee
+        ? asEmployee
+        : await (p as any).cpUser.findUnique({ where: { login_id: employee_code } });
       const owner = u
         ? await p.employee.findUnique({
             where: { id: u.cp_id },
@@ -143,7 +187,7 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
         u.is_active &&
         owner.status === 'ACTIVE' &&
         isPartner(owner.roles) &&
-        (await bcrypt.compare(password, u.password_hash));
+        (viaEmployee || (!u.employee_id && (await bcrypt.compare(password, u.password_hash))));
       if (!userOk || !u || !owner) return res.status(401).json({ error: 'Invalid credentials' });
       return res.status(200).json({
         token: generateCpToken({
@@ -152,7 +196,12 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
           tv: u.token_version,
           uid: u.id,
         }),
-        partner: { id: u.id, name: u.full_name, employee_code, role: 'TELECALLER' },
+        partner: {
+          id: u.id,
+          name: u.full_name,
+          employee_code,
+          role: u.member_role === 'PM' ? 'PM' : 'TELECALLER',
+        },
       });
     }
     const ok = e.status === 'ACTIVE' && (await bcrypt.compare(password, e.password_hash));
@@ -173,7 +222,7 @@ router.get('/me', requireCp, (req: CpRequest, res) =>
       id: req.cp!.user ? req.cp!.user.id : req.cp!.id,
       name: req.cp!.user ? req.cp!.user.full_name : req.cp!.full_name,
       employee_code: req.cp!.employee_code,
-      role: req.cp!.user ? 'TELECALLER' : 'OWNER',
+      role: cpRoleOf(req),
       group_name: req.cp!.full_name,
     },
   }),
@@ -217,7 +266,7 @@ export const asUser = (req: CpRequest): TokenPayload => ({
   permissions: [],
 });
 
-router.get('/drafts', requireCp, requireOwner, async (req: CpRequest, res, next) => {
+router.get('/drafts', requireCp, requireOwnerOrPm, async (req: CpRequest, res, next) => {
   try {
     const { drafts, total } = await DraftService.list(asUser(req), { limit: 50, offset: 0 });
     return res.status(200).json({ drafts, total });
@@ -228,10 +277,11 @@ router.get('/drafts', requireCp, requireOwner, async (req: CpRequest, res, next)
 router.post(
   '/drafts/property',
   requireCp,
-  requireOwner,
+  requireOwnerOrPm,
   validateRequestBody(PropertyDraftCreateSchema),
   async (req: CpRequest, res, next) => {
     try {
+      await assertUploadRoom(req.cp!.id);
       return res.status(201).json({ draft: await DraftService.create(asUser(req), req.body) });
     } catch (err) {
       next(err);
@@ -241,10 +291,11 @@ router.post(
 router.post(
   '/drafts/project',
   requireCp,
-  requireOwner,
+  requireOwnerOrPm,
   validateRequestBody(ProjectDraftCreateSchema),
   async (req: CpRequest, res, next) => {
     try {
+      await assertUploadRoom(req.cp!.id);
       return res.status(201).json({ draft: await DraftService.create(asUser(req), req.body) });
     } catch (err) {
       next(err);

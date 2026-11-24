@@ -62,7 +62,15 @@ router.get(
       p.cpUser.findMany({
         where: { cp_id: cpId },
         orderBy: { id: 'asc' },
-        select: { id: true, full_name: true, login_id: true, is_active: true, created_at: true },
+        select: {
+          id: true,
+          full_name: true,
+          login_id: true,
+          is_active: true,
+          created_at: true,
+          member_role: true,
+          employee_id: true,
+        },
       }),
       p.cpLead.groupBy({
         by: ['assigned_to_id'],
@@ -103,6 +111,8 @@ const NewTelecallerSchema = z.object({
   full_name: z.string().trim().min(2).max(120),
   phone: z.string().trim().min(8).max(20),
   password: z.string().min(8, 'The password needs at least 8 characters').max(100),
+  // TELECALLER (default) works leads; PM sends listings for the partner.
+  member_role: z.enum(['TELECALLER', 'PM']).optional(),
 });
 
 router.post(
@@ -120,7 +130,7 @@ router.post(
       p.cpUser.count({ where: { cp_id: cpId, is_active: true } }),
     ]);
     if (used >= limit) {
-      throw fail(409, `You can have ${limit} telecallers. Ask the office to raise the limit.`);
+      throw fail(409, `Your team can have ${limit} members. Ask the office to raise the limit.`);
     }
     if (await p.cpUser.findUnique({ where: { login_id: phone } })) {
       throw fail(409, 'That phone number already has a login.');
@@ -131,8 +141,9 @@ router.post(
         full_name: body.data.full_name,
         login_id: phone,
         password_hash: await bcrypt.hash(body.data.password, 12),
+        member_role: body.data.member_role ?? 'TELECALLER',
       },
-      select: { id: true, full_name: true, login_id: true, is_active: true },
+      select: { id: true, full_name: true, login_id: true, is_active: true, member_role: true },
     });
     return res.status(201).json({ telecaller: made });
   }),
@@ -168,7 +179,7 @@ router.patch(
           p.cpUser.count({ where: { cp_id: cpId, is_active: true } }),
         ]);
         if (used >= limit)
-          throw fail(409, `You can have ${limit} telecallers. Switch another off first.`);
+          throw fail(409, `Your team can have ${limit} members. Switch another off first.`);
       } else {
         data.token_version = (data.token_version as number | undefined) ?? u.token_version + 1;
         // Their open leads go back to the partner.
@@ -285,7 +296,9 @@ const NewLeadSchema = z.object({
 const assignee = async (req: CpRequest, wanted: number | null | undefined) => {
   if (req.cp!.user) return req.cp!.user.id;
   if (!wanted) return null;
-  const u = await p.cpUser.findFirst({ where: { id: wanted, cp_id: req.cp!.id, is_active: true } });
+  const u = await p.cpUser.findFirst({
+    where: { id: wanted, cp_id: req.cp!.id, is_active: true, member_role: 'TELECALLER' },
+  });
   if (!u) throw fail(400, 'Pick one of your own active telecallers.');
   return u.id;
 };
@@ -1012,7 +1025,30 @@ const CAT_PROJECT = {
   amenities: true,
   cover_image_url: true,
   maps_link: true,
+  approval_authorities: true,
+  approval_authority: true,
+  total_area_value: true,
+  total_area_unit: true,
+  // Internal only: partners and our team may see these, the public website never does.
+  bank_loan_available: true,
+  payment_terms: true,
 } as const;
+
+/** Acres from a project's total area, or null when the unit cannot be converted. */
+const toAcres = (value: number | null, unit: string | null) => {
+  if (!value || !unit) return null;
+  const perAcre: Record<string, number> = {
+    ACRE: 1,
+    HECTARE: 2.47105,
+    SQFT: 1 / 43560,
+    SQYD: 1 / 4840,
+    SQM: 1 / 4046.856,
+    GUNTA: 1 / 40,
+    CENT: 1 / 100,
+  };
+  const k = perAcre[unit];
+  return k ? Math.round(value * k * 100) / 100 : null;
+};
 const CAT_UNIT = {
   id: true,
   unit_number: true,
@@ -1083,9 +1119,18 @@ router.get(
         })
       : [];
     const avail = new Map<number, any>(free.map((f: any) => [f.project_id, f]));
+    const given = new Set<number>(
+      (
+        await p.cpProjectAssignment.findMany({
+          where: { cp_id: req.cp!.id },
+          select: { project_id: true },
+        })
+      ).map((g: any) => g.project_id),
+    );
     return res.status(200).json({
       projects: projects.map((x: any) => ({
         ...x,
+        assigned: given.has(x.id),
         available_units: avail.get(x.id)?._count._all ?? 0,
         price_from: Number(avail.get(x.id)?._min.final_price) || null,
         price_to: Number(avail.get(x.id)?._max.final_price) || null,
@@ -1130,12 +1175,100 @@ router.get(
         _count: { _all: true },
       }),
     ]);
+    const plotSizes = [
+      ...new Set<number>(
+        units
+          .map((u: any) => Number(u.area_sqyd) || 0)
+          .filter((n: number) => n > 0)
+          .map((n: number) => Math.round(n * 10) / 10),
+      ),
+    ].sort((a, b) => a - b);
+    const freePrices = units
+      .filter((u: any) => u.sales_status === 'AVAILABLE' && Number(u.final_price) > 0)
+      .map((u: any) => Number(u.final_price));
+    const facts = {
+      approved_by: [
+        ...(Array.isArray(project.approval_authorities) ? project.approval_authorities : []),
+        ...(project.approval_authority ? [project.approval_authority] : []),
+      ].filter((v: unknown, i: number, a: unknown[]) => a.indexOf(v) === i),
+      total_area_acres: toAcres(
+        project.total_area_value === null ? null : Number(project.total_area_value),
+        project.total_area_unit,
+      ),
+      number_of_plots: units.length || project.total_units || null,
+      available_plots: units.filter((u: any) => u.sales_status === 'AVAILABLE').length,
+      plot_sizes_sqyd: plotSizes,
+      price_min: freePrices.length ? Math.min(...freePrices) : null,
+      price_max: freePrices.length ? Math.max(...freePrices) : null,
+      bank_loan_available: project.bank_loan_available ?? null,
+    };
     return res.status(200).json({
       project,
+      facts,
       units,
       media,
       amenities: amenities.map((a: any) => a.amenity),
       summary: Object.fromEntries(summary.map((x: any) => [x.sales_status, x._count._all])),
+    });
+  }),
+);
+
+// The projects this partner (or their team) sent us: waiting, being added, or live in our CRM.
+router.get(
+  '/my-projects',
+  requireCp,
+  handle(async (req, res) => {
+    const drafts = await p.draftSubmission.findMany({
+      where: { submitted_by: req.cp!.id, type: 'PROJECT' },
+      orderBy: { id: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        title: true,
+        location: true,
+        city: true,
+        status: true,
+        created_at: true,
+        linked_project: { select: { ...CAT_PROJECT, verification_status: true } },
+      },
+    });
+    const live = drafts
+      .map((d: any) => d.linked_project)
+      .filter((x: any) => x && x.verification_status === 'VERIFIED');
+    const free = live.length
+      ? await p.projectUnit.groupBy({
+          by: ['project_id'],
+          where: { project_id: { in: live.map((x: any) => x.id) }, sales_status: 'AVAILABLE' },
+          _count: { _all: true },
+          _min: { final_price: true },
+          _max: { final_price: true },
+        })
+      : [];
+    const avail = new Map<number, any>(free.map((f: any) => [f.project_id, f]));
+    return res.status(200).json({
+      projects: drafts.map((d: any) => {
+        const x =
+          d.linked_project && d.linked_project.verification_status === 'VERIFIED'
+            ? d.linked_project
+            : null;
+        return {
+          draft_id: d.id,
+          name: x?.name ?? d.title,
+          location: x?.location ?? d.location,
+          city: x?.city ?? d.city,
+          status: d.status,
+          sent_at: d.created_at,
+          // The project is open in the catalog only once it is live in our CRM.
+          project: x
+            ? {
+                ...x,
+                available_units: avail.get(x.id)?._count._all ?? 0,
+                price_from: Number(avail.get(x.id)?._min.final_price) || null,
+                price_to: Number(avail.get(x.id)?._max.final_price) || null,
+              }
+            : null,
+        };
+      }),
     });
   }),
 );

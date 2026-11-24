@@ -147,12 +147,16 @@ function mapCommonProjectFields(data: Partial<ProjectCreateInput & ProjectUpdate
     'default_area_unit',
     'total_area_unit',
     'cover_image_url',
+    'bank_loan_available',
   ] as const;
   for (const key of passthroughKeys) {
     if (data[key as keyof typeof data] !== undefined) out[key] = data[key as keyof typeof data];
   }
   if (data.completion_date !== undefined) {
     out.completion_date = data.completion_date ? new Date(data.completion_date) : null;
+  }
+  if ((data as any).payment_terms !== undefined) {
+    out.payment_terms = (data as any).payment_terms ?? Prisma.DbNull;
   }
   return out;
 }

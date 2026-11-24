@@ -409,6 +409,7 @@ model Branch {
 model Employee {
   /// External channel partner: how many telecaller accounts they may have (empty = 3).
   cp_telecaller_limit  Int?
+  cp_project_limit     Int? // how many listings a channel partner may send (2026-11-24); empty = default
   /// The person's GitHub name, so their commits are counted as their code updates.
   github_username      String?         @db.VarChar(60)
   meetings_organised   Meeting[]       @relation("MeetingsOrganised")
@@ -1428,6 +1429,10 @@ model Project {
 
   cover_image_url String? @db.Text
   is_published    Boolean @default(false)
+
+  // Internal only (2026-11-24): never selected by the public website or customer pages.
+  bank_loan_available Boolean?
+  payment_terms       Json? // booking / allotment / final payment amounts, when due, discount for paying on time
 
   // Verification workflow (item 1.7, 2026-09-15): DRAFT → PENDING_DM_POLISH →
   // PENDING_MD_APPROVAL → VERIFIED | REJECTED. Mirrors Property's own PM →
@@ -3661,10 +3666,28 @@ model CpUser {
   password_hash String
   is_active     Boolean  @default(true)
   token_version Int      @default(0)
+  /// TELECALLER (default) or PM: a PM may also send listings for the partner (2026-11-24).
+  member_role   String   @default("TELECALLER") @db.VarChar(12)
+  /// Set when this member is one of our own employees (they sign in with their CRM employee code).
+  employee_id   Int?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
   @@index([cp_id])
+  @@index([employee_id])
+}
+
+/// A project we gave to a channel partner to sell (2026-11-24). Every live project stays visible to every
+/// partner; this only marks which ones are theirs.
+model CpProjectAssignment {
+  id          Int      @id @default(autoincrement())
+  cp_id       Int
+  project_id  Int
+  assigned_by Int?
+  created_at  DateTime @default(now())
+
+  @@unique([cp_id, project_id])
+  @@index([project_id])
 }
 
 /// A partner's own lead, private to that partner's group. Only when a site visit is booked is a

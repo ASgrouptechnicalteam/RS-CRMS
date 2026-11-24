@@ -68,6 +68,21 @@ const ProjectCommonFields = {
   default_price_basis: PriceBasisEnum.optional().nullable(),
   default_area_unit: AreaUnitEnum.optional().nullable(),
   cover_image_url: z.string().optional().nullable(),
+
+  // Internal only (2026-11-24): for our team and channel partners, never the public website.
+  bank_loan_available: z.boolean().optional().nullable(),
+  payment_terms: z
+    .object({
+      booking_amount: z.number().nonnegative().optional().nullable(),
+      booking_when: z.string().max(200).optional().nullable(),
+      allotment_amount: z.number().nonnegative().optional().nullable(),
+      allotment_when: z.string().max(200).optional().nullable(),
+      final_amount: z.number().nonnegative().optional().nullable(),
+      final_when: z.string().max(200).optional().nullable(),
+      discount: z.string().max(400).optional().nullable(),
+    })
+    .optional()
+    .nullable(),
 };
 
 export const ProjectCreateSchema = z.object({

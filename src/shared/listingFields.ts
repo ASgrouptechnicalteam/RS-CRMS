@@ -227,10 +227,56 @@ export const LISTING_PROJECT_FIELDS: Record<ListingProjectGroup, ListingField[]>
   ],
 };
 
+/**
+ * Asked in every new listing, by a PM and by a channel partner alike (owner, 2026-11-24): what the customer pays
+ * and when, and whether paying early earns a discount. Internal only: for our team and partners, never the public
+ * website. All optional; amounts are numbers, the "when" and discount boxes are plain words.
+ */
+export const LISTING_PAYMENT_FIELDS: ListingField[] = [
+  num('pay_booking_amount', 'Booking amount', '₹'),
+  {
+    key: 'pay_booking_when',
+    label: 'Booking amount is paid',
+    kind: 'text',
+    placeholder: 'At booking',
+  },
+  num('pay_allotment_amount', 'Allotment amount', '₹'),
+  {
+    key: 'pay_allotment_when',
+    label: 'Allotment amount is paid',
+    kind: 'text',
+    placeholder: 'Within 30 days of booking',
+  },
+  num('pay_final_amount', 'Final payment', '₹'),
+  {
+    key: 'pay_final_when',
+    label: 'Final payment is paid',
+    kind: 'text',
+    placeholder: 'At registration',
+  },
+  {
+    key: 'pay_discount',
+    label: 'Discount for paying on time',
+    kind: 'text',
+    placeholder: '2% off if paid in full within 15 days',
+  },
+];
+
+/** Projects only: can the buyer get a bank loan? */
+export const LISTING_LOAN_FIELD: ListingField = {
+  key: 'bank_loan_available',
+  label: 'Bank loan available',
+  kind: 'yesno',
+};
+
 export const listingFieldsFor = (type: 'PROPERTY' | 'PROJECT', kindValue: string) =>
   type === 'PROPERTY'
-    ? LISTING_PROPERTY_FIELDS[listingPropertyGroup(kindValue)]
-    : LISTING_PROJECT_FIELDS[listingProjectGroup(kindValue)];
+    ? [...LISTING_PROPERTY_FIELDS[listingPropertyGroup(kindValue)], ...LISTING_PAYMENT_FIELDS]
+    : [
+        ...LISTING_PROJECT_FIELDS[listingProjectGroup(kindValue)],
+        LISTING_LOAN_FIELD,
+        ...LISTING_PAYMENT_FIELDS,
+      ];
 
 /**
  * Checks the per-type details. Returns a list of problems (empty when fine)

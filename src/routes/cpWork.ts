@@ -201,17 +201,19 @@ router.patch(
 
 // ── leads ─────────────────────────────────────────────────────
 
-/** The leads this person may see: the partner sees the group; a telecaller sees theirs. */
-const leadScope = (req: CpRequest) =>
-  req.cp!.user
+/** A PM works for the whole partner group (visits, booking), like the partner; a telecaller only sees their own. */
+const isGroupWide = (req: CpRequest) => !req.cp!.user || req.cp!.user.member_role === 'PM';
+
+/** The leads this person may see: the partner and their PM see the group; a telecaller sees theirs. */
+const leadScope = (req: CpRequest) => {
+  const user = req.cp!.user;
+  return user && !isGroupWide(req)
     ? {
         cp_id: req.cp!.id,
-        OR: [
-          { assigned_to_id: req.cp!.user.id },
-          { assigned_to_id: null, created_by_id: req.cp!.user.id },
-        ],
+        OR: [{ assigned_to_id: user.id }, { assigned_to_id: null, created_by_id: user.id }],
       }
     : { cp_id: req.cp!.id };
+};
 
 const LEAD_STATUSES = ['NEW', 'CONTACTED', 'INTERESTED', 'NOT_INTERESTED', 'DROPPED'] as const;
 const OPEN_STATUSES = ['NEW', 'CONTACTED', 'INTERESTED', 'VISIT_BOOKED'];
@@ -1380,10 +1382,11 @@ const toCpVisit = (v: any, cpId: number) => {
   };
 };
 
-/** Visits visible to this person: the partner sees the group's; a telecaller sees those of their own leads. */
+/** Visits visible to this person: the partner and their PM see the group's; a telecaller sees those of their own leads. */
 const visitScope = async (req: CpRequest) => {
   const cpId = req.cp!.id;
-  if (!req.cp!.user) {
+  const teamUser = req.cp!.user;
+  if (!teamUser || isGroupWide(req)) {
     return {
       OR: [
         { assigned_agent_id: cpId },
@@ -1400,7 +1403,7 @@ const visitScope = async (req: CpRequest) => {
   const referred = await p.cpReferral.findMany({
     where: {
       cp_id: cpId,
-      assigned_to_id: req.cp!.user.id,
+      assigned_to_id: teamUser.id,
       status: { in: ['OFFERED', 'ACCEPTED'] },
     },
     select: { lead_id: true },

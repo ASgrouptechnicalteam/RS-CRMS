@@ -241,7 +241,8 @@ router.post(
     const body = z
       .object({
         employee_code: z.string().trim().toUpperCase().min(1).max(40),
-        member_role: z.enum(['TELECALLER', 'PM']),
+        // OWNER = full access like the partner themselves (for the MD, Admin or the tech team to see and demo the area).
+        member_role: z.enum(['TELECALLER', 'PM', 'OWNER']),
       })
       .safeParse(req.body);
     if (!Number.isInteger(id) || id <= 0 || !body.success)
@@ -280,6 +281,17 @@ router.post(
       },
       select: { id: true, full_name: true, login_id: true, member_role: true, employee_id: true },
     });
+    await p.auditEvent
+      .create({
+        data: {
+          actor_id: req.user!.employeeId,
+          action: 'CP_STAFF_ADDED',
+          entity_type: 'EMPLOYEE',
+          entity_id: emp.id,
+          reason: `${emp.full_name} (${emp.employee_code}) added to partner ${id} as ${body.data.member_role}`,
+        },
+      })
+      .catch(() => undefined);
     return res.status(201).json({ member: made });
   }),
 );

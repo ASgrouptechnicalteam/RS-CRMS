@@ -89,7 +89,11 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
         });
         if (!emp || emp.status !== 'ACTIVE') return expired();
       }
-      user = { id: u.id, full_name: u.full_name, member_role: u.member_role || 'TELECALLER' };
+      // Full access (one of our employees added like the partner): acts as the partner themselves.
+      user =
+        u.employee_id && u.member_role === 'OWNER'
+          ? null
+          : { id: u.id, full_name: u.full_name, member_role: u.member_role || 'TELECALLER' };
     } else if (e.token_version !== payload.tv) {
       return expired();
     }
@@ -200,7 +204,7 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
           id: u.id,
           name: u.full_name,
           employee_code,
-          role: u.member_role === 'PM' ? 'PM' : 'TELECALLER',
+          role: u.member_role === 'PM' ? 'PM' : u.member_role === 'OWNER' ? 'OWNER' : 'TELECALLER',
         },
       });
     }

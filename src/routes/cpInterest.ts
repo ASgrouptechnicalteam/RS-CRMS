@@ -324,7 +324,7 @@ function registrationRouter(kind: Kind) {
           const conflict = await findEmployeeContactConflict(prisma, { companyId, phone, email });
           if (conflict) {
             return res.status(409).json({
-              error: employeeContactConflictMessage(conflict),
+              error: `${employeeContactConflictMessage(conflict)} If this is one of our own people who only needs to see or demo the partner area, do not make a new account: open Channel partners, pick a partner and use "Add one of our employees to this team" with Full access.`,
               conflict: { field: conflict.field, employee_code: conflict.employee.employee_code },
             });
           }

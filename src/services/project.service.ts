@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { projectFactsFor } from './projectFacts';
 import { TokenPayload } from '../utils/jwt';
 import { buildProjectScope } from '../authz/dataScope';
 import { ProjectCreateInput, ProjectUpdateInput, Roles, Permissions } from '../shared';
@@ -311,10 +312,13 @@ export class ProjectService {
         row.by_status[c.sales_status] = c._count._all;
         inv.set(c.project_id, row);
       }
+      // The main facts for each card (approved-by stamps, sizes, BHK types, starting price).
+      const facts = await projectFactsFor(projects as any[]);
       return {
         projects: projects.map((x) => ({
           ...x,
           inventory: inv.get(x.id) || { total: 0, by_status: {} },
+          facts: facts.get(x.id) || null,
         })),
         total,
       };

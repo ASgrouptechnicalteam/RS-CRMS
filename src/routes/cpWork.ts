@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { Permissions } from '../shared';
 import { requireCp, requireOwner, asUser, CpRequest } from './cp';
+import { projectFactsFor } from '../services/projectFacts';
 import { generateNextLeadCode } from '../services/lead/shared';
 import { bookVisit } from '../services/siteVisit/booking';
 import { readCpLeadRows, normalizeCpPhone, CP_LEAD_IMPORT_MAX } from '../services/cpLeadImport';
@@ -1029,6 +1030,7 @@ const CAT_PROJECT = {
   maps_link: true,
   approval_authorities: true,
   approval_authority: true,
+  rera_status: true,
   total_area_value: true,
   total_area_unit: true,
   // Internal only: partners and our team may see these, the public website never does.
@@ -1129,9 +1131,11 @@ router.get(
         })
       ).map((g: any) => g.project_id),
     );
+    const factsBy = await projectFactsFor(projects);
     return res.status(200).json({
       projects: projects.map((x: any) => ({
         ...x,
+        facts: factsBy.get(x.id) ?? null,
         assigned: given.has(x.id),
         available_units: avail.get(x.id)?._count._all ?? 0,
         price_from: Number(avail.get(x.id)?._min.final_price) || null,
@@ -1188,6 +1192,7 @@ router.get(
     const freePrices = units
       .filter((u: any) => u.sales_status === 'AVAILABLE' && Number(u.final_price) > 0)
       .map((u: any) => Number(u.final_price));
+    const sharedFacts = (await projectFactsFor([project])).get(project.id);
     const facts = {
       approved_by: [
         ...(Array.isArray(project.approval_authorities) ? project.approval_authorities : []),
@@ -1203,6 +1208,10 @@ router.get(
       price_min: freePrices.length ? Math.min(...freePrices) : null,
       price_max: freePrices.length ? Math.max(...freePrices) : null,
       bank_loan_available: project.bank_loan_available ?? null,
+      // The same figures the staff pages show: BHK types of an apartment project, flat sizes, starting price.
+      bhk_types: sharedFacts?.bhk_types ?? [],
+      flat_size_sqft: sharedFacts?.flat_size_sqft ?? null,
+      price_from: freePrices.length ? Math.min(...freePrices) : null,
     };
     return res.status(200).json({
       project,

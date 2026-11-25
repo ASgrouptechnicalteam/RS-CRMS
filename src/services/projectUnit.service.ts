@@ -4,6 +4,7 @@ import { TokenPayload } from '../utils/jwt';
 import { buildProjectScope } from '../authz/dataScope';
 import { can } from '../authz/authorization';
 import { logger } from '../utils/logger';
+import { projectFactsFor } from './projectFacts';
 import { Permissions } from '../shared';
 import {
   ProjectUnitCreateInput,
@@ -728,7 +729,7 @@ export class ProjectUnitService {
    * inventory summary tiles on the project dashboard.
    */
   static async getInventorySummary(user: TokenPayload, projectId: number) {
-    await this.assertProjectInScope(user, projectId);
+    const scoped: any = await this.assertProjectInScope(user, projectId);
 
     const [byStatus, byType, totalAgg] = await Promise.all([
       p.projectUnit.groupBy({
@@ -772,6 +773,8 @@ export class ProjectUnitService {
       total_inventory_value: totalAgg._sum.final_price || 0,
       sold_and_booked_value: soldValue,
       price_range: { min: totalAgg._min.final_price || 0, max: totalAgg._max.final_price || 0 },
+      // The main facts for the project page: approved-by, sizes, BHK types, starting price.
+      facts: (await projectFactsFor([{ ...(scoped || {}), id: projectId }])).get(projectId) ?? null,
     };
   }
 

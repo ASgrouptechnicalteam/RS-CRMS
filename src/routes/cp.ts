@@ -30,6 +30,10 @@ export interface CpRequest extends Request {
     employee_code: string;
     full_name: string | null;
     user: { id: number; full_name: string; member_role: string } | null;
+    /** The signed-in partner group is a super admin partner (can see and manage every partner). */
+    isSuper?: boolean;
+    /** Set while a super admin partner is looking at another partner's area (read only): the real group's id. */
+    viewingAs?: number;
   };
 }
 
@@ -67,6 +71,7 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
         full_name: true,
         status: true,
         token_version: true,
+        cp_is_super: true,
         roles: { select: { role: { select: { name: true } } } },
       },
     });
@@ -103,7 +108,38 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
       employee_code: e.employee_code,
       full_name: e.full_name,
       user,
+      isSuper: !!e.cp_is_super,
     };
+    // A super admin partner's owner (or Full access member) may look at another partner's area, read only.
+    const wanted = Number(req.header('x-view-as') || 0);
+    if (wanted && wanted !== e.id) {
+      if (!e.cp_is_super || user) {
+        return res.status(403).json({ error: 'You cannot view another partner.' });
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return res
+          .status(403)
+          .json({ error: 'You are looking at another partner. This view is read only.' });
+      }
+      const target = await p.employee.findFirst({
+        where: {
+          id: wanted,
+          company_id: e.company_id,
+          roles: { some: { role: { name: Roles.CHANNEL_PARTNER_EXTERNAL } } },
+        },
+        select: { id: true, company_id: true, employee_code: true, full_name: true },
+      });
+      if (!target) return res.status(404).json({ error: 'Partner not found' });
+      req.cp = {
+        id: target.id,
+        company_id: target.company_id,
+        employee_code: target.employee_code,
+        full_name: target.full_name,
+        user: null,
+        isSuper: false,
+        viewingAs: e.id,
+      };
+    }
     next();
   } catch (err) {
     next(err);
@@ -193,6 +229,10 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
         isPartner(owner.roles) &&
         (viaEmployee || (!u.employee_id && (await bcrypt.compare(password, u.password_hash))));
       if (!userOk || !u || !owner) return res.status(401).json({ error: 'Invalid credentials' });
+      // Remember when this partner's group was last used (the office sees it as "last active").
+      await p.employee
+        .update({ where: { id: owner.id }, data: { cp_last_seen_at: new Date() } })
+        .catch(() => undefined);
       return res.status(200).json({
         token: generateCpToken({
           employeeId: owner.id,
@@ -210,6 +250,9 @@ router.post('/auth/login', loginLimiter, validateRequestBody(LoginSchema), async
     }
     const ok = e.status === 'ACTIVE' && (await bcrypt.compare(password, e.password_hash));
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    await p.employee
+      .update({ where: { id: e.id }, data: { cp_last_seen_at: new Date() } })
+      .catch(() => undefined);
     return res.status(200).json({
       token: generateCpToken({ employeeId: e.id, companyId: e.company_id, tv: e.token_version }),
       partner: { id: e.id, name: e.full_name, employee_code, role: 'OWNER' },
@@ -228,6 +271,7 @@ router.get('/me', requireCp, (req: CpRequest, res) =>
       employee_code: req.cp!.employee_code,
       role: cpRoleOf(req),
       group_name: req.cp!.full_name,
+      is_super: !!req.cp!.isSuper && cpRoleOf(req) === 'OWNER',
     },
   }),
 );

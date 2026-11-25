@@ -410,6 +410,8 @@ model Employee {
   /// External channel partner: how many telecaller accounts they may have (empty = 3).
   cp_telecaller_limit  Int?
   cp_project_limit     Int? // how many listings a channel partner may send (2026-11-24); empty = default
+  cp_is_super          Boolean         @default(false) // a "super admin" partner: sees and manages every partner (2026-11-25)
+  cp_last_seen_at      DateTime? // when a partner group last signed in to the partner app (2026-11-25)
   /// The person's GitHub name, so their commits are counted as their code updates.
   github_username      String?         @db.VarChar(60)
   meetings_organised   Meeting[]       @relation("MeetingsOrganised")

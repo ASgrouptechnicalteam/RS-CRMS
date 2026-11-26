@@ -1433,6 +1433,9 @@ model Project {
   is_published    Boolean @default(false)
 
   // Internal only (2026-11-24): never selected by the public website or customer pages.
+  // Typed in by hand (2026-11-25), not worked out from units: plots/flats, availability, sizes, BHK types, starting price.
+  // Edited by the assigned PM, MD, Admin and Technical Manager only.
+  key_details Json?
   bank_loan_available Boolean?
   payment_terms       Json? // booking / allotment / final payment amounts, when due, discount for paying on time
 

@@ -10,6 +10,7 @@ import {
   ProjectDMPolishSchema,
   ProjectDMVerifyAsIsSchema,
   ProjectMDApprovalSchema,
+  ProjectKeyDetailsSchema,
   Permissions,
   Roles,
 } from '../../shared';
@@ -46,6 +47,63 @@ const projectInScope = () => async (req: AuthenticatedRequest) => {
   const scope = await buildProjectScope(req.user!);
   return p.project.findFirst({ where: { id: projectId, ...scope } });
 };
+
+// PUT /api/v1/projects/:id/key-details - the main details typed in by hand (plots/flats, availability, sizes,
+// BHK types, starting price). Only the MD, Admin, Technical Manager and the project's assigned PM.
+router.put(
+  '/:id/key-details',
+  authenticateToken,
+  validateRequestBody(ProjectKeyDetailsSchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0)
+        return res.status(400).json({ error: 'Invalid ID format' });
+      const scope = await buildProjectScope(req.user!);
+      const project = await p.project.findFirst({
+        where: { id, ...scope },
+        select: { id: true, name: true, assigned_pm_id: true },
+      });
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (!ProjectPolicy.canEditKeyDetails(req.user!, project)) {
+        return res.status(403).json({
+          error:
+            "Only the MD, Admin, the Technical Manager and this project's assigned PM can change these details.",
+        });
+      }
+      const b = req.body as Record<string, any>;
+      const clean = {
+        units_total: b.units_total ?? null,
+        units_available: b.units_available ?? null,
+        sizes: b.sizes ? String(b.sizes) : null,
+        bhk_types: (b.bhk_types ?? []).map((x: any) => ({
+          bhk: x.bhk,
+          total: x.total ?? null,
+          available: x.available ?? null,
+        })),
+        price_from: b.price_from ?? null,
+        price_to: b.price_to ?? null,
+      };
+      await p.project.update({ where: { id }, data: { key_details: clean } });
+      await (p as any).auditEvent
+        .create({
+          data: {
+            actor_id: req.user!.employeeId,
+            action: 'PROJECT_KEY_DETAILS_UPDATED',
+            entity_type: 'PROJECT',
+            entity_id: id,
+            reason: `Main details of ${project.name} changed`,
+          },
+        })
+        .catch(() => undefined);
+      invalidateProjectListCache();
+      return res.status(200).json({ ok: true, key_details: clean });
+    } catch (error) {
+      logger.error({ error }, 'Update project key details error');
+      return res.status(500).json({ error: 'Could not save these details. Please try again.' });
+    }
+  },
+);
 
 // GET /api/v1/projects - List projects
 router.get(

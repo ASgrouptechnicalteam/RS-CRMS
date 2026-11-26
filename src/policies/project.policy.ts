@@ -30,6 +30,23 @@ export const DM_EXECUTIVE_EDITABLE_PROJECT = [
 
 export class ProjectPolicy {
   /**
+   * Who may type in a project's main details (plots/flats, availability, sizes, BHK types, starting price):
+   * the MD, Admin, the Technical Manager, and the PM this project is assigned to (not any other PM).
+   */
+  static canEditKeyDetails(
+    user: { employeeId: number; roles: string[] },
+    project: { assigned_pm_id?: number | null },
+  ): boolean {
+    if (user.roles.some((r) => [Roles.MD, Roles.ADMIN, Roles.TECHNICAL_MANAGER].includes(r as any)))
+      return true;
+    return (
+      user.roles.includes(Roles.PROJECT_MANAGER) &&
+      project.assigned_pm_id != null &&
+      project.assigned_pm_id === user.employeeId
+    );
+  }
+
+  /**
    * A Project Manager "owns" a record when it is assigned to them, or when
    * they created it and nobody has been assigned yet -- without the second
    * case a PM who creates something with no PM set could not edit their own

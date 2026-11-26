@@ -85,6 +85,39 @@ const ProjectCommonFields = {
     .nullable(),
 };
 
+// The main details of a project, typed in by hand (2026-11-25). The team does not keep units up to date, so none of
+// this is counted from units. Everything is optional.
+export const ProjectKeyDetailsSchema = z
+  .object({
+    units_total: z.number().int().min(0).max(100000).optional().nullable(),
+    units_available: z.number().int().min(0).max(100000).optional().nullable(),
+    // Plot or flat sizes as typed, e.g. "150, 200, 267 sq yd" or "1,150 - 1,700 sq ft".
+    sizes: z.string().trim().max(200).optional().nullable(),
+    // Every BHK type of the project, e.g. 2 BHK, 3 BHK, with optional counts.
+    bhk_types: z
+      .array(
+        z.object({
+          bhk: z.string().trim().min(1).max(20),
+          total: z.number().int().min(0).max(100000).optional().nullable(),
+          available: z.number().int().min(0).max(100000).optional().nullable(),
+        }),
+      )
+      .max(12)
+      .optional()
+      .nullable(),
+    price_from: z.number().min(0).max(1e11).optional().nullable(),
+    price_to: z.number().min(0).max(1e11).optional().nullable(),
+  })
+  .refine(
+    (v) => v.units_total == null || v.units_available == null || v.units_available <= v.units_total,
+    { message: 'Available cannot be more than the total.', path: ['units_available'] },
+  )
+  .refine((v) => v.price_from == null || v.price_to == null || v.price_to >= v.price_from, {
+    message: 'The highest price cannot be below the starting price.',
+    path: ['price_to'],
+  });
+export type ProjectKeyDetailsInput = z.infer<typeof ProjectKeyDetailsSchema>;
+
 export const ProjectCreateSchema = z.object({
   name: z.string().min(3),
   description: z.string().optional().nullable(),

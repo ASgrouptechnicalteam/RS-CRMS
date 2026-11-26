@@ -1031,6 +1031,7 @@ const CAT_PROJECT = {
   approval_authorities: true,
   approval_authority: true,
   rera_status: true,
+  key_details: true,
   total_area_value: true,
   total_area_unit: true,
   // Internal only: partners and our team may see these, the public website never does.
@@ -1113,16 +1114,6 @@ router.get(
       orderBy: { name: 'asc' },
       take: 200,
     });
-    const free = projects.length
-      ? await p.projectUnit.groupBy({
-          by: ['project_id'],
-          where: { project_id: { in: projects.map((x: any) => x.id) }, sales_status: 'AVAILABLE' },
-          _count: { _all: true },
-          _min: { final_price: true },
-          _max: { final_price: true },
-        })
-      : [];
-    const avail = new Map<number, any>(free.map((f: any) => [f.project_id, f]));
     const given = new Set<number>(
       (
         await p.cpProjectAssignment.findMany({
@@ -1131,15 +1122,16 @@ router.get(
         })
       ).map((g: any) => g.project_id),
     );
-    const factsBy = await projectFactsFor(projects);
+    const factsBy = projectFactsFor(projects);
     return res.status(200).json({
       projects: projects.map((x: any) => ({
         ...x,
         facts: factsBy.get(x.id) ?? null,
         assigned: given.has(x.id),
-        available_units: avail.get(x.id)?._count._all ?? 0,
-        price_from: Number(avail.get(x.id)?._min.final_price) || null,
-        price_to: Number(avail.get(x.id)?._max.final_price) || null,
+        // Typed in by our team, not counted from units (empty when nobody has typed them in yet).
+        available_units: factsBy.get(x.id)?.units_available ?? null,
+        price_from: factsBy.get(x.id)?.price_from ?? null,
+        price_to: factsBy.get(x.id)?.price_to ?? null,
       })),
     });
   }),
@@ -1181,37 +1173,22 @@ router.get(
         _count: { _all: true },
       }),
     ]);
-    const plotSizes = [
-      ...new Set<number>(
-        units
-          .map((u: any) => Number(u.area_sqyd) || 0)
-          .filter((n: number) => n > 0)
-          .map((n: number) => Math.round(n * 10) / 10),
-      ),
-    ].sort((a, b) => a - b);
-    const freePrices = units
-      .filter((u: any) => u.sales_status === 'AVAILABLE' && Number(u.final_price) > 0)
-      .map((u: any) => Number(u.final_price));
-    const sharedFacts = (await projectFactsFor([project])).get(project.id);
+    // The main details are typed in by hand by our team (assigned PM, MD, Admin, Technical Manager), never counted
+    // from units: the team does not keep units up to date.
+    const shared = projectFactsFor([project]).get(project.id)!;
     const facts = {
-      approved_by: [
-        ...(Array.isArray(project.approval_authorities) ? project.approval_authorities : []),
-        ...(project.approval_authority ? [project.approval_authority] : []),
-      ].filter((v: unknown, i: number, a: unknown[]) => a.indexOf(v) === i),
+      approved_by: shared.approved_by,
       total_area_acres: toAcres(
         project.total_area_value === null ? null : Number(project.total_area_value),
         project.total_area_unit,
       ),
-      number_of_plots: units.length || project.total_units || null,
-      available_plots: units.filter((u: any) => u.sales_status === 'AVAILABLE').length,
-      plot_sizes_sqyd: plotSizes,
-      price_min: freePrices.length ? Math.min(...freePrices) : null,
-      price_max: freePrices.length ? Math.max(...freePrices) : null,
+      number_of_plots: shared.units_total,
+      available_plots: shared.units_available,
+      sizes: shared.sizes,
+      bhk_types: shared.bhk_types,
+      price_from: shared.price_from,
+      price_to: shared.price_to,
       bank_loan_available: project.bank_loan_available ?? null,
-      // The same figures the staff pages show: BHK types of an apartment project, flat sizes, starting price.
-      bhk_types: sharedFacts?.bhk_types ?? [],
-      flat_size_sqft: sharedFacts?.flat_size_sqft ?? null,
-      price_from: freePrices.length ? Math.min(...freePrices) : null,
     };
     return res.status(200).json({
       project,
@@ -1246,16 +1223,7 @@ router.get(
     const live = drafts
       .map((d: any) => d.linked_project)
       .filter((x: any) => x && x.verification_status === 'VERIFIED');
-    const free = live.length
-      ? await p.projectUnit.groupBy({
-          by: ['project_id'],
-          where: { project_id: { in: live.map((x: any) => x.id) }, sales_status: 'AVAILABLE' },
-          _count: { _all: true },
-          _min: { final_price: true },
-          _max: { final_price: true },
-        })
-      : [];
-    const avail = new Map<number, any>(free.map((f: any) => [f.project_id, f]));
+    const myFacts = projectFactsFor(live);
     return res.status(200).json({
       projects: drafts.map((d: any) => {
         const x =
@@ -1273,9 +1241,10 @@ router.get(
           project: x
             ? {
                 ...x,
-                available_units: avail.get(x.id)?._count._all ?? 0,
-                price_from: Number(avail.get(x.id)?._min.final_price) || null,
-                price_to: Number(avail.get(x.id)?._max.final_price) || null,
+                facts: myFacts.get(x.id) ?? null,
+                available_units: myFacts.get(x.id)?.units_available ?? null,
+                price_from: myFacts.get(x.id)?.price_from ?? null,
+                price_to: myFacts.get(x.id)?.price_to ?? null,
               }
             : null,
         };

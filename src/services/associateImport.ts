@@ -1,7 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { TokenPayload } from '../utils/jwt';
 import { AppError } from './lead/errors';
-import { Roles } from '../shared';
+import { Roles, isNameHeading, phoneColumns } from '../shared';
 import { seesAllAssociates, tenDigits, wouldLoop } from './associate.service';
 
 // Import of associates from the old portal's export or a spreadsheet saved as
@@ -125,6 +125,16 @@ export async function planImport(user: TokenPayload, csv: string) {
   for (const [field, names] of Object.entries(FIELDS)) {
     const i = header.findIndex((h) => names.includes(h));
     if (i >= 0) col[field] = i;
+  }
+  // Other ways people write these two headings: "Ph No", "Mob.", "Associate's Name".
+  const free = (i: number) => !Object.values(col).includes(i);
+  if (col.phone === undefined) {
+    const i = phoneColumns(table[0]).find(free);
+    if (i !== undefined) col.phone = i;
+  }
+  if (col.full_name === undefined) {
+    const i = table[0].findIndex((h, at) => free(at) && isNameHeading(h));
+    if (i >= 0) col.full_name = i;
   }
   if (col.full_name === undefined || col.phone === undefined) {
     throw new AppError(

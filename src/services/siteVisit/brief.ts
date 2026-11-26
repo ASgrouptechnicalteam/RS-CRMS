@@ -369,7 +369,10 @@ export async function getVisitBrief(user: TokenPayload, visitId: number) {
     ];
     const req = lead.matching_requirement;
     const reqParts = lines([
-      humanise(lead.property_type_preference || req?.property_type),
+      (lead.property_type_preference || req?.property_type || '')
+        .split(',')
+        .map((type: string) => humanise(type.trim()))
+        .join(', ') || null,
       req?.min_bedrooms ? `${req.min_bedrooms}+ bedrooms` : null,
     ]);
     const budget = budgetText(lead.budget_min, lead.budget_max, req?.max_budget);

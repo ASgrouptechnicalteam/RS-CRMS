@@ -447,3 +447,43 @@ export const OpportunityUpdateSchema = z
     message: 'Provide at most one of property_id or project_unit_id',
   });
 export type OpportunityUpdateInput = z.infer<typeof OpportunityUpdateSchema>;
+
+// ---------------------------------------------------------------------------
+// Spreadsheet headings (bulk uploads). People write "Ph No", "Mob.", "Cell",
+// "Contact No 2", "WhatsApp" and many more, so a column is recognised by the
+// words in its heading, not from one fixed list.
+// ---------------------------------------------------------------------------
+const headingKey = (heading: unknown) =>
+  String(heading ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+const PHONE_WORDS =
+  /phone|fone|mobil|^mob|mob(no|num|number)|^mbl|cell(no|num|number|phone)?\d*$|contact(s|no|num|number|details)?\d*$|whatsapp|watsapp|whatsap|whatsup|ph(no|num|number)\d*$|^ph\d*$|^pno\d*$|^tel(no)?\d*$|^wa(no|number)?$|^numbers?\d*$|^(alt|alternate|alternative|second|secondary|other)(no|num|number)s?\d*$/;
+/** Words that make a column about something, or somebody, other than the customer's number. */
+const NOT_CUSTOMER_PHONE =
+  /name|person|mail|type|date|status|photo|time|agent|staff|employee|executive|caller|manager|refer|partner|office|upline|sponsor|parent/;
+const SECOND_PHONE = /alt|second|other|emergency|whatsapp|watsapp|whatsap|whatsup|^wa|[2-9]$/;
+const NAME_WORDS = /^(customer|client|lead|buyer|party|person)s?$|name|contactperson/;
+const NOT_CUSTOMER_NAME =
+  /project|venture|company|firm|agent|staff|employee|executive|caller|manager|refer|partner|father|husband|spouse|village|city|area|bank|file|sheet|user|mail|nick|property|site|source|campaign|group|upline|sponsor|parent/;
+
+export const isPhoneHeading = (heading: unknown): boolean => {
+  const key = headingKey(heading);
+  return key.length <= 30 && PHONE_WORDS.test(key) && !NOT_CUSTOMER_PHONE.test(key);
+};
+
+export const isNameHeading = (heading: unknown): boolean => {
+  const key = headingKey(heading);
+  return key.length <= 30 && NAME_WORDS.test(key) && !NOT_CUSTOMER_NAME.test(key);
+};
+
+/**
+ * The phone columns of a heading row, main number first, then "alternate" / "WhatsApp" ones. Empty when the
+ * row holds a phone number itself: that is a customer, not a heading row.
+ */
+export const phoneColumns = (headings: unknown[]): number[] => {
+  if (headings.some((h) => String(h ?? '').replace(/\D/g, '').length >= 10)) return [];
+  const found = headings.map((_, i) => i).filter((i) => isPhoneHeading(headings[i]));
+  const second = (i: number) => SECOND_PHONE.test(headingKey(headings[i]));
+  return [...found.filter((i) => !second(i)), ...found.filter(second)];
+};

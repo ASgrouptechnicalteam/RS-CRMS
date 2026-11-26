@@ -8,7 +8,14 @@ import { requireCp, requireOwner, asUser, CpRequest } from './cp';
 import { projectFactsFor } from '../services/projectFacts';
 import { generateNextLeadCode } from '../services/lead/shared';
 import { bookVisit } from '../services/siteVisit/booking';
-import { readCpLeadRows, normalizeCpPhone, CP_LEAD_IMPORT_MAX } from '../services/cpLeadImport';
+import {
+  readCpLeadSheet,
+  gridFromObjects,
+  normalizeCpPhone,
+  CP_LEAD_IMPORT_MAX,
+  CP_LEAD_IMPORT_MAX_LINES,
+  NO_NAME,
+} from '../services/cpLeadImport';
 
 /**
  * The external partner's work area (2026-11-22), mounted at /api/v1/cp next to the sign-in routes.
@@ -347,52 +354,76 @@ router.post(
   '/leads/import',
   requireCp,
   handle(async (req, res) => {
-    const rows = Array.isArray(req.body?.rows) ? (req.body.rows as Record<string, unknown>[]) : [];
-    if (!rows.length) throw fail(400, 'The file has no rows.');
-    if (rows.length > CP_LEAD_IMPORT_MAX)
-      throw fail(400, `Import up to ${CP_LEAD_IMPORT_MAX} rows at a time.`);
+    // `grid` is the sheet as lines of boxes. `rows` is what the older app sends.
+    const grid: unknown[] = Array.isArray(req.body?.grid) ? req.body.grid : [];
+    const rows: unknown[] = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const tooMany = `Upload up to ${CP_LEAD_IMPORT_MAX} customers at a time. Split the file into smaller parts.`;
+    if (!grid.length && !rows.length) throw fail(400, 'The file has no rows.');
+    if (grid.length > 5000 || rows.length > CP_LEAD_IMPORT_MAX) throw fail(400, tooMany);
+    const filled = grid.filter((r) => Array.isArray(r) && r.some((c) => String(c ?? '').trim()));
+    if (filled.length > CP_LEAD_IMPORT_MAX_LINES) throw fail(400, tooMany);
     const cpId = req.cp!.id;
     const toId = await assignee(req, Number(req.body?.assign_to_id) || null);
-    const parsed = readCpLeadRows(rows);
-    const phones = parsed.filter((r) => r.lead).map((r) => r.lead!.phone);
+    const sheet = readCpLeadSheet(
+      grid.length ? (grid as unknown[][]) : gridFromObjects(rows as Record<string, unknown>[]),
+    );
+    if (!sheet.has_phone_column)
+      throw fail(
+        400,
+        'We could not find mobile numbers in this file. Each customer needs a 10-digit mobile number.',
+      );
+    if (!sheet.rows.length) throw fail(400, 'The file has no customers.');
+    if (sheet.rows.length > CP_LEAD_IMPORT_MAX) throw fail(400, tooMany);
+    const phones = sheet.rows.filter((r) => r.lead).map((r) => r.lead!.phone);
     const have = phones.length
       ? await p.cpLead.findMany({
           where: { cp_id: cpId, phone: { in: phones } },
           select: { phone: true },
         })
       : [];
-    const seen = new Set<string>(have.map((h: any) => h.phone));
-    const results = parsed.map((r) => {
-      if (!r.lead) return { row: r.row, status: 'ERROR' as const, message: r.error! };
-      if (seen.has(r.lead.phone))
-        return { row: r.row, status: 'SKIP' as const, message: 'Already in your leads.' };
-      seen.add(r.lead.phone);
-      return { row: r.row, status: 'NEW' as const, lead: r.lead };
+    const mine = new Set<string>(have.map((h: any) => h.phone));
+    const inFile = new Set<string>();
+    const results = sheet.rows.map((r) => {
+      const base = { row: r.row, name: r.name };
+      if (!r.lead) return { ...base, status: 'ERROR' as const, message: r.error! };
+      if (mine.has(r.lead.phone))
+        return { ...base, status: 'SKIP' as const, message: 'Already in your customers.' };
+      if (inFile.has(r.lead.phone))
+        return { ...base, status: 'SKIP' as const, message: 'Same number twice in this file.' };
+      inFile.add(r.lead.phone);
+      return { ...base, status: 'NEW' as const, lead: r.lead };
     });
     const fresh = results.filter((r) => r.status === 'NEW');
-    const errors = results.filter((r) => r.status === 'ERROR').length;
     const summary = {
       new: fresh.length,
       skipped: results.filter((r) => r.status === 'SKIP').length,
-      errors,
+      errors: results.filter((r) => r.status === 'ERROR').length,
+      no_name: fresh.filter((r: any) => r.lead.customer_name === NO_NAME).length,
     };
-    const publicRows = results.map(({ lead: _l, ...rest }: any) => rest);
-    if (req.body?.dry_run !== false || errors || !fresh.length) {
-      return res.status(200).json({ saved: false, summary, rows: publicRows });
+    const answer = {
+      summary,
+      heading_row: sheet.heading_row,
+      // A few of them, so the person can see the name and number were read correctly.
+      sample: fresh
+        .slice(0, 3)
+        .map((r: any) => ({ name: r.lead.customer_name, phone: r.lead.phone })),
+      rows: results.map(({ lead: _l, ...rest }: any) => rest),
+    };
+    // Lines with a problem never stop the good ones.
+    if (req.body?.dry_run !== false || !fresh.length) {
+      return res.status(200).json({ saved: false, ...answer });
     }
     await p.cpLead.createMany({
       data: fresh.map((r: any) => ({
         cp_id: cpId,
         assigned_to_id: toId,
         created_by_id: req.cp!.user?.id ?? null,
-        customer_name: r.lead.customer_name,
-        phone: r.lead.phone,
-        email: r.lead.email,
-        notes: r.lead.notes,
+        ...r.lead,
         source: 'CP_IMPORT',
       })),
+      skipDuplicates: true,
     });
-    return res.status(201).json({ saved: true, summary, rows: publicRows });
+    return res.status(201).json({ saved: true, ...answer });
   }),
 );
 
@@ -729,7 +760,8 @@ router.get(
         sales_status: 'AVAILABLE',
         final_price: { gt: 0, gte: min, ...(max ? { lte: max } : {}) },
         ...place(['city', 'locality', 'title']),
-        ...(l.property_type ? { category: l.property_type } : {}),
+        // The customer may want more than one kind.
+        ...(l.property_type ? { category: { in: String(l.property_type).split(',') } } : {}),
       },
       select: {
         id: true,

@@ -3682,6 +3682,24 @@ model CpUser {
   @@index([employee_id])
 }
 
+/// A channel partner's asked change to bank, PAN or Aadhaar details already saved (2026-11-26). The new values are
+/// stored encrypted and take effect only when HR, the MD or Admin confirms.
+model CpDetailsChange {
+  id         Int       @id @default(autoincrement())
+  cp_id      Int
+  company_id Int
+  fields     Json // field name -> encrypted new value
+  summary    String    @db.VarChar(500) // what changes, with numbers masked
+  status     String    @default("PENDING") @db.VarChar(12) // PENDING | APPROVED | REFUSED | REPLACED
+  decided_by Int?
+  decided_at DateTime?
+  note       String?   @db.VarChar(300)
+  created_at DateTime  @default(now())
+
+  @@index([cp_id, status])
+  @@index([company_id, status])
+}
+
 /// A project we gave to a channel partner to sell (2026-11-24). Every live project stays visible to every
 /// partner; this only marks which ones are theirs.
 model CpProjectAssignment {

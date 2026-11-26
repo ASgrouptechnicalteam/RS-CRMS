@@ -6,7 +6,12 @@ import { Router, Response, NextFunction } from 'express';
 import { TokenPayload } from '../utils/jwt';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthenticatedRequest, requireRole } from '../middleware/auth';
-import { getAccessibleCompanyIds, buildEmployeeScope, visibleEmployees } from '../authz/dataScope';
+import {
+  getAccessibleCompanyIds,
+  buildEmployeeScope,
+  visibleEmployees,
+  notExternalPartner,
+} from '../authz/dataScope';
 import { getISTComponents, getISTMidnightInstant } from '../utils/time';
 import { WORK_LOG_ACTION, parseWorkLog, WorkLogEntry, platformCounts } from './workLog';
 import { associateWork } from '../services/associateWork';
@@ -119,8 +124,11 @@ const dayOfPeople =
       });
       const employees = await p.employee.findMany({
         where: {
-          ...scope,
-          OR: [{ status: 'ACTIVE' }, { id: { in: worked.map((w) => w.actor_id) } }],
+          AND: [
+            scope,
+            notExternalPartner,
+            { OR: [{ status: 'ACTIVE' }, { id: { in: worked.map((w) => w.actor_id) } }] },
+          ],
         },
         select: {
           id: true,
@@ -1162,6 +1170,8 @@ router.get(
     try {
       const employees = await p.employee.findMany({
         where: {
+          // Channel partners are not staff.
+          AND: [notExternalPartner],
           // Packet D (15-16): company-scoped to req.user.companyId
           company_id: req.user!.companyId,
           // Leavers only on request (?include_left=1).

@@ -31,6 +31,7 @@ import cpRoutes from './routes/cp';
 import cpWorkRoutes from './routes/cpWork';
 import cpAdminRoutes from './routes/cpAdmin';
 import cpSuperRoutes from './routes/cpSuper';
+import { cpProfileRouter, cpChangesRouter } from './routes/cpProfile';
 import cpReferredRoutes from './routes/cpReferred';
 import cpInterestRoutes, { associateRegistrationRouter } from './routes/cpInterest';
 import pettyCashRoutes from './routes/pettyCash';
@@ -354,6 +355,8 @@ if (mountInternal) {
   app.use('/api/v1/finance', financeExportRoutes);
   // External channel partners: their own sign-in and token (item 5).
   app.use('/api/v1/cp/super', cpSuperRoutes);
+  app.use('/api/v1/cp', cpProfileRouter);
+  app.use('/api/v1/cp-changes', cpChangesRouter);
   app.use('/api/v1/cp', cpRoutes);
   app.use('/api/v1/cp', cpWorkRoutes);
   app.use('/api/v1/cp', cpReferredRoutes);

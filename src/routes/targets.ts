@@ -7,7 +7,7 @@ import { DailyTargetSetSchema, Roles, Permissions } from '../shared';
 import { requireAuthz } from '../middleware/authz';
 import { can } from '../authz/authorization';
 import { getDownstreamEmployeeIds } from '../utils/hierarchy';
-import { visibleEmployees } from '../authz/dataScope';
+import { visibleEmployees, notExternalPartner } from '../authz/dataScope';
 import {
   TARGET_METRICS,
   METRIC_GROUPS,
@@ -367,7 +367,7 @@ router.get(
         };
       }
       const people = await p.employee.findMany({
-        where,
+        where: { AND: [where, notExternalPartner] },
         select: {
           id: true,
           full_name: true,

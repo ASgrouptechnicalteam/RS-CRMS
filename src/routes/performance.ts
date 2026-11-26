@@ -1,3 +1,4 @@
+import { notExternalPartner } from '../authz/dataScope';
 import { logger } from '../utils/logger';
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
@@ -487,7 +488,7 @@ router.get('/team', authenticateToken, async (req: AuthenticatedRequest, res: Re
     });
 
     const employees = await p.employee.findMany({
-      where: whereClause,
+      where: { AND: [whereClause, notExternalPartner] },
       include: { branch: true, roles: { include: { role: true } } },
       orderBy: { employee_code: 'asc' },
     });

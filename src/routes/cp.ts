@@ -30,6 +30,8 @@ export interface CpRequest extends Request {
     employee_code: string;
     full_name: string | null;
     user: { id: number; full_name: string; member_role: string } | null;
+    /** One of our own employees signed in to this partner's area with their CRM login. */
+    staff?: boolean;
     /** The signed-in partner group is a super admin partner (can see and manage every partner). */
     isSuper?: boolean;
     /** Set while a super admin partner is looking at another partner's area (read only): the real group's id. */
@@ -81,12 +83,14 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
       return expired();
     }
     let user: { id: number; full_name: string; member_role: string } | null = null;
+    let staff = false;
     if (payload.uid) {
       // A partner's telecaller: must still be active and belong to this partner.
       const u = await (p as any).cpUser.findUnique({ where: { id: payload.uid } });
       if (!u || !u.is_active || u.cp_id !== e.id || u.token_version !== payload.tv)
         return expired();
       if (u.employee_id) {
+        staff = true;
         // One of our own employees: they must still be an active employee.
         const emp = await p.employee.findUnique({
           where: { id: u.employee_id },
@@ -109,6 +113,7 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
       full_name: e.full_name,
       user,
       isSuper: !!e.cp_is_super,
+      staff,
     };
     // A super admin partner's owner (or Full access member) may look at another partner's area, read only.
     const wanted = Number(req.header('x-view-as') || 0);

@@ -28,6 +28,8 @@ const MD_IMPORTANT_TYPES = new Set([
   'CP_REFERRAL_STALE',
   'CP_REFERRAL_DECLINED',
   'CP_REFERRAL_BOOKED',
+  // A partner added or asked to change bank / ID details: money goes to those accounts.
+  'CP_DETAILS_CHANGE',
 ]);
 
 export function isImportantForMd(n: { type?: string; title?: string; link?: string }): boolean {

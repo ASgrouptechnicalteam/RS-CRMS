@@ -86,6 +86,14 @@ export const visibleEmployees: Prisma.EmployeeWhereInput = {
 };
 
 /**
+ * Channel partners are not our staff: their accounts are employee records only so they can sign in to the partner
+ * app. Leave them out of staff lists such as Team Today, performance and targets (add inside an AND).
+ */
+export const notExternalPartner: Prisma.EmployeeWhereInput = {
+  roles: { none: { role: { name: Roles.CHANNEL_PARTNER_EXTERNAL } } },
+};
+
+/**
  * Builds the read-visibility scope for Employees.
  */
 export async function buildEmployeeScope(user: TokenPayload): Promise<Prisma.EmployeeWhereInput> {

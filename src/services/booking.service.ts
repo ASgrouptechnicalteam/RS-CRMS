@@ -26,6 +26,7 @@ import {
   resolveInventoryRef,
   type InventoryRef,
 } from './inventory/reference';
+import { bookingsForLead, hasConfirmedBooking } from './lead/bookingLink';
 
 const p = prisma;
 
@@ -166,6 +167,13 @@ function bookingInventory(dto: {
   return { ref: resolveInventoryRef(dto), other: null };
 }
 
+/** The money taken at booking can never be more than the price agreed. */
+function assertBookingMoney(agreed: unknown, taken: unknown) {
+  if (Number(taken) > Number(agreed)) {
+    throw new AppError(400, 'The booking amount cannot be more than the agreed price.');
+  }
+}
+
 export class BookingService {
   /** List bookings scoped to the user's company. */
   static async getBookings(user: TokenPayload) {
@@ -289,6 +297,7 @@ export class BookingService {
       const emp = await client.employee.findUnique({ where: { id: assignedEmployeeId } });
     }
 
+    assertBookingMoney(dto.agreed_price, dto.booking_amount);
     const balance = Math.max(0, Number(dto.agreed_price) - Number(dto.booking_amount));
     const count = await client.booking.count({ where: { company_id: dto.company_id } });
     const booking_code = `RRH-BK-${now.getFullYear()}-${String(count + 1).padStart(4, '0')}-${randomBytes(3).toString('hex')}`;
@@ -640,14 +649,28 @@ export class BookingService {
       where: { booking_id: id },
       include: { lead: true },
     });
-    const dropEntity = opp?.lead
-      ? { ...opp.lead, exit_reason: 'OTHER', booking_cancelled: true }
-      : null;
+    // A booking made with the booking form has no deal link: its lead is the one the customer came from. That
+    // lead is closed here only if this booking had made it Booked and no other booking keeps it so.
+    let linked: any = opp?.lead ?? null;
+    if (!linked) {
+      const from = await p.customer.findUnique({
+        where: { id: booking.customer_id },
+        select: { origin_lead_id: true },
+      });
+      const lead = from?.origin_lead_id
+        ? await p.lead.findUnique({ where: { id: from.origin_lead_id } })
+        : null;
+      if (lead?.status === 'BOOKED') {
+        const others = (await bookingsForLead(p, lead.id)).filter((b) => b.id !== id);
+        if (!hasConfirmedBooking(others)) linked = lead;
+      }
+    }
+    const dropEntity = linked ? { ...linked, exit_reason: 'OTHER', booking_cancelled: true } : null;
     const dropCheck =
-      opp?.lead && opp.lead.status !== 'DROPPED' && dropEntity
+      linked && linked.status !== 'DROPPED' && dropEntity
         ? WorkflowEngine.canTransition({
             domain: WorkflowDomain.LEAD,
-            currentState: opp.lead.status,
+            currentState: linked.status,
             action: 'DROPPED',
             actor: user,
             entity: dropEntity,
@@ -655,7 +678,7 @@ export class BookingService {
         : null;
     if (dropCheck && !dropCheck.allowed) {
       logger.warn(
-        `[booking] Booking ${booking.booking_code} cancelled; lead ${opp?.lead_id} left at ${opp?.lead?.status}: ${dropCheck.reason}`,
+        `[booking] Booking ${booking.booking_code} cancelled; lead ${linked?.id} left at ${linked?.status}: ${dropCheck.reason}`,
       );
     }
 
@@ -699,10 +722,10 @@ export class BookingService {
         if (cancelRef) {
           await releaseInventoryLock(tx, cancelRef, id);
         }
-        if (opp?.lead && dropEntity && dropCheck?.allowed) {
+        if (linked && dropEntity && dropCheck?.allowed) {
           await WorkflowEngine.transitionLead(
             tx,
-            opp.lead_id,
+            linked.id,
             'DROPPED',
             { actor: user, entity: dropEntity },
             {
@@ -711,12 +734,12 @@ export class BookingService {
                 0,
                 500,
               ),
-              exited_from_status: opp.lead.status,
+              exited_from_status: linked.status,
             },
           );
           await tx.leadActivity.create({
             data: {
-              lead: { connect: { id: opp.lead_id } },
+              lead: { connect: { id: linked.id } },
               actor: { connect: { id: user.employeeId } },
               activity_type: 'LEAD_DROPPED',
               notes: `Dropped: booking ${booking.booking_code} was cancelled (${reason}).`.slice(
@@ -760,6 +783,7 @@ export class BookingService {
    * - Requires BOOKINGS_FORM_SUBMIT or BOOKINGS_LEGACY_CREATE permission (checked at route).
    */
   static async initiateBooking(user: TokenPayload, dto: InitiateBookingInput) {
+    assertBookingMoney(dto.agreed_price, dto.booking_amount);
     const scopedDto = { ...dto, company_id: user.companyId };
 
     return await prisma.$transaction(async (tx) => {
@@ -970,7 +994,7 @@ export class BookingService {
    * Scoped to the user's company.
    */
   static async getPendingMDApprovals(user: TokenPayload) {
-    return prisma.booking.findMany({
+    const waiting = await prisma.booking.findMany({
       where: {
         company_id: user.companyId,
         form_status: 'SUBMITTED',
@@ -991,6 +1015,15 @@ export class BookingService {
         form_submitted_by: { select: { id: true, full_name: true, employee_code: true } },
       },
       orderBy: { form_submitted_at: 'desc' }, // latest first (owner, 2026-11-14)
+    });
+    return waiting.map((b: any) => {
+      const { pan_number, aadhaar_number, ...customer } = b.customer ?? {};
+      return {
+        ...b,
+        customer: b.customer
+          ? { ...customer, has_pan: !!pan_number, has_aadhaar: !!aadhaar_number }
+          : b.customer,
+      };
     });
   }
 

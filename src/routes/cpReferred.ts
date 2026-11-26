@@ -93,15 +93,17 @@ const withLeads = async (rows: any[]) => {
     select: leadSelect,
   });
   const byId = new Map<number, any>(leads.map((l: any) => [l.id, l]));
-  return rows.map((r) => ({ ...r, lead: byId.get(r.lead_id) }));
+  // A referral whose lead has since been deleted has nothing to show (it broke the partner's screen).
+  return rows.map((r) => ({ ...r, lead: byId.get(r.lead_id) })).filter((r) => r.lead);
 };
 
 const own = async (req: CpRequest, id: number) => {
   const r = await p.cpReferral.findFirst({
     where: { id, ...scopeOf(req), company_id: req.cp!.company_id },
   });
-  if (!r) throw fail(404, 'Referral not found');
-  return (await withLeads([r]))[0];
+  const [found] = r ? await withLeads([r]) : [];
+  if (!found) throw fail(404, 'Referral not found');
+  return found;
 };
 const open = (r: any) => {
   if (!OPEN_REFERRAL_STATUSES.includes(r.status)) throw fail(409, 'This referral is closed.');
@@ -145,12 +147,13 @@ router.get(
       orderBy: closed ? { closed_at: 'desc' } : { offered_at: 'desc' },
       take: 200,
     });
-    const counts = await p.cpReferral.groupBy({
-      by: ['status'],
-      where: { ...scopeOf(req), company_id: req.cp!.company_id },
-      _count: { _all: true },
-    });
-    const n = (s: string) => counts.find((c: any) => c.status === s)?._count._all ?? 0;
+    const every = await withLeads(
+      await p.cpReferral.findMany({
+        where: { ...scopeOf(req), company_id: req.cp!.company_id },
+        select: { status: true, lead_id: true },
+      }),
+    );
+    const n = (s: string) => every.filter((c: any) => c.status === s).length;
     return res.status(200).json({
       referrals: (await withLeads(rows)).map(view),
       counts: {

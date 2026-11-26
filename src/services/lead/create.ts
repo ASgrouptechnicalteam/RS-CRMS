@@ -127,7 +127,12 @@ export async function createLead(
           { skipDbNotification: true },
         ).catch((err) => logger.error('[WebPush] Lead re-inquiry notify:', err));
       }
-      return { lead: existingLead };
+      const owner = existingLead.assigned_to;
+      return {
+        lead: existingLead,
+        // Said on screen instead of "added": nothing new was made.
+        notice: `${existingLead.customer_name} is already in the CRM as ${existingLead.lead_code}${owner ? `, with ${owner.full_name || owner.employee_code}` : ''}. No new lead was made. A note was added to that lead.`,
+      };
     } else {
       // Dropped/Cancelled lead duplicate check
       const isAutomatedChannel =
@@ -154,7 +159,11 @@ export async function createLead(
             `Do not call: ${existingLead.customer_name} (${existingLead.lead_code}) is marked "${(LEAD_EXIT_REASON_LABELS as Record<string, string>)[existingLead.exit_reason!] || existingLead.exit_reason}". Only management can bring this lead back.`,
           );
         }
-        return { lead: existingLead, do_not_call: true };
+        return {
+          lead: existingLead,
+          do_not_call: true,
+          notice: `This number is marked "do not call" (${existingLead.lead_code}). No new lead was made.`,
+        };
       }
 
       if (isAutomatedChannel) {
@@ -180,7 +189,10 @@ export async function createLead(
           },
         });
 
-        return { lead: recovered };
+        return {
+          lead: recovered,
+          notice: `This customer was in the CRM before as ${recovered.lead_code}. No new lead was made. The old lead is open again, in the pool.`,
+        };
       } else {
         // Task 8: Manual intake -> throw 409 with history
         const historicalContext = {

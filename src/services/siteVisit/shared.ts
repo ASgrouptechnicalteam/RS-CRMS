@@ -292,3 +292,22 @@ export function dropReasonFromOutcomes(reasons: Array<string | null | undefined>
     exit_reason_detail: (text || 'Not interested after the site visit').slice(0, 500),
   };
 }
+
+/** The same customer cannot be given two visits within an hour of each other (2026-11-26). */
+export async function assertNoOtherVisitThen(leadId: number, at: number, exceptVisitId?: number) {
+  const twin = await prisma.siteVisitBooking.findFirst({
+    where: {
+      lead_id: leadId,
+      ...(exceptVisitId ? { id: { not: exceptVisitId } } : {}),
+      status: { notIn: ['COMPLETED', 'CANCELLED'] },
+      scheduled_date: { gt: new Date(at - 3600e3), lt: new Date(at + 3600e3) },
+    },
+    select: { booking_code: true },
+  });
+  if (twin) {
+    throw {
+      status: 409,
+      message: `This customer already has visit ${twin.booking_code} at that time. Change that visit instead.`,
+    };
+  }
+}

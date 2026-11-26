@@ -587,7 +587,7 @@ router.post(
     try {
       const result = await LeadService.createLead(req.user!, req.body);
       return res.status(201).json({
-        message: 'Lead created successfully',
+        message: ('notice' in result && result.notice) || 'Lead created successfully',
         ...result,
       });
     } catch (error: any) {

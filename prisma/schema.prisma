@@ -3734,6 +3734,8 @@ model CpLead {
   next_follow_up_at   DateTime?
   last_called_at      DateTime?
   lead_id             Int? // our CRM lead, created when a visit is booked
+  interest            String?   @db.VarChar(10) // HOT | WARM | COLD, from the latest call or visit
+  exit_reason         String?   @db.VarChar(40) // why closed: the CRM's exit reasons
   created_at          DateTime  @default(now())
   updated_at          DateTime  @updatedAt
 
@@ -3750,6 +3752,8 @@ model CpLeadActivity {
   actor_name    String   @db.VarChar(120)
   kind          String   @db.VarChar(12) // CALL | NOTE | STATUS | ASSIGN | VISIT
   outcome       String?  @db.VarChar(30)
+  call_reason   String?  @db.VarChar(40)
+  interest      String?  @db.VarChar(10)
   notes         String?  @db.Text
   created_at    DateTime @default(now())
 

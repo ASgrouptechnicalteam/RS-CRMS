@@ -6,7 +6,7 @@ import { WorkflowEngine } from '../../workflows/workflowEngine';
 import { WorkflowDomain } from '../../workflows/types';
 import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
 import { buildSiteVisitScope } from '../../authz/dataScope';
-import { generateNextBookingCode, resolveVisitProject } from './shared';
+import { assertNoOtherVisitThen, generateNextBookingCode, resolveVisitProject } from './shared';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { LeadService } from '../lead.service';
@@ -186,6 +186,8 @@ export async function bookVisit(user: TokenPayload, data: any) {
     user.companyId || 1,
     lead,
   );
+  // Last of the checks, so a wrong property or project is still reported as that.
+  await assertNoOtherVisitThen(data.lead_id, new Date(data.scheduled_date).getTime());
   // A direct visit: the customer goes to the site on their own, so nobody is
   // routed, nothing waits for acceptance and nothing escalates (see ./direct.ts).
   const direct = data.direct === true;

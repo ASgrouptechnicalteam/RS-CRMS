@@ -177,6 +177,13 @@ router.post(
   validateRequestBody(SiteVisitCreateSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      // A visit that already happened is recorded as a walk-in (an hour's grace for "right now").
+      if (new Date(req.body.scheduled_date).getTime() < Date.now() - 3600e3) {
+        return res.status(400).json({
+          error:
+            'Pick a date and time that has not passed. For a visit that already happened, use "Record a walk-in visit".',
+        });
+      }
       const booking = await SiteVisitService.bookVisit(req.user!, req.body);
       return res.status(201).json({
         message:

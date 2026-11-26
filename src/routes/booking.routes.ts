@@ -4,6 +4,7 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
 import { Permissions } from '../shared';
 import { BookingService } from '../services/booking.service';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
 
@@ -147,7 +148,15 @@ router.get(
 router.get('/:id', requireAuthz(Permissions.BOOKINGS_READ as any), async (req: any, res, next) => {
   try {
     const booking = await BookingService.getBookingById(req.user, parseInt(req.params.id, 10));
-    res.json(booking);
+    // Whether the customer's PAN and Aadhaar are on file (approval needs both); never the values.
+    const kyc = await prisma.customer.findUnique({
+      where: { id: booking.customer_id },
+      select: { pan_number: true, aadhaar_number: true },
+    });
+    res.json({
+      ...booking,
+      customer_kyc: { has_pan: !!kyc?.pan_number, has_aadhaar: !!kyc?.aadhaar_number },
+    });
   } catch (error) {
     next(error);
   }

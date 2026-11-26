@@ -3,7 +3,20 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
-import { Permissions } from '../shared';
+import {
+  Permissions,
+  CALL_REASON_VALUES,
+  CALL_REASON_LABELS,
+  LEAD_EXIT_REASON_LABELS,
+} from '../shared';
+import {
+  CP_CALL_OUTCOMES,
+  CP_INTEREST,
+  callEffect,
+  interestOfRating,
+  isDoNotCall,
+  stepOf,
+} from '../services/cpCustomer';
 import { requireCp, requireOwner, asUser, CpRequest } from './cp';
 import { projectFactsFor } from '../services/projectFacts';
 import { generateNextLeadCode } from '../services/lead/shared';
@@ -245,7 +258,53 @@ const leadView = (l: any, names: Map<number, string>) => ({
   preferred_locations: l.preferred_locations ?? null,
   property_type: l.property_type ?? null,
   created_at: l.created_at,
+  step: stepOf(l.status, l.crm_status),
+  interest: l.shown_interest ?? l.interest ?? null,
+  closed_reason: l.exit_reason
+    ? ((LEAD_EXIT_REASON_LABELS as Record<string, string>)[l.exit_reason] ?? null)
+    : null,
+  do_not_call: isDoNotCall(l.exit_reason),
 });
+
+/**
+ * Adds what our CRM knows about customers who had a visit booked: their stage there, and the result of a visit
+ * that happened after the last call.
+ */
+const withCrm = async (companyId: number, leads: any[]) => {
+  const ids = leads.map((l) => l.lead_id).filter(Boolean);
+  if (!ids.length) return leads;
+  const [ours, visits] = await Promise.all([
+    p.lead.findMany({
+      where: { id: { in: ids }, company_id: companyId },
+      select: { id: true, status: true },
+    }),
+    p.siteVisitBooking.findMany({
+      where: { lead_id: { in: ids }, status: 'COMPLETED', rating: { not: null } },
+      orderBy: { completed_at: 'asc' },
+      select: { lead_id: true, rating: true, completed_at: true },
+    }),
+  ]);
+  const status = new Map<number, string>(ours.map((x: any) => [x.id, x.status]));
+  const visit = new Map<number, any>(visits.map((v: any) => [v.lead_id, v]));
+  return leads.map((l) => {
+    const v = visit.get(l.lead_id);
+    const newer = v && (!l.last_called_at || v.completed_at > l.last_called_at);
+    return {
+      ...l,
+      crm_status: status.get(l.lead_id) ?? null,
+      shown_interest: newer ? interestOfRating(v.rating) : l.interest,
+    };
+  });
+};
+
+/** A visit that is still to happen. */
+const openVisit = async (leadId: number | null) =>
+  leadId
+    ? p.siteVisitBooking.findFirst({
+        where: { lead_id: leadId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        select: { id: true },
+      })
+    : null;
 
 const namesOf = async (cpId: number) => {
   const users = await p.cpUser.findMany({
@@ -287,8 +346,30 @@ router.get(
       p.cpLead.groupBy({ by: ['status'], where: scope, _count: { _all: true } }),
       namesOf(req.cp!.id),
     ]);
+    const latest = rows.length
+      ? await p.cpLeadActivity.groupBy({
+          by: ['cp_lead_id'],
+          where: { cp_id: req.cp!.id, cp_lead_id: { in: rows.map((l: any) => l.id) } },
+          _max: { id: true },
+        })
+      : [];
+    const lines = latest.length
+      ? await p.cpLeadActivity.findMany({
+          where: { id: { in: latest.map((x: any) => x._max.id) } },
+          select: {
+            cp_lead_id: true,
+            kind: true,
+            outcome: true,
+            call_reason: true,
+            notes: true,
+            created_at: true,
+          },
+        })
+      : [];
+    const last = new Map<number, any>(lines.map((a: any) => [a.cp_lead_id, a]));
+    const known = await withCrm(req.cp!.company_id, rows);
     return res.status(200).json({
-      leads: rows.map((l: any) => leadView(l, names)),
+      leads: known.map((l: any) => ({ ...leadView(l, names), last: last.get(l.id) ?? null })),
       counts: Object.fromEntries(byStatus.map((s: any) => [s.status, s._count._all])),
     });
   }),
@@ -343,7 +424,7 @@ router.post(
         actor_user_id: req.cp!.user?.id ?? null,
         actor_name: actorName(req),
         kind: 'NOTE',
-        notes: 'Lead added.',
+        notes: 'Customer added.',
       },
     });
     return res.status(201).json({ lead: leadView(lead, await namesOf(cpId)) });
@@ -448,6 +529,8 @@ router.get(
           id: true,
           kind: true,
           outcome: true,
+          call_reason: true,
+          interest: true,
           notes: true,
           actor_name: true,
           created_at: true,
@@ -461,26 +544,41 @@ router.get(
       take: 50,
       select: { id: true, title: true, due_at: true, done_at: true },
     });
-    return res.status(200).json({ lead: leadView(l, names), activities, tasks });
+    const [known] = await withCrm(req.cp!.company_id, [l]);
+    const v = l.lead_id
+      ? await p.siteVisitBooking.findFirst({
+          where: { lead_id: l.lead_id, status: { not: 'CANCELLED' } },
+          orderBy: { scheduled_date: 'desc' },
+          select: visitSelect,
+        })
+      : null;
+    const seen = v ? toCpVisit(v, req.cp!.id) : null;
+    const visit = seen && {
+      id: seen.id,
+      date: seen.scheduled_date,
+      status: seen.status,
+      place: seen.place,
+      run_by: seen.run_by,
+      manager: seen.pm,
+      can_finish: seen.can_finish,
+      interest: interestOfRating(seen.rating),
+      // Only the partner's own words about a visit they ran; our staff's notes stay in our office.
+      feedback: seen.run_by === 'PARTNER' ? v.feedback_notes : null,
+    };
+    return res.status(200).json({ lead: leadView(known, names), activities, tasks, visit });
   }),
 );
 
-const CALL_OUTCOMES = {
-  CONNECTED_INTERESTED: 'INTERESTED',
-  CONNECTED_NOT_INTERESTED: 'NOT_INTERESTED',
-  CALL_BACK: 'CONTACTED',
-  NO_ANSWER: 'CONTACTED',
-  BUSY: 'CONTACTED',
-  WRONG_NUMBER: 'DROPPED',
-} as const;
 const CallSchema = z.object({
-  outcome: z.enum(
-    Object.keys(CALL_OUTCOMES) as [keyof typeof CALL_OUTCOMES, ...(keyof typeof CALL_OUTCOMES)[]],
-  ),
+  outcome: z.enum(CP_CALL_OUTCOMES),
+  reason: z.enum(CALL_REASON_VALUES).optional().nullable(),
+  interest: z.enum(CP_INTEREST).optional().nullable(),
+  drop_lead: z.boolean().optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
   follow_up_at: z.string().optional().nullable(),
 });
 
+const NEVER_CALL = 'This customer asked not to be called again.';
 const closedForWork = (l: any) => l.status === 'DROPPED' && !!l.lead_id;
 
 router.post(
@@ -490,24 +588,41 @@ router.post(
     const body = CallSchema.safeParse(req.body);
     if (!body.success) throw fail(400, 'Pick the result of the call.');
     const l = await ownLead(req, idOf(req.params.id));
+    if (isDoNotCall(l.exit_reason)) throw fail(409, NEVER_CALL);
     if (closedForWork(l)) throw fail(409, 'This lead is closed.');
+    const { outcome, reason } = body.data;
+    const effect = callEffect(l.status, body.data);
+    if (effect.closes && !effect.doNotCall && (await openVisit(l.lead_id)))
+      throw fail(409, 'A visit is booked. Cancel or finish it first.');
     let followUp: Date | null = null;
-    if (body.data.follow_up_at) {
+    if (body.data.follow_up_at && !effect.closes) {
       followUp = new Date(body.data.follow_up_at);
       if (Number.isNaN(followUp.getTime())) throw fail(400, 'The follow-up date is not valid.');
     }
-    if (body.data.outcome === 'CALL_BACK' && !followUp) throw fail(400, 'Say when to call back.');
-    const next = CALL_OUTCOMES[body.data.outcome];
-    // A visit that is booked stays "visit booked" unless the customer drops out.
-    const status =
-      l.status === 'VISIT_BOOKED' && next !== 'DROPPED' && next !== 'NOT_INTERESTED'
-        ? 'VISIT_BOOKED'
-        : next;
+    if (outcome === 'CALL_BACK' && !followUp && !effect.closes)
+      throw fail(400, 'Say when to call back.');
+    const interest = outcome === 'CONNECTED_NOT_INTERESTED' ? 'COLD' : (body.data.interest ?? null);
+    const why = reason ? CALL_REASON_LABELS[reason as keyof typeof CALL_REASON_LABELS] : '';
     await p.$transaction([
       p.cpLead.update({
         where: { id: l.id },
-        data: { status, last_called_at: new Date(), next_follow_up_at: followUp },
+        data: {
+          status: effect.status,
+          last_called_at: new Date(),
+          next_follow_up_at: followUp,
+          // A call that did not get through says nothing new about interest.
+          ...(interest ? { interest } : {}),
+          exit_reason: effect.exit_reason,
+        },
       }),
+      ...(effect.closes
+        ? [
+            p.cpTask.updateMany({
+              where: { cp_lead_id: l.id, cp_id: req.cp!.id, done_at: null },
+              data: { done_at: new Date() },
+            }),
+          ]
+        : []),
       p.cpLeadActivity.create({
         data: {
           cp_lead_id: l.id,
@@ -515,12 +630,20 @@ router.post(
           actor_user_id: req.cp!.user?.id ?? null,
           actor_name: actorName(req),
           kind: 'CALL',
-          outcome: body.data.outcome,
+          outcome,
+          call_reason: reason ?? null,
+          interest,
           notes: body.data.notes || null,
         },
       }),
     ]);
-    return res.status(201).json({ ok: true, status });
+    return res.status(201).json({
+      ok: true,
+      status: effect.status,
+      closed: effect.closes,
+      do_not_call: effect.doNotCall,
+      reason: why || null,
+    });
   }),
 );
 
@@ -532,10 +655,11 @@ router.post(
     if (!(LEAD_STATUSES as readonly string[]).includes(status))
       throw fail(400, 'Pick a valid status.');
     const l = await ownLead(req, idOf(req.params.id));
+    if (isDoNotCall(l.exit_reason)) throw fail(409, NEVER_CALL);
     if (l.status === 'VISIT_BOOKED')
       throw fail(409, 'A visit is booked for this lead. Manage it from Visits.');
     await p.$transaction([
-      p.cpLead.update({ where: { id: l.id }, data: { status } }),
+      p.cpLead.update({ where: { id: l.id }, data: { status, exit_reason: null } }),
       p.cpLeadActivity.create({
         data: {
           cp_lead_id: l.id,
@@ -666,23 +790,43 @@ const DROP_REASONS = [
   'Other',
 ] as const;
 
+/** The older app's words for why a customer is closed. */
+const OLDER_REASONS: Record<string, string> = {
+  'Not interested': 'OTHER',
+  'Budget too low': 'BUDGET_MISMATCH',
+  'Bought elsewhere': 'ALREADY_PURCHASED',
+  'Wrong number': 'INVALID_CONTACT',
+  'Not reachable': 'UNRESPONSIVE',
+  'Looking for something we do not have': 'NO_MATCHING_INVENTORY',
+  Other: 'OTHER',
+};
+
 router.post(
   '/leads/:id/drop',
   requireCp,
   handle(async (req, res) => {
     const reason = String(req.body?.reason || '');
-    if (!(DROP_REASONS as readonly string[]).includes(reason)) throw fail(400, 'Pick a reason.');
+    const labels = LEAD_EXIT_REASON_LABELS as Record<string, string>;
+    const older = Object.prototype.hasOwnProperty.call(OLDER_REASONS, reason);
+    const exit = older
+      ? OLDER_REASONS[reason]
+      : Object.prototype.hasOwnProperty.call(labels, reason)
+        ? reason
+        : '';
+    if (!exit) throw fail(400, 'Pick a reason.');
     const detail = String(req.body?.detail || '')
       .trim()
       .slice(0, 500);
-    if (reason === 'Other' && detail.length < 3) throw fail(400, 'Say what the reason is.');
+    if ((reason === 'Other' || reason === 'OTHER') && detail.length < 3)
+      throw fail(400, 'Say what the reason is.');
     const l = await ownLead(req, idOf(req.params.id));
-    if (l.status === 'VISIT_BOOKED')
+    if (isDoNotCall(l.exit_reason)) throw fail(409, NEVER_CALL);
+    if (await openVisit(l.lead_id))
       throw fail(409, 'A visit is booked. Cancel or finish it first.');
     await p.$transaction([
       p.cpLead.update({
         where: { id: l.id },
-        data: { status: 'DROPPED', next_follow_up_at: null },
+        data: { status: 'DROPPED', exit_reason: exit, next_follow_up_at: null },
       }),
       p.cpTask.updateMany({
         where: { cp_lead_id: l.id, cp_id: req.cp!.id, done_at: null },
@@ -696,7 +840,7 @@ router.post(
           actor_name: actorName(req),
           kind: 'STATUS',
           outcome: 'DROPPED',
-          notes: `Dropped: ${reason}${detail ? `. ${detail}` : ''}`,
+          notes: `Closed: ${older ? reason : labels[exit]}${detail ? `. ${detail}` : ''}`,
         },
       }),
     ]);
@@ -1631,6 +1775,28 @@ router.post(
         },
       }),
     ]);
+    const mine = await p.cpLead.findFirst({ where: { cp_id: req.cp!.id, lead_id: v.lead_id } });
+    if (mine) {
+      const interest = interestOfRating(body.data.rating);
+      await p.$transaction([
+        p.cpLead.update({
+          where: { id: mine.id },
+          data: { interest, last_called_at: new Date() },
+        }),
+        p.cpLeadActivity.create({
+          data: {
+            cp_lead_id: mine.id,
+            cp_id: req.cp!.id,
+            actor_user_id: req.cp!.user?.id ?? null,
+            actor_name: actorName(req),
+            kind: 'VISIT',
+            outcome: 'DONE',
+            interest,
+            notes: body.data.feedback_notes,
+          },
+        }),
+      ]);
+    }
     return res.status(200).json({ ok: true });
   }),
 );
@@ -1657,6 +1823,24 @@ router.post(
       where: { id },
       data: { status: 'CANCELLED', cancellation_reason: reason.slice(0, 500) },
     });
+    const mine = await p.cpLead.findFirst({ where: { cp_id: req.cp!.id, lead_id: v.lead_id } });
+    if (mine) {
+      // With no other visit to come, the customer goes back to "need known".
+      if (mine.status === 'VISIT_BOOKED' && !(await openVisit(v.lead_id))) {
+        await p.cpLead.update({ where: { id: mine.id }, data: { status: 'INTERESTED' } });
+      }
+      await p.cpLeadActivity.create({
+        data: {
+          cp_lead_id: mine.id,
+          cp_id: req.cp!.id,
+          actor_user_id: req.cp!.user?.id ?? null,
+          actor_name: actorName(req),
+          kind: 'VISIT',
+          outcome: 'CANCELLED',
+          notes: reason.slice(0, 500),
+        },
+      });
+    }
     return res.status(200).json({ ok: true });
   }),
 );

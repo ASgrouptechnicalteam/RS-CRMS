@@ -14,6 +14,7 @@ import { OpportunityService } from '../opportunity.service';
 import { CustomerPortalService } from '../customerPortal.service';
 import { findBestAssigneeForLead } from '../../utils/distributionService';
 import { AppError } from './errors';
+import { bookingsForLead, hasConfirmedBooking } from './bookingLink';
 import { normaliseLeadSource, LEAD_SOURCE_NAMES } from './sources';
 import { generateNextLeadCode, nextUnknownNumber, syncLeadPreferredLocations } from './shared';
 import { notifyEmployee } from '../../utils/notifyEmployee';
@@ -203,6 +204,25 @@ export async function updateLeadStatus(
 
   const _guardFields = guardFields || {};
 
+  // "Booked" comes from a booking the MD approved, never from a button alone (2026-11-26). A lead left
+  // Booked without such a booking may be closed by the MD or Admin.
+  let bookingGone = false;
+  if ((newStatus === 'BOOKED') !== (lead.status === 'BOOKED')) {
+    if (newStatus === 'BOOKED') {
+      if (!hasConfirmedBooking(await bookingsForLead(p, leadId))) {
+        throw new AppError(
+          409,
+          'A lead becomes Booked when the MD approves its booking form. Submit the form under Bookings.',
+        );
+      }
+    } else if (
+      newStatus === 'DROPPED' &&
+      user.roles.some((r) => r === Roles.MD || r === Roles.ADMIN)
+    ) {
+      bookingGone = !hasConfirmedBooking(await bookingsForLead(p, leadId));
+    }
+  }
+
   // Demo handler is now a required MANUAL pick from the CRM (§ Phase 2/6) —
   // was an automatic territory-lookup + role-fallback chain that could land
   // on Sales Manager/Marketing Director/MD/any Admin with zero human input,
@@ -262,6 +282,7 @@ export async function updateLeadStatus(
   const entityContext: any = {
     ...lead,
     exit_reason: _guardFields.exit_reason ?? lead.exit_reason,
+    ...(bookingGone ? { booking_cancelled: true } : {}),
   };
   if (_guardFields.demo_scheduled_at) {
     entityContext.pending_demo = {

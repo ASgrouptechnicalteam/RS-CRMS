@@ -5,7 +5,12 @@ import { can } from '../../authz/authorization';
 import { WorkflowEngine } from '../../workflows/workflowEngine';
 import { WorkflowDomain } from '../../workflows/types';
 import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
-import { applyTransition, dropReasonFromOutcomes, findVisitForUser } from './shared';
+import {
+  applyTransition,
+  assertNoOtherVisitThen,
+  dropReasonFromOutcomes,
+  findVisitForUser,
+} from './shared';
 import { createFeedbackRequest, dispatchFeedbackRequestNotification } from '../feedback.service';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
@@ -247,6 +252,15 @@ export async function rescheduleVisit(
     visit.project_manager_id === user.employeeId;
   if (!isAuthorized) {
     throw { status: 403, message: 'Forbidden: Missing permission to reschedule this visit' };
+  }
+
+  // Moving a visit follows the same two rules as booking one (2026-11-26).
+  const movedTo = data.scheduled_date ? new Date(data.scheduled_date).getTime() : null;
+  if (movedTo !== null && movedTo !== new Date(visit.scheduled_date).getTime()) {
+    if (movedTo < Date.now() - 3600e3) {
+      throw { status: 400, message: 'Pick a date and time that has not passed.' };
+    }
+    await assertNoOtherVisitThen(visit.lead_id, movedTo, visitId);
   }
 
   // Phase D: If superseding a cancellation, notify the PM (if not self).
@@ -719,7 +733,11 @@ const OUTCOME_WORD: Record<string, string> = {
   MAYBE: 'Maybe',
   NEUTRAL: 'Maybe',
 };
-const pretty = (v: string) => v.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase());
+const pretty = (v: string) =>
+  v
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/^./, (c) => c.toUpperCase());
 
 /** The timeline text for a completed visit: outcome per property or unit, rating and feedback. */
 export async function describeVisitCompletion(
@@ -746,7 +764,10 @@ export async function describeVisitCompletion(
   ]);
   const propName = new Map(props.map((x: any) => [x.id, x.title as string]));
   const unitName = new Map(
-    units.map((x: any) => [x.id, `${x.project?.name ? `${x.project.name}, ` : ''}unit ${x.unit_number}`]),
+    units.map((x: any) => [
+      x.id,
+      `${x.project?.name ? `${x.project.name}, ` : ''}unit ${x.unit_number}`,
+    ]),
   );
   const lines = outcomes.map((o) => {
     const name =

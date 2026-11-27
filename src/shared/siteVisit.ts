@@ -44,6 +44,8 @@ export const SiteVisitCreateSchema = z.object({
   customer_brief: z.string().trim().max(500).optional(),
   // The customer goes to the site on their own: nobody is routed or assigned.
   direct: z.boolean().optional(),
+  // "Assign PM": a project manager or a channel partner chosen by the booker (not for a direct visit).
+  assignee_id: z.number().int().positive().optional(),
   notes: z.string().max(1000).optional(),
 });
 export type SiteVisitCreateInput = z.infer<typeof SiteVisitCreateSchema>;

@@ -16,8 +16,8 @@ import { DomainWorkflow, WorkflowTransitionRequest, WorkflowTransitionResult } f
  *       → RESCHEDULE     (customer wants change)   → RESCHEDULE_REQUESTED
  *       → CONFIRM                                   → CONFIRMED
  *     → RESCHEDULE_REQUESTED
- *       → PM_CONFIRM     (confirm new date/property) → PENDING_PM_RECONFIRMATION
- *     → PENDING_PM_RECONFIRMATION
+ *       → PM_CONFIRM     (the person going confirms the new date) → ACCEPTED
+ *     → PENDING_PM_RECONFIRMATION (old rows only)
  *       → PM_CONFIRM     (X confirms)              → ACCEPTED
  *       → PM_RELEASE     (X releases)              → PENDING_ACCEPTANCE (reset to authoritative PM)
  *     → CONFIRMED
@@ -83,6 +83,9 @@ export class SiteVisitWorkflow implements DomainWorkflow {
     // scheduled day; a future visit still goes through reconfirmation.
     ACCEPTED: {
       RECONFIRM_CUSTOMER: 'PENDING_CUSTOMER_RECONFIRMATION',
+      // One step for the caller: "Customer confirmed", or "could not reach them" (2026-11-27).
+      CONFIRM: 'CONFIRMED',
+      HOLD: 'ON_HOLD',
       START: 'ACTIVE',
       CANCEL: 'CANCELLED',
       CONFIRM_CANCEL: 'CANCELLED',
@@ -109,7 +112,9 @@ export class SiteVisitWorkflow implements DomainWorkflow {
       RESCHEDULE: 'RESCHEDULE_REQUESTED',
     },
     RESCHEDULE_REQUESTED: {
-      PM_CONFIRM: 'PENDING_PM_RECONFIRMATION',
+      // The person going confirms the new date once (2026-11-27).
+      PM_CONFIRM: 'ACCEPTED',
+      PM_RELEASE: 'PENDING_ACCEPTANCE',
       CANCEL: 'CANCELLED',
       CONFIRM_CANCEL: 'CANCELLED',
       RESCHEDULE: 'RESCHEDULE_REQUESTED',
@@ -123,6 +128,7 @@ export class SiteVisitWorkflow implements DomainWorkflow {
     },
     CONFIRMED: {
       START: 'ACTIVE',
+      HOLD: 'ON_HOLD',
       CANCEL: 'CANCELLED',
       CONFIRM_CANCEL: 'CANCELLED',
       RESCHEDULE: 'RESCHEDULE_REQUESTED',

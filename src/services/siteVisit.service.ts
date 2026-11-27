@@ -15,6 +15,7 @@
 // with zero call-site changes required anywhere in the codebase.
 import { listVisits, bookVisit } from './siteVisit/booking';
 import { recordWalkIn } from './siteVisit/walkIn';
+import { listAssignees, assignAgain } from './siteVisit/assignee';
 import {
   makeVisitDirect,
   rescheduleDirectVisit,
@@ -44,6 +45,8 @@ export class SiteVisitService {
   static listVisits = listVisits;
   static bookVisit = bookVisit;
   static recordWalkIn = recordWalkIn;
+  static listAssignees = listAssignees;
+  static assignAgain = assignAgain;
   static makeVisitDirect = makeVisitDirect;
   static rescheduleDirectVisit = rescheduleDirectVisit;
   static recordDirectVisitOutcome = recordDirectVisitOutcome;

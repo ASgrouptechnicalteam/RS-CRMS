@@ -586,6 +586,7 @@ export const RolePermissionsMatrix: Record<RoleName, string[]> = {
     Permissions.SITE_VISITS_READ,
     Permissions.SITE_VISITS_ASSIGN_AGENT,
     Permissions.SITE_VISITS_ACCEPT,
+    Permissions.SITE_VISITS_COMPLETE, // they finish the visits they take (2026-11-27)
     Permissions.TASKS_READ,
     Permissions.TASKS_UPDATE,
     Permissions.TASKS_ASSIGN,

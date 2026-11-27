@@ -105,6 +105,46 @@ router.get(
   },
 );
 
+// GET /api/v1/site-visits/assignees?project_id= - "Assign PM" choices for the booker: project managers and
+// channel partners (names only).
+router.get(
+  '/assignees',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_CREATE]),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const projectId = Number(req.query.project_id) || undefined;
+      return res.status(200).json(await SiteVisitService.listAssignees(req.user!, projectId));
+    } catch (error: any) {
+      logger.error('Fetch visit assignees error:', error);
+      next(error);
+    }
+  },
+);
+
+// POST /api/v1/site-visits/:id/assign-pm { assignee_id } - after a partner declined, name someone else
+const AssignAgainSchema = z.object({ assignee_id: z.number().int().positive() });
+router.post(
+  '/:id/assign-pm',
+  authenticateToken,
+  requirePermission([Permissions.SITE_VISITS_CREATE]),
+  validateRequestBody(AssignAgainSchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const visitId = parseInt(req.params.id, 10);
+      if (isNaN(visitId))
+        return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
+      const visit = await SiteVisitService.assignAgain(req.user!, visitId, req.body.assignee_id);
+      return res
+        .status(200)
+        .json({ message: `Site visit ${visit.booking_code} sent for acceptance.`, visit });
+    } catch (error: any) {
+      logger.error('Assign visit again error:', error);
+      next(error);
+    }
+  },
+);
+
 // GET /api/v1/site-visits/:id/history - Get reassignment/routing history
 router.get(
   '/:id/history',
@@ -560,8 +600,14 @@ router.post(
       if (isNaN(visitId))
         return next({ name: 'AppError', statusCode: 400, message: 'Invalid ID format' });
       const visit = await SiteVisitService.rescheduleVisit(req.user!, visitId, req.body);
+      const after: Record<string, string> = {
+        RESCHEDULE_REQUESTED: 'The person going has to confirm it.',
+        PENDING_ACCEPTANCE: 'Waiting to be accepted.',
+        REASSIGNED: 'Choose who takes this visit.',
+        ESCALATED_TO_MARKETING_DIRECTOR: 'Admin or MD still has to choose who goes.',
+      };
       return res.status(200).json({
-        message: `Reschedule requested for ${visit.booking_code}. Awaiting PM reconfirmation.`,
+        message: `New date saved for ${visit.booking_code}. ${after[visit.status] ?? ''}`.trim(),
         visit,
       });
     } catch (error: any) {
@@ -575,7 +621,8 @@ router.post(
 router.post(
   '/:id/pm-reconfirm',
   authenticateToken,
-  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT]),
+  // Agents hold visits too, and they confirm their own new dates.
+  requirePermission([Permissions.SITE_VISITS_ACCEPT]),
   validateRequestBody(SiteVisitReconfirmSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
@@ -586,8 +633,8 @@ router.post(
       const visit = await SiteVisitService.pmReconfirm(req.user!, visitId, !!release);
       return res.status(200).json({
         message: release
-          ? `Site visit ${visit.booking_code} released back to project PM for acceptance.`
-          : `Site visit ${visit.booking_code} reconfirmed by PM.`,
+          ? `Site visit ${visit.booking_code} given back.`
+          : `New date for site visit ${visit.booking_code} confirmed.`,
         visit,
       });
     } catch (error: any) {
@@ -712,6 +759,15 @@ router.post(
             where: { id: visit.lead_id },
             select: { status: true },
           });
+          if (leadNow && ['NEW', 'ASSIGNED', 'CONTACTED'].includes(leadNow.status)) {
+            // Not a failure: the customer has to be qualified before they move on.
+            return res.status(200).json({
+              message: `Site visit ${visit.booking_code} completed! Outcomes recorded.`,
+              visit,
+              cascadeNote:
+                'Visit recorded. The lead is still at an early stage, so it was not moved: qualify it to carry on.',
+            });
+          }
           if (leadNow && ['QUALIFIED', 'DEMO_COMPLETED'].includes(leadNow.status)) {
             await LeadService.updateLeadStatus(
               req.user!,
@@ -868,7 +924,11 @@ router.post(
 router.post(
   '/:id/confirm-cancel',
   authenticateToken,
-  requirePermission([Permissions.SITE_VISITS_ASSIGN_AGENT, Permissions.SITE_VISITS_COMPLETE]),
+  requirePermission([
+    Permissions.SITE_VISITS_ASSIGN_AGENT,
+    Permissions.SITE_VISITS_COMPLETE,
+    Permissions.SITE_VISITS_VERIFY,
+  ]),
   validateRequestBody(SiteVisitCancelConfirmSchema),
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {

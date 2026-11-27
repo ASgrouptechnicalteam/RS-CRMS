@@ -10,6 +10,7 @@ import { assertNoOtherVisitThen, generateNextBookingCode, resolveVisitProject } 
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
 import { LeadService } from '../lead.service';
+import { offerToPartner, resolveAssignee } from './assignee';
 const p = prisma;
 
 export async function listVisits(
@@ -191,7 +192,11 @@ export async function bookVisit(user: TokenPayload, data: any) {
   // A direct visit: the customer goes to the site on their own, so nobody is
   // routed, nothing waits for acceptance and nothing escalates (see ./direct.ts).
   const direct = data.direct === true;
-  const pmId = direct ? null : routedPmId;
+  // The booker may name who it goes to; otherwise it goes to the project's manager as before.
+  const chosen =
+    !direct && data.assignee_id ? await resolveAssignee(lead.company_id, data.assignee_id) : null;
+  const partnerId = chosen?.kind === 'PARTNER' ? chosen.id : null;
+  const pmId = direct || partnerId ? null : chosen ? chosen.id : routedPmId;
 
   const booked = await p.$transaction(
     async (tx: import('@prisma/client').Prisma.TransactionClient) => {
@@ -283,6 +288,8 @@ export async function bookVisit(user: TokenPayload, data: any) {
         data: {
           status: route.nextState as import('@prisma/client').SiteVisitStatus,
           project_manager_id: pmId ?? undefined,
+          // A partner is only offered the visit: it waits for them to accept.
+          assigned_agent_id: partnerId ?? undefined,
         },
         include: {
           lead: true,
@@ -300,7 +307,9 @@ export async function bookVisit(user: TokenPayload, data: any) {
         data: {
           lead: { connect: { id: data.lead_id } },
           activity_type: 'SITE_VISIT_REQUESTED',
-          notes: `Site visit scheduled. Auto-routed to project PM.`,
+          notes: chosen
+            ? `Site visit scheduled. Sent to ${chosen.name}${partnerId ? ' (channel partner)' : ''} for acceptance.`
+            : `Site visit scheduled. Auto-routed to project PM.`,
           actor: { connect: { id: user.employeeId } },
         },
       });
@@ -326,7 +335,7 @@ export async function bookVisit(user: TokenPayload, data: any) {
           },
           { skipDbNotification: true },
         ).catch((err) => logger.error('[WebPush] Site visit route PM:', err));
-      } else {
+      } else if (!partnerId) {
         // Immediate Escalation Fallback for unmapped PM
         await tx.siteVisitEscalation.create({
           data: {
@@ -391,6 +400,8 @@ export async function bookVisit(user: TokenPayload, data: any) {
       logger.error(`[site-visit] lead ${lead.id} not moved to SITE_VISIT_SCHEDULED:`, err);
     }
   }
+
+  if (partnerId) await offerToPartner(partnerId, booked.booking_code);
 
   return booked;
 }

@@ -82,7 +82,7 @@ export class SiteVisitPolicy {
     // Fix IDOR: only the person who runs the visit may start/complete it --
     // the agent it was assigned to, or the visit's own PM (who runs it
     // themselves when they don't hand it to an agent). Another PM cannot.
-    if (user.roles.includes(Roles.MD) || user.roles.includes(Roles.ADMIN)) {
+    if (this.isManagement(user)) {
       return true;
     }
     return (
@@ -92,14 +92,14 @@ export class SiteVisitPolicy {
 
   /**
    * Who may choose the agent that runs an accepted visit: the visit's own PM
-   * (they accepted it), or MD/Admin. Plain site_visits.assign_agent plus
+   * (they accepted it), or management. Plain site_visits.assign_agent plus
    * company is checked separately by canAssignAgent.
    */
   static canAssignAgentToVisit(
     user: TokenPayload,
     visit: { project_manager_id?: number | null },
   ): boolean {
-    if (user.roles.includes(Roles.MD) || user.roles.includes(Roles.ADMIN)) return true;
+    if (this.isManagement(user)) return true;
     return !!visit.project_manager_id && visit.project_manager_id === user.employeeId;
   }
 
@@ -121,25 +121,28 @@ export class SiteVisitPolicy {
   }
 
   /**
-   * §2 reassignment chain: only PROJECT_MANAGER and AGENT roles may be
-   * reassignment targets — never Telecaller, HR, or any other role.
+   * §2 reassignment chain: only project managers, sales managers and agents may
+   * be reassignment targets — never Telecaller, HR, or any other role.
    */
   static canReassignTarget(
     user: TokenPayload,
     target: { roles?: string[]; role?: string; id: number },
   ): boolean {
     const targetRoles: string[] = target.roles ? target.roles : target.role ? [target.role] : [];
-    return targetRoles.includes(Roles.PROJECT_MANAGER) || targetRoles.includes(Roles.AGENT);
+    return [Roles.PROJECT_MANAGER, Roles.SALES_MANAGER, Roles.AGENT].some((r) =>
+      targetRoles.includes(r),
+    );
   }
 
   /**
-   * Who may RUN a visit (assigned_agent_id): a PM, an agent, or an external
+   * Who may RUN a visit (assigned_agent_id): a PM, a sales manager, an agent, or an external
    * channel partner (item 5, 2026-11-15). A partner is never a routing target.
    */
   static canRunVisit(target: { roles?: string[] }): boolean {
     const roles = target.roles || [];
     return (
       roles.includes(Roles.PROJECT_MANAGER) ||
+      roles.includes(Roles.SALES_MANAGER) ||
       roles.includes(Roles.AGENT) ||
       roles.includes(Roles.CHANNEL_PARTNER_EXTERNAL)
     );

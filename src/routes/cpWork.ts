@@ -24,6 +24,8 @@ import { requireCp, requireOwner, asUser, CpRequest } from './cp';
 import { projectFactsFor } from '../services/projectFacts';
 import { generateNextLeadCode } from '../services/lead/shared';
 import { bookVisit } from '../services/siteVisit/booking';
+import { advanceLead } from '../services/siteVisit/direct';
+import { notifyEmployee } from '../utils/notifyEmployee';
 import {
   readCpLeadSheet,
   gridFromObjects,
@@ -41,6 +43,7 @@ import {
  * partner's leads live in CpLead, and only when a site visit is booked is a normal Lead created in
  * our CRM (with cp_owner_id) so our project manager can run the visit.
  */
+import { getISTComponents } from '../utils/time';
 const router = Router();
 const p = prisma as any;
 
@@ -598,6 +601,7 @@ router.get(
       run_by: seen.run_by,
       manager: seen.pm,
       can_finish: seen.can_finish,
+      can_record: seen.can_record,
       interest: interestOfRating(seen.rating),
       // Only the partner's own words about a visit they ran; our staff's notes stay in our office.
       feedback: seen.run_by === 'PARTNER' ? v.feedback_notes : null,
@@ -1534,10 +1538,27 @@ const visitSelect = {
   project_manager: { select: { full_name: true, phone: true } },
 } as const;
 
+/** Accepted and not closed: includes the office's reconfirmation call still being open. */
+const PARTNER_FINISHABLE = ['ACCEPTED', 'PENDING_CUSTOMER_RECONFIRMATION', 'CONFIRMED', 'ACTIVE'];
+/** The visit day (India) has come. */
+const dayHasCome = (d: Date) =>
+  getISTComponents(d).dateString <= getISTComponents(new Date()).dateString;
+
+/** The partner's own customer, or one our office referred to them. */
+const isTheirCustomer = (v: any, cpId: number) =>
+  v.lead?.cp_owner_id === cpId || v.lead?.referred_to_cp_id === cpId;
+
+/** A visit our office gave to this partner: they are on it and none of our project managers is. */
+const givenToPartner = (v: any, cpId: number) =>
+  v.assigned_agent_id === cpId && !v.project_manager_id;
+
 /** The partner's view of a visit: built field by field, never by spreading a record. */
 const toCpVisit = (v: any, cpId: number) => {
-  // Your own customers, and the customers our office referred to you, are shown in full.
-  const own = v.lead?.cp_owner_id === cpId || v.lead?.referred_to_cp_id === cpId;
+  // Our office offered you this visit: name and phone show once you accept.
+  const offered = givenToPartner(v, cpId) && v.status === 'PENDING_ACCEPTANCE';
+  // Your own customers, the customers our office referred to you, and visits you accepted are shown in full.
+  const own =
+    isTheirCustomer(v, cpId) || (givenToPartner(v, cpId) && v.status !== 'PENDING_ACCEPTANCE');
   return {
     id: v.id,
     booking_code: v.booking_code,
@@ -1564,8 +1585,10 @@ const toCpVisit = (v: any, cpId: number) => {
     customer_phone: own ? v.lead?.phone : undefined,
     own,
     run_by: v.assigned_agent_id === cpId ? 'PARTNER' : v.project_manager_id ? 'OUR_PM' : 'NOBODY',
-    can_finish:
-      own && v.assigned_agent_id === cpId && ['CONFIRMED', 'ACTIVE', 'ACCEPTED'].includes(v.status),
+    can_finish: own && v.assigned_agent_id === cpId && PARTNER_FINISHABLE.includes(v.status),
+    // The result is entered from the visit day; before that the visit can only be cancelled.
+    can_record: dayHasCome(v.scheduled_date),
+    offered,
     rating: own ? v.rating : undefined,
     pm: v.project_manager
       ? { name: v.project_manager.full_name, phone: v.project_manager.phone }
@@ -1767,6 +1790,87 @@ router.post(
   }),
 );
 
+/**
+ * A visit our office offered to this partner and is still waiting for an answer. Only the partner and their
+ * project manager answer for the group.
+ */
+const offeredVisit = async (req: CpRequest, id: number) => {
+  if (!isGroupWide(req)) throw fail(403, 'Only the partner or their manager can answer this.');
+  const v = await p.siteVisitBooking.findFirst({
+    where: {
+      id,
+      assigned_agent_id: req.cp!.id,
+      project_manager_id: null,
+      status: 'PENDING_ACCEPTANCE',
+      lead: { company_id: req.cp!.company_id },
+    },
+    select: { id: true, lead_id: true, booking_code: true, telecaller_id: true },
+  });
+  if (!v) throw fail(404, 'This visit is not waiting for your answer.');
+  return v;
+};
+
+/** Writes the answer on the lead and tells the person who booked the visit. */
+const answerOffer = async (req: CpRequest, v: any, data: any, note: string, title: string) => {
+  const partner = req.cp!.full_name || req.cp!.employee_code;
+  await p.$transaction(async (tx: any) => {
+    // Only while it is still waiting: a second tap, or the office taking it back, changes nothing.
+    const done = await tx.siteVisitBooking.updateMany({
+      where: { id: v.id, assigned_agent_id: req.cp!.id, status: 'PENDING_ACCEPTANCE' },
+      data,
+    });
+    if (!done.count) throw fail(409, 'This visit is not waiting for your answer.');
+    await tx.leadActivity.create({
+      data: {
+        lead_id: v.lead_id,
+        actor_id: req.cp!.id,
+        activity_type: data.status === 'ACCEPTED' ? 'SITE_VISIT_ACCEPTED' : 'SITE_VISIT_REASSIGNED',
+        notes: `Site visit ${v.booking_code} ${note}`.slice(0, 1000),
+      },
+    });
+  });
+  await notifyEmployee(v.telecaller_id, {
+    type: 'SYSTEM_ALERT',
+    title,
+    message: `${partner}: site visit ${v.booking_code} ${note}`.slice(0, 500),
+    link: '/site-visits',
+  }).catch((err) => logger.error('[cp-visit] notify booker:', err));
+};
+
+router.post(
+  '/visits/:id/accept',
+  requireCp,
+  handle(async (req, res) => {
+    const v = await offeredVisit(req, idOf(req.params.id));
+    await answerOffer(
+      req,
+      v,
+      { status: 'ACCEPTED' },
+      'accepted by the channel partner.',
+      'Partner accepted the visit',
+    );
+    return res.status(200).json({ ok: true });
+  }),
+);
+
+router.post(
+  '/visits/:id/decline',
+  requireCp,
+  handle(async (req, res) => {
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 3) throw fail(400, 'Say why you cannot take this visit.');
+    const v = await offeredVisit(req, idOf(req.params.id));
+    await answerOffer(
+      req,
+      v,
+      { status: 'REASSIGNED', assigned_agent_id: null },
+      `declined by the channel partner: ${reason.slice(0, 300)}. Assign it to someone else.`,
+      'Partner declined the visit',
+    );
+    return res.status(200).json({ ok: true });
+  }),
+);
+
 const FinishSchema = z.object({
   rating: z.enum(['HOT_INTERESTED', 'WARM', 'COLD', 'NOT_INTERESTED']),
   feedback_notes: z.string().trim().min(3).max(1000),
@@ -1781,15 +1885,15 @@ router.post(
     const id = idOf(req.params.id);
     const scope = await visitScope(req);
     const v = await p.siteVisitBooking.findFirst({ where: { id, ...scope }, select: visitSelect });
-    if (
-      !v ||
-      (v.lead?.cp_owner_id !== req.cp!.id && v.lead?.referred_to_cp_id !== req.cp!.id) ||
-      v.assigned_agent_id !== req.cp!.id
-    ) {
+    // Whoever runs it may record it: their own or referred customer, or a visit our office gave them.
+    const me = req.cp!.id;
+    if (!v || v.assigned_agent_id !== me || !(isTheirCustomer(v, me) || givenToPartner(v, me))) {
       throw fail(404, 'Visit not found');
     }
-    if (!['CONFIRMED', 'ACTIVE', 'ACCEPTED'].includes(v.status))
+    if (!PARTNER_FINISHABLE.includes(v.status))
       throw fail(409, 'This visit cannot be finished now.');
+    if (!dayHasCome(v.scheduled_date))
+      throw fail(409, 'This visit is on a later day. Record it on that day.');
     await p.$transaction([
       p.siteVisitBooking.update({
         where: { id },
@@ -1835,6 +1939,16 @@ router.post(
         }),
       ]);
     }
+    // A customer of ours (not the partner's): our lead moves on as it does when our staff record a visit.
+    if (!isTheirCustomer(v, me)) {
+      await advanceLead(
+        { ...asUser(req), permissions: [] } as any,
+        v.lead_id,
+        id,
+        body.data.rating,
+        body.data.feedback_notes,
+      ).catch((err) => logger.error('[cp-visit] lead not moved on:', err));
+    }
     return res.status(200).json({ ok: true });
   }),
 );
@@ -1848,19 +1962,36 @@ router.post(
     const id = idOf(req.params.id);
     const scope = await visitScope(req);
     const v = await p.siteVisitBooking.findFirst({ where: { id, ...scope }, select: visitSelect });
-    if (
-      !v ||
-      (v.lead?.cp_owner_id !== req.cp!.id && v.lead?.referred_to_cp_id !== req.cp!.id) ||
-      v.assigned_agent_id !== req.cp!.id
-    ) {
+    const me = req.cp!.id;
+    if (!v || v.assigned_agent_id !== me || !(isTheirCustomer(v, me) || givenToPartner(v, me))) {
       throw fail(404, 'Visit not found');
     }
+    // An offer is answered with Accept or Decline, not cancelled.
+    if (v.status === 'PENDING_ACCEPTANCE' && !v.lead?.cp_owner_id)
+      throw fail(409, 'Accept or decline this visit first.');
     if (['COMPLETED', 'CANCELLED'].includes(v.status))
       throw fail(409, 'This visit is already closed.');
     await p.siteVisitBooking.update({
       where: { id },
       data: { status: 'CANCELLED', cancellation_reason: reason.slice(0, 500) },
     });
+    // A visit of ours that the partner calls off: the booker needs to know.
+    if (!isTheirCustomer(v, me)) {
+      const booked = await p.siteVisitBooking.findUnique({
+        where: { id },
+        select: { telecaller_id: true, booking_code: true },
+      });
+      await notifyEmployee(booked.telecaller_id, {
+        type: 'SYSTEM_ALERT',
+        title: 'Partner cancelled the visit',
+        message:
+          `Site visit ${booked.booking_code} was cancelled by the channel partner: ${reason}`.slice(
+            0,
+            500,
+          ),
+        link: '/site-visits',
+      }).catch((err) => logger.error('[cp-visit] notify booker:', err));
+    }
     const mine = await p.cpLead.findFirst({ where: { cp_id: req.cp!.id, lead_id: v.lead_id } });
     if (mine) {
       // With no other visit to come, the customer goes back to "need known", unless an earlier visit

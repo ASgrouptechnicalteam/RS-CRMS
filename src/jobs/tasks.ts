@@ -883,6 +883,7 @@ export const siteVisitEscalationJob = async () => {
         in: [
           'REQUESTED',
           'PENDING_ACCEPTANCE',
+          'REASSIGNED', // a partner declined and nobody was named instead
           'RESCHEDULE_REQUESTED',
           'PENDING_PM_RECONFIRMATION',
         ],
@@ -919,6 +920,15 @@ export const siteVisitEscalationJob = async () => {
         const roleNames = emp.roles.map((r) => r.role.name);
         if (roleNames.includes(Roles.MD)) md.push(emp.id);
         if (roleNames.includes(Roles.MARKETING_DIRECTOR)) marketing.push(emp.id);
+      }
+      // Nobody holds the Marketing Director role: Admin and the Technical Manager get the early warning.
+      if (marketing.length === 0) {
+        for (const emp of emps) {
+          const early = emp.roles.some((r) =>
+            [Roles.ADMIN, Roles.TECHNICAL_MANAGER].includes(r.role.name as any),
+          );
+          if (early && emp.status === 'ACTIVE' && !md.includes(emp.id)) marketing.push(emp.id);
+        }
       }
       directorsByCompany[companyId] = { md, marketing };
     }

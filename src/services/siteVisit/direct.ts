@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma';
 import { TokenPayload } from '../../utils/jwt';
-import { Roles } from '../../shared';
+import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
 import { getISTComponents } from '../../utils/time';
 import { logger } from '../../utils/logger';
 import { notifyEmployee } from '../../utils/notifyEmployee';
@@ -37,9 +37,6 @@ export const CONVERTIBLE_STATES = [
 
 const DIRECT_OPEN_STATES = ['CONFIRMED', 'PENDING_CUSTOMER_RECONFIRMATION', 'ON_HOLD'];
 
-const isManagement = (user: TokenPayload) =>
-  user.roles.some((r) => [Roles.MD, Roles.ADMIN].includes(r as any));
-
 async function loadVisit(user: TokenPayload, visitId: number) {
   const visit = await p.siteVisitBooking.findFirst({
     where: { id: visitId, lead: { company_id: user.companyId } },
@@ -48,7 +45,7 @@ async function loadVisit(user: TokenPayload, visitId: number) {
   if (!visit) throw new AppError(404, 'Site visit not found.');
   const mine =
     visit.telecaller_id === user.employeeId || visit.lead.assigned_to_id === user.employeeId;
-  if (!mine && !isManagement(user)) {
+  if (!mine && !SiteVisitPolicy.isManagement(user)) {
     throw new AppError(
       403,
       'Only the person who booked this visit, the lead owner or management can change it.',
@@ -86,7 +83,7 @@ export async function makeVisitDirect(user: TokenPayload, visitId: number) {
       data: {
         lead: { connect: { id: visit.lead_id } },
         actor: { connect: { id: user.employeeId } },
-        activity_type: 'SITE_VISIT_REQUESTED',
+        activity_type: 'SITE_VISIT_CHANGED',
         notes: `Site visit ${visit.booking_code} changed to a direct visit: the customer goes on their own, no project manager needed.`,
       },
     });
@@ -126,7 +123,7 @@ export async function rescheduleDirectVisit(user: TokenPayload, visitId: number,
       data: {
         lead: { connect: { id: visit.lead_id } },
         actor: { connect: { id: user.employeeId } },
-        activity_type: 'SITE_VISIT_REQUESTED',
+        activity_type: 'SITE_VISIT_RESCHEDULE_REQUESTED',
         notes: `Direct site visit ${visit.booking_code} moved to ${getISTComponents(when).dateString}.`,
       },
     });
@@ -166,7 +163,7 @@ export async function recordDirectVisitOutcome(
         data: {
           lead: { connect: { id: visit.lead_id } },
           actor: { connect: { id: user.employeeId } },
-          activity_type: 'SITE_VISIT_COMPLETED',
+          activity_type: 'SITE_VISIT_CANCELLED',
           notes:
             `Direct site visit ${visit.booking_code}: the customer did not come.${notes ? ` ${notes}` : ''}`.slice(
               0,
@@ -229,7 +226,7 @@ export async function recordDirectVisitOutcome(
 }
 
 /** Same lead moves as a walk-in, but only once the lead has no other open visit. */
-async function advanceLead(
+export async function advanceLead(
   user: TokenPayload,
   leadId: number,
   visitId: number,

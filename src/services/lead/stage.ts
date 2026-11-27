@@ -174,11 +174,22 @@ export async function resolveInitialStage(
     if (!details.visit_handled_by_id) {
       throw new AppError(400, 'Choose who handles the site visit');
     }
+    // The same people as for a demo: a telecaller used to end up shown as the accepting manager.
     const handler = await p.employee.findFirst({
-      where: { id: details.visit_handled_by_id, company_id: user.companyId, status: 'ACTIVE' },
+      where: {
+        id: details.visit_handled_by_id,
+        company_id: user.companyId,
+        status: 'ACTIVE',
+        roles: { some: { role: { name: { in: DEMO_HANDLER_ROLES } } } },
+      },
       select: { id: true, full_name: true, employee_code: true },
     });
-    if (!handler) throw new AppError(404, 'Site visit handler not found');
+    if (!handler) {
+      throw new AppError(
+        400,
+        'A site visit is handled by a Project Manager, Agent, Sales Manager, Channel Partner Manager or the MD.',
+      );
+    }
     out.handler = { id: handler.id, name: handler.full_name || handler.employee_code };
 
     out.visitAt = parseDate(details.visit_at, 'Site visit date and time');

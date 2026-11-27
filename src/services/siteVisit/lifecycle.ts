@@ -11,6 +11,7 @@ import {
   dropReasonFromOutcomes,
   findVisitForUser,
 } from './shared';
+import { OFFICE_CHANGE, offerToPartner, partnerOfVisit } from './assignee';
 import { createFeedbackRequest, dispatchFeedbackRequestNotification } from '../feedback.service';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { logger } from '../../utils/logger';
@@ -26,6 +27,14 @@ export async function acceptVisit(user: TokenPayload, visitId: number, notes?: s
   }
   if (!SiteVisitPolicy.canAccept(user, visit)) {
     throw { status: 403, message: 'Forbidden: only the routed PM/Agent may accept this visit' };
+  }
+
+  if (await partnerOfVisit(visit)) {
+    throw {
+      status: 409,
+      message:
+        'This visit is waiting for the channel partner. Use "Pass on" to give it to a project manager instead.',
+    };
   }
 
   const me = await p.employee.findUnique({
@@ -71,15 +80,17 @@ export async function reassignVisit(
   if (!SiteVisitPolicy.canReassignTarget(user, target)) {
     throw {
       status: 403,
-      message: 'Forbidden: only PROJECT_MANAGER or AGENT may be reassignment targets',
+      message: 'Pick a project manager, sales manager or agent.',
     };
   }
 
   // Ping-pong prevention: Cannot route to someone who has already routed it away.
+  // (A change made by the office is not the person declining it.)
   const previousReassignment = await p.siteVisitReassignment.findFirst({
     where: {
       visit_id: visitId,
       from_employee_id: toEmployeeId,
+      reason: { not: OFFICE_CHANGE },
     },
   });
   if (previousReassignment) {
@@ -100,6 +111,8 @@ export async function reassignVisit(
     throw { status: 409, message: transition.reason || 'Invalid state transition' };
   }
 
+  const wasWithPartner = await partnerOfVisit(visit);
+
   return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
     // Log the reassignment hop (reason visibility restricted per §2).
     await tx.siteVisitReassignment.create({
@@ -113,7 +126,11 @@ export async function reassignVisit(
 
     const updated = await tx.siteVisitBooking.update({
       where: { id: visitId },
-      data: { status: 'PENDING_ACCEPTANCE', project_manager_id: toEmployeeId },
+      data: {
+        status: 'PENDING_ACCEPTANCE',
+        project_manager_id: toEmployeeId,
+        ...(wasWithPartner ? { assigned_agent_id: null } : {}),
+      },
     });
 
     await tx.leadActivity.create({
@@ -232,9 +249,38 @@ export async function reconfirmCustomer(user: TokenPayload, visitId: number) {
     visitId,
     'RECONFIRM_CUSTOMER',
     {},
-    'SITE_VISIT_REQUESTED',
+    'SITE_VISIT_RECONFIRM_CALL',
     `Day-before reconfirmation call initiated for ${visit.booking_code}.`,
   );
+}
+
+/** Not accepted yet: a new date changes nothing about who has to answer. */
+const WAITING_STATUSES = [
+  'REQUESTED',
+  'PENDING_ACCEPTANCE',
+  'REASSIGNED',
+  'ESCALATED_TO_MARKETING_DIRECTOR',
+];
+
+const onDate = (d: Date) =>
+  d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+
+/** What happens to a visit when its date or property changes (2026-11-27). */
+function statusAfterMove(
+  visit: { status: string; visit_type: string; project_manager_id: number | null },
+  partnerId: number | null,
+  userId: number,
+): import('@prisma/client').SiteVisitStatus {
+  if (visit.visit_type === 'DIRECT') return 'CONFIRMED';
+  // A partner always says yes or no to the new date.
+  if (partnerId) return 'PENDING_ACCEPTANCE';
+  if (!visit.project_manager_id) return 'REASSIGNED';
+  if (visit.status === 'CANCELLED') return 'PENDING_ACCEPTANCE';
+  if (WAITING_STATUSES.includes(visit.status)) {
+    return visit.status as import('@prisma/client').SiteVisitStatus;
+  }
+  // The person going moved it themselves, so they already agree.
+  return visit.project_manager_id === userId ? 'ACCEPTED' : 'RESCHEDULE_REQUESTED';
 }
 
 /** Customer or PM requests reschedule (new date/property/unit). */
@@ -253,6 +299,16 @@ export async function rescheduleVisit(
   if (!isAuthorized) {
     throw { status: 403, message: 'Forbidden: Missing permission to reschedule this visit' };
   }
+  if (visit.status === 'COMPLETED') {
+    throw { status: 409, message: 'This visit is already done. Book a new visit.' };
+  }
+  if (visit.status === 'CANCELLED' && !SiteVisitPolicy.isManagement(user)) {
+    throw {
+      status: 403,
+      message:
+        'Only Admin, MD or the Technical Manager can bring back a cancelled visit. Book a new visit instead.',
+    };
+  }
 
   // Moving a visit follows the same two rules as booking one (2026-11-26).
   const movedTo = data.scheduled_date ? new Date(data.scheduled_date).getTime() : null;
@@ -263,24 +319,11 @@ export async function rescheduleVisit(
     await assertNoOtherVisitThen(visit.lead_id, movedTo, visitId);
   }
 
-  // Phase D: If superseding a cancellation, notify the PM (if not self).
-  if (
-    visit.status === 'CANCELLATION_PENDING_PM_CONFIRMATION' &&
-    visit.project_manager_id &&
-    visit.project_manager_id !== user.employeeId
-  ) {
-    await p.notification.create({
-      data: {
-        employee_id: visit.project_manager_id,
-        type: 'SYSTEM_ALERT',
-        title: 'Cancellation Superseded',
-        message: `The cancellation for site visit ${visit.booking_code} was superseded by a reschedule request.`,
-      },
-    });
-  }
+  const partnerId = await partnerOfVisit(visit);
+  const status = statusAfterMove(visit, partnerId, user.employeeId);
+  const date = data.scheduled_date ? new Date(data.scheduled_date) : visit.scheduled_date;
 
   const extra: any = {};
-  if (data.scheduled_date) extra.scheduled_date = new Date(data.scheduled_date);
   const hasPropertyIds = !!data.property_ids?.length;
   const hasUnitIds = !!data.project_unit_ids?.length;
   if (hasPropertyIds || hasUnitIds) {
@@ -308,68 +351,120 @@ export async function rescheduleVisit(
     }
   }
 
-  return applyTransition(
-    user,
-    visitId,
-    'RESCHEDULE',
-    extra,
-    'SITE_VISIT_RESCHEDULE_REQUESTED',
-    `Reschedule requested for ${visit.booking_code}.`,
+  const next =
+    status === 'RESCHEDULE_REQUESTED'
+      ? 'waiting for the person going to confirm it'
+      : status === 'REASSIGNED'
+        ? 'someone still has to be chosen'
+        : status === 'ACCEPTED' || status === 'CONFIRMED'
+          ? 'saved'
+          : 'waiting to be accepted';
+
+  const moved = await p.$transaction(async (tx) => {
+    const row = await tx.siteVisitBooking.update({
+      where: { id: visitId },
+      data: { ...extra, scheduled_date: date, status, cancellation_reason: null },
+      include: { lead: true },
+    });
+    // The warnings start again for the new time.
+    await tx.siteVisitEscalation.deleteMany({ where: { site_visit_booking_id: visitId } });
+    await tx.leadActivity.create({
+      data: {
+        lead_id: visit.lead_id,
+        actor_id: user.employeeId,
+        activity_type: 'SITE_VISIT_RESCHEDULE_REQUESTED',
+        notes: `Site visit ${visit.booking_code} moved to ${onDate(date)}: ${next}.`,
+      },
+    });
+    return row;
+  });
+
+  if (partnerId) await offerToPartner(partnerId, visit.booking_code, true);
+  const tell = [partnerId ? null : visit.project_manager_id, visit.telecaller_id].filter(
+    (id, i, all): id is number => !!id && id !== user.employeeId && all.indexOf(id) === i,
   );
+  if (tell.length) {
+    await notifyEmployee(tell, {
+      type: 'SYSTEM_ALERT',
+      title: 'Site visit date changed',
+      message: `Site visit ${visit.booking_code} moved to ${onDate(date)}: ${next}.`,
+      link: '/site-visits',
+    }).catch((err) => logger.error('[site-visit] notify new date:', err));
+  }
+  return moved;
 }
 
-/** PM confirms or releases after a reschedule (PENDING_PM_RECONFIRMATION). */
+/** The person going confirms a new date, or says they cannot go. */
 export async function pmReconfirm(user: TokenPayload, visitId: number, release: boolean) {
   const visit = await findVisitForUser(user, visitId);
   if (!SiteVisitPolicy.canAccept(user, visit)) {
-    throw { status: 403, message: 'Forbidden: only the PM may reconfirm this visit' };
+    throw { status: 403, message: 'Forbidden: only the person going may confirm this visit' };
   }
 
-  if (release) {
-    // Reset to the authoritative project PM for the (possibly new) property.
-    const props = await p.siteVisitProperty.findMany({
-      where: { visit_id: visitId },
-      include: { property: true },
-    });
-    const projectId = props[0]?.property?.project_id ?? visit.project_id;
-    const project = projectId ? await p.project.findFirst({ where: { id: projectId } }) : null;
-    const authoritativePm = project?.assigned_pm_id ?? null;
+  if (!release) {
+    return applyTransition(
+      user,
+      visitId,
+      'PM_CONFIRM',
+      {},
+      'SITE_VISIT_ACCEPTED',
+      `New date for ${visit.booking_code} confirmed.`,
+    );
+  }
 
-    const transition = WorkflowEngine.canTransition({
-      domain: WorkflowDomain.SITE_VISIT,
-      currentState: visit.status,
-      action: 'PM_RELEASE',
-      actor: user,
-      entity: visit,
-    });
-    if (!transition.allowed)
-      throw { status: 409, message: transition.reason || 'Invalid state transition' };
+  const transition = WorkflowEngine.canTransition({
+    domain: WorkflowDomain.SITE_VISIT,
+    currentState: visit.status,
+    action: 'PM_RELEASE',
+    actor: user,
+    entity: visit,
+  });
+  if (!transition.allowed)
+    throw { status: 409, message: transition.reason || 'Invalid state transition' };
 
-    return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
-      const updated = await tx.siteVisitBooking.update({
+  // Goes to the project's own manager if that is somebody else; otherwise the booker chooses.
+  const props = await p.siteVisitProperty.findMany({
+    where: { visit_id: visitId },
+    include: { property: true },
+  });
+  const projectId = props[0]?.property?.project_id ?? visit.project_id;
+  const project = projectId ? await p.project.findFirst({ where: { id: projectId } }) : null;
+  const own = project?.assigned_pm_id ?? null;
+  const nextPm = own && own !== visit.project_manager_id ? own : null;
+
+  const updated = await p.$transaction(
+    async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+      const row = await tx.siteVisitBooking.update({
         where: { id: visitId },
-        data: { status: 'PENDING_ACCEPTANCE', project_manager_id: authoritativePm ?? undefined },
+        data: {
+          status: nextPm ? 'PENDING_ACCEPTANCE' : 'REASSIGNED',
+          project_manager_id: nextPm,
+          assigned_agent_id: null,
+        },
       });
       await tx.leadActivity.create({
         data: {
           lead: { connect: { id: visit.lead_id } },
           actor: { connect: { id: user.employeeId } },
-          activity_type: 'SITE_VISIT_RESCHEDULE_REQUESTED',
-          notes: `PM released reschedule for ${visit.booking_code}; reset to project PM for acceptance.`,
+          activity_type: 'SITE_VISIT_REASSIGNED',
+          notes: `The new date for ${visit.booking_code} could not be taken; ${nextPm ? "sent to the project's manager" : 'someone else has to be chosen'}.`,
         },
       });
-      return updated;
-    });
-  }
-
-  return applyTransition(
-    user,
-    visitId,
-    'PM_CONFIRM',
-    {},
-    'SITE_VISIT_ACCEPTED',
-    `PM confirmed reschedule for ${visit.booking_code}.`,
+      return row;
+    },
   );
+  const tell = nextPm ?? visit.telecaller_id;
+  if (tell && tell !== user.employeeId) {
+    await notifyEmployee(tell, {
+      type: nextPm ? 'TARGET_ASSIGNED' : 'SYSTEM_ALERT',
+      title: nextPm ? 'New Site Visit to Accept' : 'Choose who takes this visit',
+      message: nextPm
+        ? `Site visit ${visit.booking_code} requires your acceptance.`
+        : `Nobody is on site visit ${visit.booking_code}. Open Site visits and choose someone.`,
+      link: '/site-visits',
+    }).catch((err) => logger.error('[site-visit] notify release:', err));
+  }
+  return updated;
 }
 
 /** confirm: PENDING_CUSTOMER_RECONFIRMATION / RESCHEDULE_REQUESTED → CONFIRMED. */
@@ -383,8 +478,8 @@ export async function confirmVisit(user: TokenPayload, visitId: number) {
     visitId,
     'CONFIRM',
     {},
-    'SITE_VISIT_ACCEPTED',
-    `Site visit ${visit.booking_code} confirmed (schedule locked).`,
+    'SITE_VISIT_CONFIRMED',
+    `Customer confirmed site visit ${visit.booking_code}.`,
   );
 }
 
@@ -392,7 +487,7 @@ export async function confirmVisit(user: TokenPayload, visitId: number) {
 const AGENT_ASSIGNABLE_STATUSES = ['ACCEPTED', 'PENDING_CUSTOMER_RECONFIRMATION', 'CONFIRMED'];
 
 /**
- * assign-agent: the visit's PM (or MD/Admin) names who physically runs an
+ * assign-agent: the visit's PM (or management) names who physically runs an
  * accepted visit -- another PM/Agent, or themselves (`self`). Until this
  * existed assigned_agent_id was never set, so nobody but MD/Admin could start
  * or complete a visit.
@@ -423,7 +518,8 @@ export async function assignAgent(
   if (!SiteVisitPolicy.canRunVisit({ roles: agentRoles })) {
     throw {
       status: 400,
-      message: 'Only a Project Manager, an Agent or a channel partner can run a site visit',
+      message:
+        'Only a project manager, sales manager, agent or channel partner can run a site visit',
     };
   }
   if (!AGENT_ASSIGNABLE_STATUSES.includes(visit.status)) {
@@ -504,9 +600,9 @@ export async function startVisit(user: TokenPayload, visitId: number) {
       message: `This visit is scheduled for ${scheduledDayIST}; reconfirm it with the customer first.`,
     };
   }
-  // A visit can't be started before its scheduled (IST) day; MD/Admin may
+  // A visit can't be started before its scheduled (IST) day; management may
   // override for genuine early starts.
-  if (!user.roles.includes(Roles.MD) && !user.roles.includes(Roles.ADMIN)) {
+  if (!SiteVisitPolicy.isManagement(user)) {
     const today = todayIST;
     const scheduledDay = scheduledDayIST;
     if (today < scheduledDay) {

@@ -160,12 +160,17 @@ export async function resolveVisitProject(
         : [];
 
   const projects = new Set<number>();
+  let propertyPm: number | null = null;
 
   if (propertyIds.length > 0) {
     const properties = await p.property.findMany({
       where: { id: { in: propertyIds }, company_id: companyId },
+      include: { assigned_pm: { select: { status: true } } },
     });
-    for (const pr of properties) if (pr.project_id) projects.add(pr.project_id);
+    for (const pr of properties) {
+      if (pr.project_id) projects.add(pr.project_id);
+      if (pr.assigned_pm?.status === 'ACTIVE') propertyPm ??= pr.assigned_pm_id;
+    }
   }
   if (projectUnitIds.length > 0) {
     const units = await p.projectUnit.findMany({
@@ -198,7 +203,7 @@ export async function resolveVisitProject(
   }
 
   if (!projectId) {
-    const pmId = await resolveFallbackPm(companyId, lead?.preferred_location);
+    const pmId = propertyPm ?? (await resolveFallbackPm(companyId, lead?.preferred_location));
     return { projectId: 0, pmId };
   }
 

@@ -4,6 +4,8 @@ import { Permissions } from '../../shared';
 import { can } from '../../authz/authorization';
 import { SiteVisitPolicy } from '../../policies/siteVisit.policy';
 import { applyTransition, findVisitForUser } from './shared';
+import { notifyEmployee } from '../../utils/notifyEmployee';
+import { logger } from '../../utils/logger';
 
 const p = prisma;
 
@@ -17,6 +19,22 @@ async function resolveCancellerName(user: TokenPayload, isManagement: boolean): 
   }
   if (user.employeeCode) return user.employeeCode;
   return isManagement ? 'Management' : 'Staff';
+}
+
+/** Everyone on the visit (manager, field agent or partner, booker) is told it is off. */
+async function tellEveryone(user: TokenPayload, visit: any, reason: string | undefined) {
+  const isManagement = SiteVisitPolicy.canCancelAtAnyTime(user);
+  const by = await resolveCancellerName(user, isManagement);
+  const people = [visit.project_manager_id, visit.assigned_agent_id, visit.telecaller_id].filter(
+    (id, i, all): id is number => !!id && id !== user.employeeId && all.indexOf(id) === i,
+  );
+  if (!people.length) return;
+  await notifyEmployee(people, {
+    type: 'SYSTEM_ALERT',
+    title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
+    message: `Site visit ${visit.booking_code}${visit.lead?.customer_name && visit.status !== 'PENDING_ACCEPTANCE' ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${by}.${reason ? ` Reason: ${reason}` : ''}`,
+    link: '/site-visits',
+  }).catch((err) => logger.error('[site-visit] notify cancel:', err));
 }
 
 /** cancel: any active state → CANCELLED. Admin and Technical Manager can cancel at any time. */
@@ -37,35 +55,11 @@ export async function cancelVisit(user: TokenPayload, visitId: number, reason?: 
     {
       cancellation_reason: reason || null,
     },
-    'SITE_VISIT_COMPLETED',
+    'SITE_VISIT_CANCELLED',
     `Site visit ${visit.booking_code} cancelled.${reason ? ` Reason: ${reason}` : ''}`,
   );
 
-  const cancellerName = await resolveCancellerName(user, isManagement);
-
-  // If PM was already assigned/accepted, notify the PM with the cancellation reason
-  if (visit.project_manager_id && visit.project_manager_id !== user.employeeId) {
-    await p.notification.create({
-      data: {
-        employee_id: visit.project_manager_id,
-        type: 'SYSTEM_ALERT',
-        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
-        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
-      },
-    });
-  }
-
-  // Also notify telecaller if someone else cancelled it
-  if (visit.telecaller_id && visit.telecaller_id !== user.employeeId) {
-    await p.notification.create({
-      data: {
-        employee_id: visit.telecaller_id,
-        type: 'SYSTEM_ALERT',
-        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
-        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
-      },
-    });
-  }
+  await tellEveryone(user, visit, reason);
 
   return result;
 }
@@ -86,17 +80,19 @@ export async function holdVisit(user: TokenPayload, visitId: number) {
     visitId,
     'HOLD',
     {},
-    'SITE_VISIT_REQUESTED',
+    'SITE_VISIT_ON_HOLD',
     `Site visit ${visit.booking_code} placed ON_HOLD (Customer unresponsive).`,
   );
 
-  if (visit.project_manager_id) {
+  // The person going: our manager, or the channel partner.
+  const going = visit.project_manager_id ?? visit.assigned_agent_id;
+  if (going) {
     await p.notification.create({
       data: {
-        employee_id: visit.project_manager_id,
+        employee_id: going,
         type: 'SYSTEM_ALERT',
-        title: 'Site Visit On Hold',
-        message: `Site visit ${visit.booking_code} is on hold. The telecaller could not reach the customer for reconfirmation.`,
+        title: 'Customer not reached',
+        message: `Site visit ${visit.booking_code}: the customer could not be reached to confirm.`,
       },
     });
   }
@@ -128,7 +124,7 @@ export async function initiateCancellation(user: TokenPayload, visitId: number) 
     visitId,
     'INITIATE_CANCEL',
     {},
-    'SITE_VISIT_REQUESTED',
+    'SITE_VISIT_ON_HOLD',
     `Site visit ${visit.booking_code} cancellation initiated (PM cross-check pending).`,
   );
 
@@ -157,7 +153,7 @@ export async function rejectCancellation(user: TokenPayload, visitId: number) {
     visitId,
     'PM_CANCEL_REJECT',
     {},
-    'SITE_VISIT_REQUESTED',
+    'SITE_VISIT_ON_HOLD',
     `PM confirmed customer responded for ${visit.booking_code}. Reverted to active reconfirmation.`,
   );
 
@@ -174,15 +170,19 @@ export async function rejectCancellation(user: TokenPayload, visitId: number) {
   return result;
 }
 
-/** CONFIRM_CANCEL: PM explicitly confirms cancellation, providing a reason. Admin and Technical Manager can also cancel at any time. */
+/**
+ * Cancel with a reason: the person going, or the booker before the visit has started (2026-11-27). Admin, MD and
+ * the Technical Manager can cancel at any time.
+ */
 export async function confirmCancellation(user: TokenPayload, visitId: number, reason: string) {
   const visit = await findVisitForUser(user, visitId);
   const isManagement = SiteVisitPolicy.canCancelAtAnyTime(user);
-  if (!isManagement && !SiteVisitPolicy.canConfirmCancel(user, visit)) {
+  const booker = visit.telecaller_id === user.employeeId && visit.status !== 'ACTIVE';
+  if (!isManagement && !booker && !SiteVisitPolicy.canConfirmCancel(user, visit)) {
     throw {
       status: 403,
       message:
-        'Forbidden: Only the assigned PM or management (Admin / Technical Manager) can confirm this cancellation.',
+        'Only the person going, the person who booked it (before it starts) or management can cancel this visit.',
     };
   }
   if (!reason || reason.trim() === '') {
@@ -205,35 +205,11 @@ export async function confirmCancellation(user: TokenPayload, visitId: number, r
         ? { cancellation_confirmed_by_pm_id: user.employeeId }
         : {}),
     },
-    'SITE_VISIT_COMPLETED',
-    `Site visit ${visit.booking_code} cancellation confirmed by ${isManagement ? 'Management' : 'PM'}. Reason: ${reason}`,
+    'SITE_VISIT_CANCELLED',
+    `Site visit ${visit.booking_code} cancelled. Reason: ${reason}`,
   );
 
-  const cancellerName = await resolveCancellerName(user, isManagement);
-
-  // If PM was already assigned/accepted, notify the PM with the cancellation reason
-  if (visit.project_manager_id && visit.project_manager_id !== user.employeeId) {
-    await p.notification.create({
-      data: {
-        employee_id: visit.project_manager_id,
-        type: 'SYSTEM_ALERT',
-        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
-        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
-      },
-    });
-  }
-
-  // Also notify telecaller if someone else cancelled it
-  if (visit.telecaller_id && visit.telecaller_id !== user.employeeId) {
-    await p.notification.create({
-      data: {
-        employee_id: visit.telecaller_id,
-        type: 'SYSTEM_ALERT',
-        title: isManagement ? 'Site Visit Cancelled by Management' : 'Site Visit Cancelled',
-        message: `Site visit ${visit.booking_code}${visit.lead?.customer_name ? ` (${visit.lead.customer_name})` : ''} was cancelled by ${cancellerName}.${reason ? ` Reason: ${reason}` : ''}`,
-      },
-    });
-  }
+  await tellEveryone(user, visit, reason);
 
   // No-Show Flagging (2 No-shows)
   const normalizedReason = reason.toLowerCase().replace(/[\s-]/g, '');

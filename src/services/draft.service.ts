@@ -21,6 +21,8 @@ import {
   prepareDraftFile,
   signMediaToken,
 } from './draftStorage';
+import { projectFill, propertyFill } from './listingFill';
+import { invalidateProjectListCache } from './project.service';
 
 const p = prisma;
 
@@ -511,6 +513,59 @@ export class DraftService {
     });
     if (!moved.count) throw appError(409, 'This listing was just changed. Reload and try again.');
     return loadVisible(user, id);
+  }
+
+  // ── filling the empty details of an existing record ──────────
+
+  /** The record and what the listing could fill in it. Reviewers only (the route checks the permission). */
+  private static async fillPlan(
+    db: Prisma.TransactionClient,
+    draft: DraftWithRelations,
+    recordId: number,
+  ) {
+    const isProject = draft.type === 'PROJECT';
+    const where = { id: recordId, company_id: draft.company_id };
+    const record: any = isProject
+      ? await db.project.findFirst({ where })
+      : await db.property.findFirst({ where });
+    if (!record)
+      throw appError(404, `${isProject ? 'Project' : 'Property'} not found in this company.`);
+    const plan = isProject ? projectFill(draft, record) : propertyFill(draft, record);
+    return { isProject, name: (isProject ? record.name : record.title) as string, ...plan };
+  }
+
+  static async fillPreview(user: TokenPayload, id: number, recordId: number) {
+    const draft = await loadVisible(user, id);
+    assertNotOwnDraft(user, draft);
+    const { name, items } = await this.fillPlan(p, draft, recordId);
+    return { name, items };
+  }
+
+  /** Saves the empty details only, and writes in the record's history what came from the listing. */
+  static async fill(user: TokenPayload, id: number, recordId: number) {
+    const draft = await loadVisible(user, id);
+    assertNotOwnDraft(user, draft);
+    const done = await p.$transaction(async (tx) => {
+      // Worked out again here, from the record as it is now, not from what the screen showed.
+      const plan = await this.fillPlan(tx, draft, recordId);
+      if (!plan.items.length) return plan;
+      if (plan.isProject)
+        await tx.project.update({ where: { id: recordId }, data: plan.data as any });
+      else await tx.property.update({ where: { id: recordId }, data: plan.data as any });
+      await tx.auditEvent.create({
+        data: {
+          actor_id: user.employeeId,
+          action: 'LISTING_DETAILS_FILLED',
+          entity_type: plan.isProject ? 'PROJECT' : 'PROPERTY',
+          entity_id: recordId,
+          company_id: draft.company_id,
+          reason: `Empty details filled from listing #${draft.id}: ${plan.items.map((i) => i.label).join(', ')}`,
+        },
+      });
+      return plan;
+    });
+    if (done.isProject && done.items.length) invalidateProjectListCache();
+    return { name: done.name, items: done.items };
   }
 
   // ── attachments ──────────────────────────────────────────────

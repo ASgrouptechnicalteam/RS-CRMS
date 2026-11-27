@@ -280,6 +280,39 @@ router.post(
   },
 );
 
+// What the listing could fill in a record's empty details, then doing it. Nothing already typed is changed.
+router.get(
+  '/:id/fill-preview',
+  authenticateToken,
+  requireAuthz(Permissions.DRAFTS_REVIEW),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const id = parseId(req.params.id);
+      const recordId = parseId(String(req.query.record_id ?? ''));
+      if (!id || !recordId) return res.status(400).json({ error: 'Invalid ID format' });
+      return res.status(200).json(await DraftService.fillPreview(req.user!, id, recordId));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:id/fill',
+  authenticateToken,
+  requireAuthz(Permissions.DRAFTS_REVIEW),
+  validateRequestBody(DraftLinkSchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid ID format' });
+      return res.status(200).json(await DraftService.fill(req.user!, id, req.body.record_id));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ── files ─────────────────────────────────────────────────────
 
 /**

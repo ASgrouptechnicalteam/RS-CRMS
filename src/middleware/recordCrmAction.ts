@@ -176,6 +176,9 @@ const VERBS: Record<string, string> = {
   'needs-info': 'Asked for more information on',
   link: 'Linked the CRM record to',
   reply: 'Replied on',
+  'already-in-crm': 'Marked as already in the CRM:',
+  'not-in-crm': 'Took back "already in the CRM" for',
+  fill: 'Filled empty details from',
 };
 
 const FALLBACK_VERB: Record<string, string> = {

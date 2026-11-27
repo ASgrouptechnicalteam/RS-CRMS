@@ -524,8 +524,8 @@ export async function remindCpReferrals(d: Day) {
   }
   const targets = [...per].map(([id, lines]) => ({
     id,
-    title: 'Partner has not responded',
-    message: `${lines.length} lead${lines.length === 1 ? '' : 's'} with a partner need${lines.length === 1 ? 's' : ''} attention: ${lines.slice(0, 3).join(', ')}${lines.length > 3 ? ` and ${lines.length - 3} more` : ''}. Open the lead to take it back.`,
+    title: 'Channel partner has not responded',
+    message: `${lines.length} lead${lines.length === 1 ? '' : 's'} with a channel partner need${lines.length === 1 ? 's' : ''} attention: ${lines.slice(0, 3).join(', ')}${lines.length > 3 ? ` and ${lines.length - 3} more` : ''}. Open the lead to take it back.`,
     link: '/leads',
   }));
   return sendOnce('CP_REFERRAL_STALE', d, targets);

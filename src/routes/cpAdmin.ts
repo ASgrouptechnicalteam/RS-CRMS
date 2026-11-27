@@ -193,7 +193,8 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       if (!Number.isInteger(id) || id <= 0 || !body.success) {
         return res.status(400).json({ error: 'Enter a number from 0 to 50.' });
       }
-      if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+      if (!(await partnerOf(req, id)))
+        return res.status(404).json({ error: 'Channel partner not found' });
       await p.employee.update({ where: { id }, data: { cp_telecaller_limit: body.data.limit } });
       return res.status(200).json({ ok: true, limit: body.data.limit });
     }),
@@ -211,7 +212,8 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       if (!Number.isInteger(id) || id <= 0 || !body.success) {
         return res.status(400).json({ error: 'Enter a number from 0 to 1000, or leave it empty.' });
       }
-      if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+      if (!(await partnerOf(req, id)))
+        return res.status(404).json({ error: 'Channel partner not found' });
       await p.employee.update({ where: { id }, data: { cp_project_limit: body.data.limit } });
       return res.status(200).json({ ok: true, limit: body.data.limit });
     }),
@@ -225,7 +227,8 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0)
         return res.status(400).json({ error: 'Invalid ID format' });
-      if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+      if (!(await partnerOf(req, id)))
+        return res.status(404).json({ error: 'Channel partner not found' });
       const companyIds = await getAccessibleCompanyIds(req.user!);
       const [projects, given] = await Promise.all([
         p.project.findMany({
@@ -258,7 +261,8 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
         .safeParse(req.body);
       if (!Number.isInteger(id) || id <= 0 || !body.success)
         return res.status(400).json({ error: 'Pick the projects again.' });
-      if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+      if (!(await partnerOf(req, id)))
+        return res.status(404).json({ error: 'Channel partner not found' });
       const companyIds = await getAccessibleCompanyIds(req.user!);
       const ids = [...new Set(body.data.project_ids)];
       const valid = ids.length
@@ -295,7 +299,8 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0)
         return res.status(400).json({ error: 'Invalid ID format' });
-      if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+      if (!(await partnerOf(req, id)))
+        return res.status(404).json({ error: 'Channel partner not found' });
       const companyIds = await getAccessibleCompanyIds(req.user!);
       const q = String(req.query.q || '').trim();
       const employees = await p.employee.findMany({
@@ -349,7 +354,8 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
         .safeParse(req.body);
       if (!Number.isInteger(id) || id <= 0 || !body.success)
         return res.status(400).json({ error: 'Enter the employee code and pick a role.' });
-      if (!(await partnerOf(req, id))) return res.status(404).json({ error: 'Partner not found' });
+      if (!(await partnerOf(req, id)))
+        return res.status(404).json({ error: 'Channel partner not found' });
       const companyIds = await getAccessibleCompanyIds(req.user!);
       const emp = await p.employee.findFirst({
         where: {
@@ -366,12 +372,16 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       });
       if (!emp) return res.status(404).json({ error: 'No active employee has that code.' });
       if (emp.roles.some((r: any) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL))
-        return res.status(400).json({ error: 'That is a partner, not one of our employees.' });
+        return res
+          .status(400)
+          .json({ error: 'That is a channel partner, not one of our employees.' });
       const taken = await p.cpUser.findFirst({
         where: { OR: [{ employee_id: emp.id }, { login_id: emp.employee_code }] },
       });
       if (taken)
-        return res.status(409).json({ error: 'That employee is already on a partner team.' });
+        return res
+          .status(409)
+          .json({ error: 'That employee is already on a channel partner team.' });
       const made = await p.cpUser.create({
         data: {
           cp_id: id,
@@ -390,7 +400,7 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
             action: 'CP_STAFF_ADDED',
             entity_type: 'EMPLOYEE',
             entity_id: emp.id,
-            reason: `${emp.full_name} (${emp.employee_code}) added to partner ${id} as ${body.data.member_role}`,
+            reason: `${emp.full_name} (${emp.employee_code}) added to channel partner ${id} as ${body.data.member_role}`,
           },
         })
         .catch(() => undefined);
@@ -406,7 +416,7 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       if (!Number.isInteger(id) || id <= 0)
         return res.status(400).json({ error: 'Invalid ID format' });
       const partner = await partnerOf(req, id);
-      if (!partner) return res.status(404).json({ error: 'Partner not found' });
+      if (!partner) return res.status(404).json({ error: 'Channel partner not found' });
       const [team, leads, byStatus] = await Promise.all([
         p.cpUser.findMany({
           where: { cp_id: id },
@@ -463,7 +473,7 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
       if (id === req.user!.employeeId)
         return res.status(400).json({ error: 'You cannot switch off your own account here.' });
       const partner = await partnerOf(req, id);
-      if (!partner) return res.status(404).json({ error: 'Partner not found' });
+      if (!partner) return res.status(404).json({ error: 'Channel partner not found' });
       const next = body.data.active ? 'ACTIVE' : 'INACTIVE';
       if (partner.status !== next) {
         await p.employee.update({
@@ -477,7 +487,7 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
               action: body.data.active ? 'CP_ACCESS_ON' : 'CP_ACCESS_OFF',
               entity_type: 'EMPLOYEE',
               entity_id: id,
-              reason: `Partner area access ${body.data.active ? 'switched on' : 'switched off'} for ${partner.full_name} (${partner.employee_code})`,
+              reason: `Channel partner area access ${body.data.active ? 'switched on' : 'switched off'} for ${partner.full_name} (${partner.employee_code})`,
             },
           })
           .catch(() => undefined);
@@ -498,7 +508,7 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
         if (!Number.isInteger(id) || id <= 0 || !body.success)
           return res.status(400).json({ error: 'Say whether to turn it on or off.' });
         const partner = await partnerOf(req, id);
-        if (!partner) return res.status(404).json({ error: 'Partner not found' });
+        if (!partner) return res.status(404).json({ error: 'Channel partner not found' });
         await p.employee.update({ where: { id }, data: { cp_is_super: body.data.on } });
         await p.auditEvent
           .create({
@@ -507,7 +517,7 @@ export const buildCpAdminRouter = (mw: RequestHandler[], staff: boolean) => {
               action: body.data.on ? 'CP_SUPER_ON' : 'CP_SUPER_OFF',
               entity_type: 'EMPLOYEE',
               entity_id: id,
-              reason: `Super admin partner ${body.data.on ? 'given to' : 'taken from'} ${partner.full_name} (${partner.employee_code})`,
+              reason: `Super admin channel partner ${body.data.on ? 'given to' : 'taken from'} ${partner.full_name} (${partner.employee_code})`,
             },
           })
           .catch(() => undefined);

@@ -28,7 +28,7 @@ const requireSuper = async (req: CpRequest, res: Response, next: NextFunction) =
 const mustBeSuperOwner = (req: CpRequest, res: Response, next: NextFunction) =>
   req.cp?.isSuper && !req.cp.user
     ? next()
-    : res.status(403).json({ error: 'Only a super admin partner can do this.' });
+    : res.status(403).json({ error: 'Only a super admin channel partner can do this.' });
 
 // The shared routes read who is calling from req.user (company access, the person on the record): here it is
 // the super partner's own account, which only has access to its own company.

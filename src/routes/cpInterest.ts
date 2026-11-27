@@ -220,7 +220,7 @@ function registrationRouter(kind: Kind) {
           }
         }
       }
-      throw new Error('Could not allocate a partner number');
+      throw new Error('Could not allocate a channel partner number');
     } catch (e) {
       logger.error({ err: e }, 'Channel partner registration form error');
       return res.status(500).json({ error: 'Could not save your details. Please try again.' });
@@ -288,7 +288,7 @@ function registrationRouter(kind: Kind) {
       });
     } catch (e) {
       logger.error({ err: e }, 'Channel partner registration list error');
-      return res.status(500).json({ error: 'Could not load the partner details.' });
+      return res.status(500).json({ error: 'Could not load the channel partner details.' });
     }
   });
 
@@ -313,7 +313,7 @@ function registrationRouter(kind: Kind) {
           if (row.employee_id) {
             return res.status(409).json({
               error:
-                'Partner access was already given. Reset the password from the employee page if they forgot it.',
+                'Channel partner access was already given. Reset the password from the employee page if they forgot it.',
             });
           }
           const companyId: number = row.company_id ?? req.user!.companyId;
@@ -324,7 +324,7 @@ function registrationRouter(kind: Kind) {
           const conflict = await findEmployeeContactConflict(prisma, { companyId, phone, email });
           if (conflict) {
             return res.status(409).json({
-              error: `${employeeContactConflictMessage(conflict)} If this is one of our own people who only needs to see or demo the partner area, do not make a new account: open Channel partners, pick a partner and use "Add one of our employees to this team" with Full access.`,
+              error: `${employeeContactConflictMessage(conflict)} If this is one of our own people who only needs to see or demo the channel partner area, do not make a new account: open Channel partners, pick a channel partner and use "Add one of our employees to this team" with Full access.`,
               conflict: { field: conflict.field, employee_code: conflict.employee.employee_code },
             });
           }
@@ -403,7 +403,7 @@ function registrationRouter(kind: Kind) {
                 action: 'CP_ACCESS_GIVEN',
                 entity_type: 'EMPLOYEE',
                 entity_id: emp.id,
-                reason: `Partner area account made for ${row.full_name} (${partnerNo})`,
+                reason: `Channel partner area account made for ${row.full_name} (${partnerNo})`,
               },
             });
             return emp;

@@ -351,7 +351,7 @@ router.post(
           },
         });
         return res.status(200).json({
-          message: `Welcome, ${scannedEmployee.full_name || 'partner'}. Your visit is noted.`,
+          message: `Welcome, ${scannedEmployee.full_name || 'channel partner'}. Your visit is noted.`,
           alreadyStamped: false,
           presenceOnly: true,
           timeIST: timeString,

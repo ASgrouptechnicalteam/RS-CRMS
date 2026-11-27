@@ -119,12 +119,12 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
     const wanted = Number(req.header('x-view-as') || 0);
     if (wanted && wanted !== e.id) {
       if (!e.cp_is_super || user) {
-        return res.status(403).json({ error: 'You cannot view another partner.' });
+        return res.status(403).json({ error: 'You cannot view another channel partner.' });
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return res
           .status(403)
-          .json({ error: 'You are looking at another partner. This view is read only.' });
+          .json({ error: 'You are looking at another channel partner. This view is read only.' });
       }
       const target = await p.employee.findFirst({
         where: {
@@ -134,7 +134,7 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
         },
         select: { id: true, company_id: true, employee_code: true, full_name: true },
       });
-      if (!target) return res.status(404).json({ error: 'Partner not found' });
+      if (!target) return res.status(404).json({ error: 'Channel partner not found' });
       req.cp = {
         id: target.id,
         company_id: target.company_id,
@@ -153,13 +153,13 @@ export const requireCp = async (req: CpRequest, res: Response, next: NextFunctio
 
 /** Only the partner themselves (not one of their telecallers). */
 export const requireOwner = (req: CpRequest, res: Response, next: NextFunction) =>
-  req.cp?.user ? res.status(403).json({ error: 'Only the partner can do this.' }) : next();
+  req.cp?.user ? res.status(403).json({ error: 'Only the channel partner can do this.' }) : next();
 
 /** The partner, or a PM member of their team (a PM sends listings for the partner). */
 export const requireOwnerOrPm = (req: CpRequest, res: Response, next: NextFunction) =>
   !req.cp?.user || req.cp.user.member_role === 'PM'
     ? next()
-    : res.status(403).json({ error: 'Only the partner or their PM can do this.' });
+    : res.status(403).json({ error: 'Only the channel partner or their PM can do this.' });
 
 /** The role the app shows for this person. */
 export const cpRoleOf = (req: CpRequest) =>

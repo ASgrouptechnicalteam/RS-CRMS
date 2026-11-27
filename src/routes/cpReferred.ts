@@ -41,7 +41,8 @@ const idOf = (raw: unknown) => {
   if (!Number.isInteger(n) || n <= 0) throw fail(400, 'Invalid ID format');
   return n;
 };
-const actorName = (req: CpRequest) => req.cp!.user?.full_name || req.cp!.full_name || 'Partner';
+const actorName = (req: CpRequest) =>
+  req.cp!.user?.full_name || req.cp!.full_name || 'Channel partner';
 
 /** The referrals this person may see: the partner sees the group's; a telecaller sees theirs. */
 const scopeOf = (req: CpRequest) =>
@@ -264,12 +265,17 @@ router.post(
         notes: `Declined: ${body.data.reason}`,
       },
     });
-    await mirror(r, req, 'PARTNER_DECLINED', `The partner declined. Reason: ${body.data.reason}`);
+    await mirror(
+      r,
+      req,
+      'PARTNER_DECLINED',
+      `The channel partner declined. Reason: ${body.data.reason}`,
+    );
     await tellOurSide(
       r,
       'CP_REFERRAL_DECLINED',
-      'A partner declined a referred lead',
-      `${r.lead?.customer_name} came back from the partner. Reason: ${body.data.reason}`,
+      'A channel partner declined a referred lead',
+      `${r.lead?.customer_name} came back from the channel partner. Reason: ${body.data.reason}`,
     );
     return res.status(200).json({ ok: true });
   }),
@@ -362,14 +368,14 @@ router.post(
       r,
       req,
       'PARTNER_STATUS',
-      `Partner update: ${body.data.stage.replace('_', ' ').toLowerCase()}.`,
+      `Channel partner update: ${body.data.stage.replace('_', ' ').toLowerCase()}.`,
     );
     if (body.data.stage === 'NOT_INTERESTED') {
       await tellOurSide(
         r,
         'CP_REFERRAL_DECLINED',
-        'A partner says the customer is not interested',
-        `${r.lead?.customer_name}: the partner marked the customer not interested. You can take the lead back.`,
+        'A channel partner says the customer is not interested',
+        `${r.lead?.customer_name}: the channel partner marked the customer not interested. You can take the lead back.`,
       );
     }
     return res.status(200).json({ ok: true });

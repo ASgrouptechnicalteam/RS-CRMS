@@ -476,7 +476,7 @@ export const SOP_BY_ROLE: Record<string, RoleSop> = {
       item(
         M,
         'cpx.visits',
-        'Open the partner app and look at your site visits for today.',
+        'Open the channel partner app and look at your site visits for today.',
         '/partner',
       ),
       item(D, 'cpx.run', 'Run each visit and mark it done in the app.', '/partner'),

@@ -96,7 +96,7 @@ cpProfileRouter.post(
           entity_id: cpId,
           reason: member
             ? `Team member ${member.full_name} changed their password`
-            : 'Partner changed their password',
+            : 'Channel partner changed their password',
         },
       })
       .catch(() => undefined);
@@ -275,7 +275,7 @@ cpProfileRouter.put(
   handle(async (req, res) => {
     // Only the partner themselves changes their details, never our staff signed in to their area.
     if (req.cp!.staff) {
-      return res.status(403).json({ error: 'Only the partner can change these details.' });
+      return res.status(403).json({ error: 'Only the channel partner can change these details.' });
     }
     const body = ProfileSchema.safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: body.error.issues[0]?.message });
@@ -409,8 +409,8 @@ cpProfileRouter.put(
       await notifyEmployee(await peopleWhoCheck(e.company_id), {
         type: 'CP_DETAILS_CHANGE',
         title: Object.keys(later).length
-          ? 'A partner wants to change bank or ID details'
-          : 'A partner filled in bank or ID details',
+          ? 'A channel partner wants to change bank or ID details'
+          : 'A channel partner filled in bank or ID details',
         message: Object.keys(later).length
           ? `${who} asked to change: ${describe(later)}. Please confirm it.`
           : `${who} added: ${describe(now)}.`,

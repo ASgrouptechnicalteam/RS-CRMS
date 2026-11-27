@@ -77,7 +77,7 @@ export async function referLeadToAssociate(
     );
   }
   if (lead.referred_to_cp_id || lead.referred_to_associate_id) {
-    throw new AppError(409, 'This lead is already with a partner or an associate');
+    throw new AppError(409, 'This lead is already with a channel partner or an associate');
   }
   const associate = await p.associate.findFirst({
     where: {

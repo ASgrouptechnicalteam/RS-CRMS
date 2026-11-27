@@ -66,7 +66,8 @@ const idOf = (raw: unknown) => {
   if (!Number.isInteger(n) || n <= 0) throw fail(400, 'Invalid ID format');
   return n;
 };
-const actorName = (req: CpRequest) => req.cp!.user?.full_name || req.cp!.full_name || 'Partner';
+const actorName = (req: CpRequest) =>
+  req.cp!.user?.full_name || req.cp!.full_name || 'Channel partner';
 const DEFAULT_TELECALLER_LIMIT = 3;
 
 // ── team ──────────────────────────────────────────────────────
@@ -756,7 +757,7 @@ router.post(
           actor_user_id: null,
           actor_name: actorName(req),
           kind: 'ASSIGN',
-          notes: toId ? `Assigned to ${names.get(toId)}.` : 'Taken back by the partner.',
+          notes: toId ? `Assigned to ${names.get(toId)}.` : 'Taken back by the channel partner.',
         },
       }),
     ]);
@@ -1795,7 +1796,8 @@ router.post(
  * project manager answer for the group.
  */
 const offeredVisit = async (req: CpRequest, id: number) => {
-  if (!isGroupWide(req)) throw fail(403, 'Only the partner or their manager can answer this.');
+  if (!isGroupWide(req))
+    throw fail(403, 'Only the channel partner or their manager can answer this.');
   const v = await p.siteVisitBooking.findFirst({
     where: {
       id,
@@ -1847,7 +1849,7 @@ router.post(
       v,
       { status: 'ACCEPTED' },
       'accepted by the channel partner.',
-      'Partner accepted the visit',
+      'Channel partner accepted the visit',
     );
     return res.status(200).json({ ok: true });
   }),
@@ -1865,7 +1867,7 @@ router.post(
       v,
       { status: 'REASSIGNED', assigned_agent_id: null },
       `declined by the channel partner: ${reason.slice(0, 300)}. Assign it to someone else.`,
-      'Partner declined the visit',
+      'Channel partner declined the visit',
     );
     return res.status(200).json({ ok: true });
   }),
@@ -1983,7 +1985,7 @@ router.post(
       });
       await notifyEmployee(booked.telecaller_id, {
         type: 'SYSTEM_ALERT',
-        title: 'Partner cancelled the visit',
+        title: 'Channel partner cancelled the visit',
         message:
           `Site visit ${booked.booking_code} was cancelled by the channel partner: ${reason}`.slice(
             0,
@@ -2107,7 +2109,7 @@ async function reportData(req: CpRequest) {
       by_status: countBy(visits, (v: any) => v.status),
       by_person: countBy(
         visits,
-        (v: any) => bookedBy.get(byLead.get(v.lead_id) as number) || 'Partner',
+        (v: any) => bookedBy.get(byLead.get(v.lead_id) as number) || 'Channel partner',
       ),
       rows: visits.map((v: any) => ({
         booking_code: v.booking_code,
@@ -2115,7 +2117,7 @@ async function reportData(req: CpRequest) {
         status: v.status,
         rating: v.rating,
         place: v.project?.name || v.property?.title || '',
-        booked_by: bookedBy.get(byLead.get(v.lead_id) as number) || 'Partner',
+        booked_by: bookedBy.get(byLead.get(v.lead_id) as number) || 'Channel partner',
       })),
     },
     bookings: {
@@ -2188,7 +2190,7 @@ router.get(
       );
     } else throw fail(400, 'Pick visits, bookings or listings.');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="partner-${kind}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="channel-partner-${kind}.csv"`);
     return res.status(200).send(body);
   }),
 );

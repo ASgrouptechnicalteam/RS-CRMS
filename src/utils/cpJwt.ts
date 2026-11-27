@@ -42,6 +42,6 @@ export const verifyCpToken = (token: string): CpTokenPayload => {
     issuer: ISSUER,
     algorithms: ['HS256'],
   }) as CpTokenPayload;
-  if (payload.typ !== 'cp') throw new Error('Not a partner token');
+  if (payload.typ !== 'cp') throw new Error('Not a channel partner token');
   return payload;
 };

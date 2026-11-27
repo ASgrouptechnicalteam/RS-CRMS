@@ -187,7 +187,7 @@ router.post(
       // (routes/cp.ts); checked after the password, so it reveals nothing.
       if (employee.roles.some((r: any) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL)) {
         return res.status(403).json({
-          error: 'Channel partners sign in at the partner page (/partner).',
+          error: 'Channel partners sign in on the channel partner app, not here.',
           code: 'USE_PARTNER_APP',
         });
       }

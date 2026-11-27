@@ -120,7 +120,7 @@ export async function reassignLead(
   if (assignee.roles.some((r) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL)) {
     throw new AppError(
       400,
-      'A channel partner cannot be given a lead here. Open the lead and use "Refer to a partner".',
+      'A channel partner cannot be given a lead here. Open the lead and use "Refer to a channel partner".',
     );
   }
 

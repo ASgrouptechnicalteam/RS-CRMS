@@ -122,7 +122,7 @@ router.post(
       const leadId = parseInt(req.params.id, 10);
       if (isNaN(leadId)) return res.status(400).json({ error: 'Invalid Lead ID' });
       await referLead(req.user!, leadId, req.body);
-      return res.status(200).json({ message: 'Lead referred to the partner' });
+      return res.status(200).json({ message: 'Lead referred to the channel partner' });
     } catch (error: any) {
       return handleServiceError(error, res);
     }

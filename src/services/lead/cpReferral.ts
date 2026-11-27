@@ -76,10 +76,11 @@ export async function referLead(
   if (!REFERRABLE_STATUSES.includes(lead.status)) {
     throw new AppError(
       409,
-      'A lead can be referred to a partner once a site visit is scheduled, or at negotiation or booking in progress',
+      'A lead can be referred to a channel partner once a site visit is scheduled, or at negotiation or booking in progress',
     );
   }
-  if (lead.referred_to_cp_id) throw new AppError(409, 'This lead is already with a partner');
+  if (lead.referred_to_cp_id)
+    throw new AppError(409, 'This lead is already with a channel partner');
 
   const partner = await p.employee.findFirst({
     where: {
@@ -91,7 +92,7 @@ export async function referLead(
     },
     select: { id: true, full_name: true, employee_code: true },
   });
-  if (!partner) throw new AppError(400, 'That partner is not active');
+  if (!partner) throw new AppError(400, 'That channel partner is not active');
   const partnerName = partner.full_name || partner.employee_code;
   const brief = (input.brief || '').trim().slice(0, 1500) || null;
 
@@ -113,7 +114,7 @@ export async function referLead(
         lead_id: lead.id,
         actor_id: user.employeeId,
         activity_type: 'REFERRED_TO_PARTNER',
-        notes: `Referred to partner ${partnerName} at ${lead.status}.${brief ? ` Brief: ${brief}` : ''}`,
+        notes: `Referred to channel partner ${partnerName} at ${lead.status}.${brief ? ` Brief: ${brief}` : ''}`,
       },
     });
     await tx.auditEvent.create({
@@ -153,7 +154,7 @@ export async function referLead(
       await note(
         md.id,
         'CP_REFERRAL_SENT',
-        'A lead was referred to a partner',
+        'A lead was referred to a channel partner',
         `${lead.customer_name} (${lead.lead_code}) was referred to ${partnerName}.`,
         `/leads/${lead.id}`,
       );
@@ -172,7 +173,7 @@ export async function takeBackLead(user: TokenPayload, leadId: number, reason: s
   const referral = await p.cpReferral.findFirst({
     where: { lead_id: lead.id, status: { in: OPEN_REFERRAL_STATUSES } },
   });
-  if (!referral) throw new AppError(409, 'This lead is not with a partner');
+  if (!referral) throw new AppError(409, 'This lead is not with a channel partner');
 
   const allowed =
     lead.assigned_to_id === user.employeeId ||
@@ -192,7 +193,7 @@ export async function takeBackLead(user: TokenPayload, leadId: number, reason: s
       lead_id: lead.id,
       actor_id: user.employeeId,
       activity_type: 'TAKEN_BACK_FROM_PARTNER',
-      notes: `Taken back from the partner. Reason: ${why}`,
+      notes: `Taken back from the channel partner. Reason: ${why}`,
     },
   });
   await p.auditEvent.create({
@@ -215,7 +216,7 @@ export async function takeBackLead(user: TokenPayload, leadId: number, reason: s
     await notifyEmployee(lead.assigned_to_id, {
       type: 'TARGET_ASSIGNED',
       title: 'A lead is back with you',
-      message: `${lead.customer_name} (${lead.lead_code}) was taken back from the partner. Reason: ${why}`,
+      message: `${lead.customer_name} (${lead.lead_code}) was taken back from the channel partner. Reason: ${why}`,
       link: `/leads/${lead.id}`,
     }).catch((e) => logger.error('[cpReferral] notify failed:', e));
   }
@@ -274,7 +275,7 @@ export async function getLeadReferral(user: TokenPayload, leadId: number) {
     id: referral.id,
     status: referral.status,
     partner_stage: referral.partner_stage,
-    partner_name: partner?.full_name || partner?.employee_code || 'Partner',
+    partner_name: partner?.full_name || partner?.employee_code || 'Channel partner',
     referred_by: by?.full_name || by?.employee_code || '',
     offered_at: referral.offered_at,
     accepted_at: referral.accepted_at,
@@ -313,7 +314,7 @@ export async function markReferralBooked(bookingId: number, customerId: number |
         lead_id: referral.lead_id,
         actor_id: referral.cp_id,
         activity_type: 'PARTNER_BOOKED',
-        notes: 'The booking was confirmed while the lead was with a partner.',
+        notes: 'The booking was confirmed while the lead was with a channel partner.',
       },
     });
     const mds = await p.employee.findMany({
@@ -329,7 +330,7 @@ export async function markReferralBooked(bookingId: number, customerId: number |
       await notifyEmployee(id, {
         type: 'CP_REFERRAL_BOOKED',
         title: 'A referred customer booked',
-        message: `${lead?.customer_name || 'The customer'} (${lead?.lead_code || ''}) booked while with the partner.`,
+        message: `${lead?.customer_name || 'The customer'} (${lead?.lead_code || ''}) booked while with the channel partner.`,
         link: id === referral.cp_id ? '/partner' : `/leads/${referral.lead_id}`,
       }).catch((e) => logger.error('[cpReferral] notify failed:', e));
     }

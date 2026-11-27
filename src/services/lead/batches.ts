@@ -6,6 +6,7 @@ import { logger } from '../../utils/logger';
 import { AppError } from './errors';
 import { activeContactedLeads } from './masterLeadReturn';
 import { moveLeadsKeepingStage } from './handoverMove';
+import { notExternalPartner } from '../../authz/dataScope';
 
 export type BatchKind = 'uncalled' | 'contacted';
 
@@ -126,7 +127,12 @@ export async function moveUploadBatch(
     throw new AppError(400, 'Choose whose leads to move');
   }
   const target = await p.employee.findFirst({
-    where: { id: input.to_employee_id, company_id: user.companyId, status: 'ACTIVE' },
+    where: {
+      id: input.to_employee_id,
+      company_id: user.companyId,
+      status: 'ACTIVE',
+      ...notExternalPartner,
+    },
     select: { id: true, full_name: true, employee_code: true },
   });
   if (!target) throw new AppError(404, 'Employee to move the leads to was not found');
@@ -250,7 +256,12 @@ async function moveContactedLeads(
       },
     }),
     p.employee.findFirst({
-      where: { id: input.to_employee_id, company_id: user.companyId, status: 'ACTIVE' },
+      where: {
+        id: input.to_employee_id,
+        company_id: user.companyId,
+        status: 'ACTIVE',
+        ...notExternalPartner,
+      },
       select: { id: true, full_name: true, employee_code: true, company_id: true },
     }),
   ]);

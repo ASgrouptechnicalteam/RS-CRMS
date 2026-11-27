@@ -112,8 +112,17 @@ export async function reassignLead(
     throw new AppError(403, 'Forbidden: Insufficient privileges or cross-company reassignment');
   }
 
-  const assignee = await p.employee.findFirst({ where: { id: assigneeId } });
+  const assignee = await p.employee.findFirst({
+    where: { id: assigneeId },
+    include: { roles: { include: { role: true } } },
+  });
   if (!assignee) throw new AppError(404, 'Assignee employee not found');
+  if (assignee.roles.some((r) => r.role.name === Roles.CHANNEL_PARTNER_EXTERNAL)) {
+    throw new AppError(
+      400,
+      'A channel partner cannot be given a lead here. Open the lead and use "Refer to a partner".',
+    );
+  }
 
   return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
     const newStatus = lead.status === 'NEW' ? 'ASSIGNED' : lead.status;

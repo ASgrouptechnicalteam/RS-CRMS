@@ -31,14 +31,21 @@ export const DM_EXECUTIVE_EDITABLE_PROJECT = [
 export class ProjectPolicy {
   /**
    * Who may type in a project's main details (plots/flats, availability, sizes, BHK types, starting price):
-   * the MD, Admin, the Technical Manager, and the PM this project is assigned to (not any other PM).
+   * the MD, Admin, the Technical Manager, the digital team (2026-11-27), and the PM this project is assigned
+   * to (not any other PM).
    */
   static canEditKeyDetails(
     user: { employeeId: number; roles: string[] },
     project: { assigned_pm_id?: number | null },
   ): boolean {
-    if (user.roles.some((r) => [Roles.MD, Roles.ADMIN, Roles.TECHNICAL_MANAGER].includes(r as any)))
-      return true;
+    const always: string[] = [
+      Roles.MD,
+      Roles.ADMIN,
+      Roles.TECHNICAL_MANAGER,
+      Roles.DIGITAL_MARKETING_HEAD,
+      Roles.DIGITAL_MARKETING_EXECUTIVE,
+    ];
+    if (user.roles.some((r) => always.includes(r))) return true;
     return (
       user.roles.includes(Roles.PROJECT_MANAGER) &&
       project.assigned_pm_id != null &&

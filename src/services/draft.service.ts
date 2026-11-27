@@ -198,7 +198,8 @@ export class DraftService {
     const where: Prisma.DraftSubmissionWhereInput = {
       company_id: { in: companyIds },
       ...(reviewer ? {} : { submitted_by: user.employeeId }),
-      ...(q.status ? { status: q.status as any } : {}),
+      // One status, or several separated by commas.
+      ...(q.status ? { status: { in: q.status.split(',') as any } } : {}),
       ...(q.type ? { type: q.type as any } : {}),
     };
     const [drafts, total] = await Promise.all([
@@ -403,6 +404,112 @@ export class DraftService {
       },
       id,
     );
+    return loadVisible(user, id);
+  }
+
+  /**
+   * The digital team found that this is already in the CRM (2026-11-27), so it is not added twice. If they
+   * name a record they themselves created after moving the listing to Pending, it counts as their work, as
+   * before. Anything else is closed without target credit for anyone.
+   */
+  static async alreadyInCrm(user: TokenPayload, id: number, recordId?: number | null) {
+    const draft = await loadVisible(user, id);
+    assertNotOwnDraft(user, draft);
+    if (draft.status === 'READY_IN_CRM')
+      throw appError(409, 'This listing is already marked as in the CRM.');
+
+    const isProject = draft.type === 'PROJECT';
+    let record: {
+      id: number;
+      name: string;
+      created_by_id: number | null;
+      created_at: Date;
+    } | null = null;
+    if (recordId) {
+      const where = { id: recordId, company_id: draft.company_id };
+      if (isProject) {
+        record = await p.project.findFirst({
+          where,
+          select: { id: true, name: true, created_by_id: true, created_at: true },
+        });
+      } else {
+        const found = await p.property.findFirst({
+          where,
+          select: { id: true, title: true, created_by_id: true, created_at: true },
+        });
+        record = found ? { ...found, name: found.title } : null;
+      }
+      if (!record)
+        throw appError(404, `${isProject ? 'Project' : 'Property'} not found in this company.`);
+
+      const theirWork =
+        draft.status === 'IN_PROGRESS' &&
+        draft.picked_by === user.employeeId &&
+        record.created_by_id === user.employeeId &&
+        !!draft.picked_at &&
+        record.created_at >= draft.picked_at;
+      const taken = await p.draftSubmission.findFirst({
+        where: isProject ? { linked_project_id: record.id } : { linked_property_id: record.id },
+        select: { id: true },
+      });
+      if (theirWork && !taken) return this.link(user, id, record.id);
+    }
+
+    const me = await p.employee.findUnique({
+      where: { id: user.employeeId },
+      select: { full_name: true, employee_code: true },
+    });
+    const mark = {
+      record_id: record?.id ?? null,
+      record_name: record?.name ?? null,
+      by: user.employeeId,
+      by_name: me?.full_name || me?.employee_code || null,
+      at: new Date().toISOString(),
+    };
+    const moved = await p.draftSubmission.updateMany({
+      where: { id, status: { in: ['SUBMITTED', 'IN_PROGRESS', 'NEEDS_INFO'] } },
+      data: {
+        status: 'READY_IN_CRM',
+        ready_at: null,
+        status_note: null,
+        extra: {
+          ...((draft.extra as Record<string, unknown> | null) ?? {}),
+          already_in_crm: mark,
+        } as Prisma.InputJsonValue,
+      },
+    });
+    if (!moved.count) throw appError(409, 'This listing was just changed. Reload and try again.');
+    await notify(
+      [draft.submitted_by],
+      user.employeeId,
+      {
+        type: 'DRAFT_READY',
+        title: 'Your listing is already in the CRM',
+        message: `Your ${label(draft)} is already in the CRM${record ? ` as "${record.name}"` : ''}.`,
+      },
+      id,
+    );
+    return loadVisible(user, id);
+  }
+
+  /** Marked "already in CRM" by mistake: back to Pending, with the person who undid it. */
+  static async notInCrm(user: TokenPayload, id: number) {
+    const draft = await loadVisible(user, id);
+    assertNotOwnDraft(user, draft);
+    const extra = { ...((draft.extra as Record<string, unknown> | null) ?? {}) };
+    if (draft.status !== 'READY_IN_CRM' || !extra.already_in_crm)
+      throw appError(409, 'Only a listing marked "already in CRM" can be moved back.');
+    delete extra.already_in_crm;
+    const moved = await p.draftSubmission.updateMany({
+      where: { id, status: 'READY_IN_CRM' },
+      data: {
+        status: 'IN_PROGRESS',
+        picked_by: user.employeeId,
+        picked_at: new Date(),
+        extra: Object.keys(extra).length ? (extra as Prisma.InputJsonValue) : Prisma.DbNull,
+      },
+    });
+    if (!moved.count) throw appError(409, 'This listing was just changed. Reload and try again.');
     return loadVisible(user, id);
   }
 

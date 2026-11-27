@@ -3,8 +3,21 @@
  * details typed in by hand by the assigned PM, MD, Admin or Technical Manager: plots/flats, availability, sizes,
  * BHK types, starting price. Nothing is counted from units: the team does not keep units up to date.
  */
+/** Plots and commercial space have no BHK. */
+export const PROJECT_TYPES_WITHOUT_BHK = [
+  'PLOTTED',
+  'RESIDENTIAL_PLOTS',
+  'AGRICULTURAL_LAND',
+  'COMMERCIAL_SHOP',
+  'COMMERCIAL_OFFICE',
+  'COMMERCIAL',
+];
+export const hasBhk = (projectType: unknown) =>
+  !PROJECT_TYPES_WITHOUT_BHK.includes(String(projectType ?? ''));
+
 export interface ProjectFactsInput {
   id: number;
+  project_type?: string | null;
   approval_authorities?: unknown;
   approval_authority?: string | null;
   rera_status?: string | null;
@@ -80,7 +93,7 @@ export function projectFactsFor(projects: ProjectFactsInput[]): Map<number, Proj
   const result = new Map<number, ProjectFacts>();
   for (const x of projects) {
     const d = detailsOf(x.key_details);
-    const bhk = Array.isArray(d.bhk_types) ? d.bhk_types : [];
+    const bhk = hasBhk(x.project_type) && Array.isArray(d.bhk_types) ? d.bhk_types : [];
     result.set(x.id, {
       approved_by: approvedByOf(x),
       units_total: num(d.units_total),

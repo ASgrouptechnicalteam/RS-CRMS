@@ -5,6 +5,7 @@ import { AuthenticatedRequest, authenticateToken } from '../middleware/auth';
 import { hasEffectivePermission, requireAuthz } from '../middleware/authz';
 import { validateRequestBody } from '../middleware/validate';
 import {
+  DraftAlreadyInCrmSchema,
   DraftLinkSchema,
   DraftNeedsInfoSchema,
   DraftReplySchema,
@@ -113,7 +114,7 @@ router.get(
     try {
       const status = typeof req.query.status === 'string' ? req.query.status : undefined;
       const type = typeof req.query.type === 'string' ? req.query.type : undefined;
-      if (status && !(DRAFT_STATUSES as readonly string[]).includes(status)) {
+      if (status?.split(',').some((x) => !(DRAFT_STATUSES as readonly string[]).includes(x))) {
         return res.status(400).json({ error: 'Unknown status' });
       }
       if (type && !(DRAFT_TYPES as readonly string[]).includes(type)) {
@@ -240,6 +241,39 @@ router.post(
       return res
         .status(200)
         .json({ draft: await DraftService.link(req.user!, id, req.body.record_id) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:id/already-in-crm',
+  authenticateToken,
+  requireAuthz(Permissions.DRAFTS_REVIEW),
+  validateRequestBody(DraftAlreadyInCrmSchema),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid ID format' });
+      return res
+        .status(200)
+        .json({ draft: await DraftService.alreadyInCrm(req.user!, id, req.body.record_id) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:id/not-in-crm',
+  authenticateToken,
+  requireAuthz(Permissions.DRAFTS_REVIEW),
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ error: 'Invalid ID format' });
+      return res.status(200).json({ draft: await DraftService.notInCrm(req.user!, id) });
     } catch (err) {
       next(err);
     }

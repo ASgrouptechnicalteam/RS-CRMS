@@ -111,6 +111,11 @@ export const DraftLinkSchema = z.object({
   record_id: z.number().int().positive(),
 });
 
+/** "Already in CRM": naming the record is optional. */
+export const DraftAlreadyInCrmSchema = z.object({
+  record_id: z.number().int().positive().optional().nullable(),
+});
+
 export const DraftReplySchema = z.object({
   note: z.string().trim().max(1000).optional(),
 });

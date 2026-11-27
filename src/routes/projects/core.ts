@@ -23,6 +23,7 @@ import {
 import { getProjectAttention, projectMissing } from '../../services/projectAttention.service';
 import { notifyEmployee } from '../../utils/notifyEmployee';
 import { ProjectPolicy } from '../../policies/project.policy';
+import { hasBhk } from '../../services/projectFacts';
 import { z } from 'zod';
 import {
   ProjectUpdateService,
@@ -49,7 +50,7 @@ const projectInScope = () => async (req: AuthenticatedRequest) => {
 };
 
 // PUT /api/v1/projects/:id/key-details - the main details typed in by hand (plots/flats, availability, sizes,
-// BHK types, starting price). Only the MD, Admin, Technical Manager and the project's assigned PM.
+// BHK types, starting price). The MD, Admin, Technical Manager, the digital team and the project's assigned PM.
 router.put(
   '/:id/key-details',
   authenticateToken,
@@ -62,13 +63,13 @@ router.put(
       const scope = await buildProjectScope(req.user!);
       const project = await p.project.findFirst({
         where: { id, ...scope },
-        select: { id: true, name: true, assigned_pm_id: true },
+        select: { id: true, name: true, assigned_pm_id: true, project_type: true },
       });
       if (!project) return res.status(404).json({ error: 'Project not found' });
       if (!ProjectPolicy.canEditKeyDetails(req.user!, project)) {
         return res.status(403).json({
           error:
-            "Only the MD, Admin, the Technical Manager and this project's assigned PM can change these details.",
+            "Only the MD, Admin, the Technical Manager, the digital team and this project's assigned PM can change these details.",
         });
       }
       const b = req.body as Record<string, any>;
@@ -76,7 +77,7 @@ router.put(
         units_total: b.units_total ?? null,
         units_available: b.units_available ?? null,
         sizes: b.sizes ? String(b.sizes) : null,
-        bhk_types: (b.bhk_types ?? []).map((x: any) => ({
+        bhk_types: (hasBhk(project.project_type) ? (b.bhk_types ?? []) : []).map((x: any) => ({
           bhk: x.bhk,
           total: x.total ?? null,
           available: x.available ?? null,

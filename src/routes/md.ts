@@ -783,7 +783,12 @@ export async function buildApprovalsInbox(user: TokenPayload) {
   const leadCo = isAdmin ? {} : { lead: { company_id: { in: companyIds } } };
   const now = new Date();
   const take = 5;
-  const visitWhere = { status: { in: ['REQUESTED', 'PENDING_ACCEPTANCE'] as any }, ...leadCo };
+  // A visit offered to a channel partner waits for the partner, not for anyone on this page.
+  const visitWhere = {
+    status: { in: ['REQUESTED', 'PENDING_ACCEPTANCE'] as any },
+    NOT: { project_manager_id: null, assigned_agent_id: { not: null } },
+    ...leadCo,
+  };
 
   const [
     properties,

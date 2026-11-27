@@ -113,56 +113,66 @@ export async function reassignVisit(
 
   const wasWithPartner = await partnerOfVisit(visit);
 
-  return await p.$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
-    // Log the reassignment hop (reason visibility restricted per §2).
-    await tx.siteVisitReassignment.create({
-      data: {
-        visit_id: visitId,
-        from_employee_id: visit.project_manager_id ?? user.employeeId,
-        to_employee_id: toEmployeeId,
-        reason,
-      },
-    });
+  const passed = await p.$transaction(
+    async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+      // Log the reassignment hop (reason visibility restricted per §2).
+      await tx.siteVisitReassignment.create({
+        data: {
+          visit_id: visitId,
+          from_employee_id: visit.project_manager_id ?? user.employeeId,
+          to_employee_id: toEmployeeId,
+          reason,
+        },
+      });
 
-    const updated = await tx.siteVisitBooking.update({
-      where: { id: visitId },
-      data: {
-        status: 'PENDING_ACCEPTANCE',
-        project_manager_id: toEmployeeId,
-        ...(wasWithPartner ? { assigned_agent_id: null } : {}),
-      },
-    });
+      const updated = await tx.siteVisitBooking.update({
+        where: { id: visitId },
+        data: {
+          status: 'PENDING_ACCEPTANCE',
+          project_manager_id: toEmployeeId,
+          ...(wasWithPartner ? { assigned_agent_id: null } : {}),
+        },
+      });
 
-    await tx.leadActivity.create({
-      data: {
-        lead: { connect: { id: visit.lead_id } },
-        actor: { connect: { id: user.employeeId } },
-        activity_type: 'SITE_VISIT_REASSIGNED',
-        notes: `Site visit ${visit.booking_code} reassigned to ${target.full_name || target.employee_code}. Reason: ${reason}`,
-      },
-    });
+      await tx.leadActivity.create({
+        data: {
+          lead: { connect: { id: visit.lead_id } },
+          actor: { connect: { id: user.employeeId } },
+          activity_type: 'SITE_VISIT_REASSIGNED',
+          notes: `Site visit ${visit.booking_code} reassigned to ${target.full_name || target.employee_code}. Reason: ${reason}`,
+        },
+      });
 
-    await tx.notification.create({
-      data: {
-        employee_id: toEmployeeId,
-        type: 'TARGET_ASSIGNED',
-        title: 'Site Visit Reassigned to You',
-        message: `Site visit ${visit.booking_code} has been reassigned to you for acceptance.`,
-      },
-    });
-    // Web push to reassigned employee (outside transaction)
-    notifyEmployee(
-      toEmployeeId,
-      {
-        type: 'TARGET_ASSIGNED',
-        title: 'Site Visit Reassigned to You',
-        message: `Site visit ${visit.booking_code} has been reassigned to you for acceptance.`,
-      },
-      { skipDbNotification: true },
-    ).catch((err) => logger.error('[WebPush] Site visit reassign:', err));
+      await tx.notification.create({
+        data: {
+          employee_id: toEmployeeId,
+          type: 'TARGET_ASSIGNED',
+          title: 'Site Visit Reassigned to You',
+          message: `Site visit ${visit.booking_code} has been reassigned to you for acceptance.`,
+        },
+      });
+      // Web push to reassigned employee (outside transaction)
+      notifyEmployee(
+        toEmployeeId,
+        {
+          type: 'TARGET_ASSIGNED',
+          title: 'Site Visit Reassigned to You',
+          message: `Site visit ${visit.booking_code} has been reassigned to you for acceptance.`,
+        },
+        { skipDbNotification: true },
+      ).catch((err) => logger.error('[WebPush] Site visit reassign:', err));
 
-    return updated;
-  });
+      return updated;
+    },
+  );
+  if (wasWithPartner) {
+    await notifyEmployee(wasWithPartner, {
+      type: 'SYSTEM_ALERT',
+      title: 'Site visit given to someone else',
+      message: `Site visit ${visit.booking_code} no longer needs you.`,
+    }).catch((err) => logger.error('[site-visit] notify removed partner:', err));
+  }
+  return passed;
 }
 
 /** escalate: no PM/Agent available → Marketing Director for manual resolution. */
@@ -513,6 +523,13 @@ export async function assignAgent(
   }
   if (!SiteVisitPolicy.canAssignAgentToVisit(user, visit)) {
     throw { status: 403, message: "Forbidden: only this visit's PM can choose who runs it" };
+  }
+  if (await partnerOfVisit(visit)) {
+    throw {
+      status: 409,
+      message:
+        'This visit is with a channel partner. Use "Change who goes" to give it to someone else.',
+    };
   }
   const agentRoles = (agentRow.roles || []).map((er: any) => er.role?.name).filter(Boolean);
   if (!SiteVisitPolicy.canRunVisit({ roles: agentRoles })) {

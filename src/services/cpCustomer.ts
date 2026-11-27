@@ -18,13 +18,16 @@ export type CpInterest = (typeof CP_INTEREST)[number];
 export type CpStep =
   'NEW' | 'CALLED' | 'NEED_KNOWN' | 'SITE_VISIT' | 'PRICE_TALK' | 'BOOKED' | 'CLOSED';
 
-/** The step shown to the partner. Price talk and Booked follow our own CRM once a visit has been booked there. */
-export function stepOf(status: string, crmStatus?: string | null): CpStep {
+/**
+ * The step shown to the partner. Price talk starts when a visit is done and the customer is still interested;
+ * Booked and Closed also follow our own CRM once a visit has been booked there.
+ */
+export function stepOf(status: string, crmStatus?: string | null, visited?: boolean): CpStep {
   if (status === 'DROPPED' || status === 'NOT_INTERESTED') return 'CLOSED';
   if (crmStatus === 'BOOKED' || crmStatus === 'BOOKING_INITIATED') return 'BOOKED';
   if (crmStatus === 'NEGOTIATION') return 'PRICE_TALK';
   if (crmStatus === 'DROPPED') return 'CLOSED';
-  if (status === 'VISIT_BOOKED') return 'SITE_VISIT';
+  if (status === 'VISIT_BOOKED') return visited ? 'PRICE_TALK' : 'SITE_VISIT';
   if (status === 'INTERESTED') return 'NEED_KNOWN';
   return status === 'CONTACTED' ? 'CALLED' : 'NEW';
 }
@@ -38,6 +41,58 @@ export const interestOfRating = (rating?: string | null): CpInterest | null =>
       : rating === 'COLD' || rating === 'NOT_INTERESTED'
         ? 'COLD'
         : null;
+
+export interface VisitState {
+  status: string;
+  rating?: string | null;
+  completed_at?: Date | null;
+}
+
+/** True when no visit is still to come and the last one done did not end in "not interested". */
+export function readyForPriceTalk(visits: VisitState[]): boolean {
+  if (visits.some((v) => v.status !== 'COMPLETED' && v.status !== 'CANCELLED')) return false;
+  const last = visits
+    .filter((v) => v.status === 'COMPLETED')
+    .sort((a, b) => Number(a.completed_at ?? 0) - Number(b.completed_at ?? 0))
+    .pop();
+  return !!last?.rating && last.rating !== 'NOT_INTERESTED';
+}
+
+/** The partner's kinds of property in the CRM's own words. */
+const CRM_PROPERTY_TYPE: Record<string, string> = {
+  PLOT: 'RESIDENTIAL_PLOT',
+  APARTMENT: 'RESIDENTIAL_APARTMENT',
+  INDEPENDENT_FLOOR: 'RESIDENTIAL_APARTMENT',
+  PENTHOUSE: 'RESIDENTIAL_APARTMENT',
+  STUDIO: 'RESIDENTIAL_APARTMENT',
+  VILLA: 'RESIDENTIAL_VILLA',
+  INDEPENDENT_HOUSE: 'RESIDENTIAL_VILLA',
+  DUPLEX: 'RESIDENTIAL_VILLA',
+  FARM_HOUSE: 'RESIDENTIAL_VILLA',
+  AGRICULTURAL_LAND: 'AGRICULTURAL_LAND',
+  COMMERCIAL_SHOP: 'COMMERCIAL_SHOP',
+  COMMERCIAL_OFFICE: 'COMMERCIAL_OFFICE',
+};
+
+export const crmPropertyTypes = (value?: string | null): string | null =>
+  [
+    ...new Set(
+      (value || '')
+        .split(',')
+        .map((v) => CRM_PROPERTY_TYPE[v.trim()])
+        .filter(Boolean),
+    ),
+  ].join(',') || null;
+
+/** The places a partner typed in one box, as a list: no blanks, no repeats, at most ten. */
+export function areaList(value?: string | null): string[] {
+  const areas = new Map<string, string>();
+  for (const part of (value || '').split(/[,;/]/)) {
+    const area = part.trim().slice(0, 150);
+    if (area && !areas.has(area.toLowerCase())) areas.set(area.toLowerCase(), area);
+  }
+  return [...areas.values()].slice(0, 10);
+}
 
 /** Nobody may call this customer again. */
 export const isDoNotCall = (exitReason?: string | null) =>

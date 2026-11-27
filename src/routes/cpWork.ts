@@ -16,6 +16,9 @@ import {
   interestOfRating,
   isDoNotCall,
   stepOf,
+  areaList,
+  crmPropertyTypes,
+  readyForPriceTalk,
 } from '../services/cpCustomer';
 import { requireCp, requireOwner, asUser, CpRequest } from './cp';
 import { projectFactsFor } from '../services/projectFacts';
@@ -258,7 +261,7 @@ const leadView = (l: any, names: Map<number, string>) => ({
   preferred_locations: l.preferred_locations ?? null,
   property_type: l.property_type ?? null,
   created_at: l.created_at,
-  step: stepOf(l.status, l.crm_status),
+  step: stepOf(l.status, l.crm_status, l.visited),
   interest: l.shown_interest ?? l.interest ?? null,
   closed_reason: l.exit_reason
     ? ((LEAD_EXIT_REASON_LABELS as Record<string, string>)[l.exit_reason] ?? null)
@@ -267,8 +270,8 @@ const leadView = (l: any, names: Map<number, string>) => ({
 });
 
 /**
- * Adds what our CRM knows about customers who had a visit booked: their stage there, and the result of a visit
- * that happened after the last call.
+ * Adds what our CRM knows about customers who had a visit booked: their stage there, whether the visit is behind
+ * them, and the result of a visit that happened after the last call.
  */
 const withCrm = async (companyId: number, leads: any[]) => {
   const ids = leads.map((l) => l.lead_id).filter(Boolean);
@@ -279,22 +282,56 @@ const withCrm = async (companyId: number, leads: any[]) => {
       select: { id: true, status: true },
     }),
     p.siteVisitBooking.findMany({
-      where: { lead_id: { in: ids }, status: 'COMPLETED', rating: { not: null } },
+      where: { lead_id: { in: ids }, status: { not: 'CANCELLED' } },
       orderBy: { completed_at: 'asc' },
-      select: { lead_id: true, rating: true, completed_at: true },
+      select: { lead_id: true, status: true, rating: true, completed_at: true },
     }),
   ]);
   const status = new Map<number, string>(ours.map((x: any) => [x.id, x.status]));
-  const visit = new Map<number, any>(visits.map((v: any) => [v.lead_id, v]));
+  const visit = new Map<number, any>(
+    visits.filter((v: any) => v.status === 'COMPLETED' && v.rating).map((v: any) => [v.lead_id, v]),
+  );
   return leads.map((l) => {
     const v = visit.get(l.lead_id);
     const newer = v && (!l.last_called_at || v.completed_at > l.last_called_at);
     return {
       ...l,
       crm_status: status.get(l.lead_id) ?? null,
+      visited: readyForPriceTalk(visits.filter((x: any) => x.lead_id === l.lead_id)),
       shown_interest: newer ? interestOfRating(v.rating) : l.interest,
     };
   });
+};
+
+/** Our office sees what the customer is looking for. Only empty boxes are filled: what the office wrote stays. */
+const shareNeeds = async (leadId: number, l: any) => {
+  const ours = await p.lead.findUnique({
+    where: { id: leadId },
+    select: {
+      budget_min: true,
+      budget_max: true,
+      property_type_preference: true,
+      preferred_location: true,
+      preferred_locations: { select: { id: true }, take: 1 },
+    },
+  });
+  if (!ours) return;
+  const data: Record<string, unknown> = {};
+  // The two ends of a budget go together, so half of the office's own is never overwritten.
+  if (ours.budget_min == null && ours.budget_max == null) {
+    if (l.budget_min != null) data.budget_min = l.budget_min;
+    if (l.budget_max != null) data.budget_max = l.budget_max;
+  }
+  const types = crmPropertyTypes(l.property_type);
+  if (!ours.property_type_preference && types) data.property_type_preference = types;
+  const areas = areaList(l.preferred_locations);
+  if (areas.length && !ours.preferred_location && !ours.preferred_locations.length) {
+    data.preferred_location = areas[0];
+    data.preferred_locations = {
+      create: areas.map((location, sort_order) => ({ location, sort_order })),
+    };
+  }
+  if (Object.keys(data).length) await p.lead.update({ where: { id: leadId }, data });
 };
 
 /** A visit that is still to happen. */
@@ -1690,6 +1727,7 @@ router.post(
       ourLeadId = made.id;
       await p.cpLead.update({ where: { id: l.id }, data: { lead_id: ourLeadId } });
     }
+    await shareNeeds(ourLeadId!, l);
     const user = { ...asUser(req), permissions: [Permissions.SITE_VISITS_CREATE] };
     const self = body.data.mode === 'SELF';
     const visit: any = await bookVisit(user as any, {
@@ -1825,9 +1863,16 @@ router.post(
     });
     const mine = await p.cpLead.findFirst({ where: { cp_id: req.cp!.id, lead_id: v.lead_id } });
     if (mine) {
-      // With no other visit to come, the customer goes back to "need known".
+      // With no other visit to come, the customer goes back to "need known", unless an earlier visit
+      // already brought them to price talk.
       if (mine.status === 'VISIT_BOOKED' && !(await openVisit(v.lead_id))) {
-        await p.cpLead.update({ where: { id: mine.id }, data: { status: 'INTERESTED' } });
+        const rest = await p.siteVisitBooking.findMany({
+          where: { lead_id: v.lead_id },
+          select: { status: true, rating: true, completed_at: true },
+        });
+        if (!readyForPriceTalk(rest)) {
+          await p.cpLead.update({ where: { id: mine.id }, data: { status: 'INTERESTED' } });
+        }
       }
       await p.cpLeadActivity.create({
         data: {

@@ -50,6 +50,9 @@ export async function claimLead(user: TokenPayload, leadId: number) {
   ) {
     throw new AppError(403, 'Forbidden: Insufficient privileges');
   }
+  if (lead.cp_owner_id) {
+    throw new AppError(409, "This is a channel partner's customer. It cannot be claimed.");
+  }
   if (lead.assigned_to_id !== null) {
     throw new AppError(409, 'This lead has already been claimed by someone else');
   }

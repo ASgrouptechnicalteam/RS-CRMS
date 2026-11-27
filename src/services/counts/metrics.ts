@@ -333,6 +333,7 @@ export async function leadsAtRisk(
       where: {
         company_id: { in: companyIds },
         assigned_to_id: null,
+        cp_owner_id: null, // a channel partner's customer is not waiting for an owner of ours
         status: { notIn: ['BOOKED', 'DROPPED'] },
       },
     }),

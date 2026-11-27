@@ -14,7 +14,8 @@ const p = prisma;
  * utils/distributionService.ts) and so were never assigned to anyone. Rare in
  * practice, but with no other route to them they'd otherwise sit invisible
  * forever. Scoped to the requester's accessible companies, not their
- * personal team, since by definition no one owns these yet.
+ * personal team, since by definition no one owns these yet. A channel
+ * partner's own customer (cp_owner_id) is not waiting for an owner of ours.
  */
 export async function getUnclaimedLeads(user: TokenPayload) {
   const companyIds = await getAccessibleCompanyIds(user);
@@ -22,6 +23,7 @@ export async function getUnclaimedLeads(user: TokenPayload) {
     where: {
       company_id: user.roles.includes(Roles.ADMIN) ? undefined : { in: companyIds },
       assigned_to_id: null,
+      cp_owner_id: null,
       status: 'NEW',
     },
     include: {
@@ -74,7 +76,7 @@ async function buildFilteredLeadWhere(user: TokenPayload, filters: LeadListFilte
     // Current owner of the lead is the employee currently assigned to it
     extra.push({ assigned_to_id: user.employeeId });
   }
-  if (filters.unassigned) extra.push({ assigned_to_id: null });
+  if (filters.unassigned) extra.push({ assigned_to_id: null, cp_owner_id: null });
   if (filters.created_from) extra.push({ created_at: { gte: filters.created_from } });
   if (filters.created_to) extra.push({ created_at: { lt: filters.created_to } });
   const q = filters.q?.trim();
@@ -273,7 +275,7 @@ export async function getDistributionMonitor(companyId: number) {
 
   const totalLeadsCount = await p.lead.count({ where: { company_id: companyId } });
   const unassignedCount = await p.lead.count({
-    where: { company_id: companyId, assigned_to_id: null },
+    where: { company_id: companyId, assigned_to_id: null, cp_owner_id: null },
   });
 
   return { totalLeadsCount, unassignedCount, telecallers: monitorData };

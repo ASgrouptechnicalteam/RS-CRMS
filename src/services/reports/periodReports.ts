@@ -1825,7 +1825,12 @@ async function technicalReport(ctx: Ctx): Promise<Partial<ReportDoc>> {
   if (ctx.monthly) {
     const [noOwner, dupes] = await Promise.all([
       p.lead.count({
-        where: { ...co, assigned_to_id: null, status: { notIn: ['BOOKED', 'DROPPED'] } },
+        where: {
+          ...co,
+          assigned_to_id: null,
+          cp_owner_id: null,
+          status: { notIn: ['BOOKED', 'DROPPED'] },
+        },
       }),
       p.lead.groupBy({
         by: ['phone'],

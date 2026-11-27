@@ -709,6 +709,7 @@ export class AnalyticsService {
         id: true,
         status: true,
         assigned_to_id: true,
+        cp_owner_id: true,
         created_by_id: true,
         last_contacted_at: true,
         created_at: true,
@@ -718,7 +719,7 @@ export class AnalyticsService {
     const kpis = {
       totalLeads: allLeads.length,
       newLeads: allLeads.filter((l: any) => l.status === 'NEW').length,
-      unassignedLeads: allLeads.filter((l: any) => !l.assigned_to_id).length,
+      unassignedLeads: allLeads.filter((l: any) => !l.assigned_to_id && !l.cp_owner_id).length,
       contacted: allLeads.filter((l: any) => l.status === 'CONTACTED').length,
       qualified: allLeads.filter((l: any) => l.status === 'QUALIFIED').length,
       siteVisits: allLeads.filter((l: any) => l.status === 'SITE_VISIT_SCHEDULED').length,

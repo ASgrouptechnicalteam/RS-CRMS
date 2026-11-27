@@ -128,7 +128,12 @@ router.get(
         }),
         p.lead.count({ where: { ...company, created_at: today } }),
         p.lead.count({
-          where: { ...company, assigned_to_id: null, status: { notIn: ['BOOKED', 'DROPPED'] } },
+          where: {
+            ...company,
+            assigned_to_id: null,
+            cp_owner_id: null,
+            status: { notIn: ['BOOKED', 'DROPPED'] },
+          },
         }),
         p.leadActivity.count({
           where: { activity_type: 'CALL_LOGGED', created_at: today, lead: company },

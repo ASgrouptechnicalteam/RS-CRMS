@@ -25,6 +25,7 @@ import { notifyEmployee } from '../../utils/notifyEmployee';
 import { dayInfo } from '../../services/workCalendar';
 
 import { getLogoutBlockers } from '../../services/dayPlan.service';
+import { checkOutState } from '../../services/wfhDay';
 
 const router = Router();
 const p = prisma;
@@ -85,9 +86,13 @@ router.get('/wfh/today', authenticateToken, async (req: AuthenticatedRequest, re
         orderBy: { check_in_at: 'desc' },
       }),
     ]);
+    // Only an open check-in made from the app is checked out here.
+    const open = !!log && !log.check_out_at && ['REMOTE', 'FIELD'].includes(log.source);
+    const me = open ? await p.employee.findUnique({ where: { id: employeeId } }) : null;
     return res.status(200).json({
       date: dateString,
       wfh_today: !!wfh,
+      checkout: me ? await checkOutState(me) : null,
       day_type: wfh?.type || null,
       log: log
         ? {

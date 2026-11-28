@@ -20,6 +20,8 @@ import { getAccessibleCompanyIds } from '../../authz/dataScope';
 
 import { uncalledAssigned } from '../../services/lead/masterLeads';
 
+import { markCheckInFromRequest } from '../../services/wfhDay';
+
 const router = Router();
 
 const p = prisma;
@@ -27,6 +29,8 @@ const p = prisma;
 // Same scope as the MD Approvals inbox (routes/md.ts): every company the
 // reviewer can access (Admin: all). Using only the home company meant the
 // inbox could count requests this queue never showed.
+const OWN_REQUEST = 'This is your own request. Someone else has to decide it.';
+
 const proposalEmployeeScope = async (req: AuthenticatedRequest) =>
   req.user!.roles.includes(Roles.ADMIN)
     ? {}
@@ -245,7 +249,11 @@ router.post(
           leave_type,
           leave_kind: leaveKind,
           target_date: day,
-          reason: sick ? `Sick leave: ${reason}` : emergency ? `Emergency leave: ${reason}` : reason,
+          reason: sick
+            ? `Sick leave: ${reason}`
+            : emergency
+              ? `Emergency leave: ${reason}`
+              : reason,
           status: 'PENDING',
           created_at: createdAt,
         })),
@@ -704,6 +712,10 @@ router.post(
         where: { id: proposal.employee_id, ...(await proposalEmployeeScope(req)) },
       });
       if (!inScope) return res.status(404).json({ error: 'Proposal not found' });
+      // Nobody decides their own request, the same rule as the other attendance requests.
+      if (proposal.employee_id === req.user!.employeeId) {
+        return res.status(403).json({ error: OWN_REQUEST });
+      }
       if (proposal.status !== 'PENDING') {
         return res
           .status(409)
@@ -764,7 +776,9 @@ router.post(
         });
         await carryPlansForward(
           updated.employee_id,
-          approvedDays.map((d: { target_date: Date }) => getISTComponents(d.target_date).dateString),
+          approvedDays.map(
+            (d: { target_date: Date }) => getISTComponents(d.target_date).dateString,
+          ),
         ).catch((err) => logger.error({ err }, 'Carrying the plan forward after leave failed'));
       }
 
@@ -839,9 +853,18 @@ router.post(
         }
       }
 
+      // A work-from-home request sent on the day itself: the check-in is the time it was sent.
+      let checkedInAt: Date | null = null;
+      if (updated.type === 'WORK_FROM_HOME') {
+        checkedInAt = await markCheckInFromRequest(updated).catch((err) => {
+          logger.error({ err }, 'Marking the work-from-home check-in failed');
+          return null;
+        });
+      }
+
       notifyEmployee(proposal.employee_id, {
         title: 'Proposal Approved',
-        message: `Your ${proposalLabel(proposal.type)} request for ${new Date(proposal.target_date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}${leaveDays > 1 ? ` (${leaveDays} days)` : ''} has been approved.`,
+        message: `Your ${proposalLabel(proposal.type)} request for ${new Date(proposal.target_date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}${leaveDays > 1 ? ` (${leaveDays} days)` : ''} has been approved.${checkedInAt ? ` Your check-in is marked at ${checkedInAt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' })}. Check out from My Attendance after 6 PM.` : ''}`,
         type: 'SYSTEM',
         link: '/requests',
       });
@@ -881,6 +904,10 @@ router.post(
         where: { id: proposal.employee_id, ...(await proposalEmployeeScope(req)) },
       });
       if (!inScope) return res.status(404).json({ error: 'Proposal not found' });
+      // Nobody decides their own request, the same rule as the other attendance requests.
+      if (proposal.employee_id === req.user!.employeeId) {
+        return res.status(403).json({ error: OWN_REQUEST });
+      }
       if (proposal.status !== 'PENDING') {
         return res
           .status(409)

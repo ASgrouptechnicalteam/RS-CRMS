@@ -447,16 +447,31 @@ router.get(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const ids = await decidableIds(req);
-      if (ids.length === 0) return res.status(200).json({ requests: 0, checkins: 0, total: 0 });
-      const [requests, checkins] = await Promise.all([
+      if (ids.length === 0)
+        return res.status(200).json({ requests: 0, checkins: 0, total: 0, proposals: 0 });
+      const [requests, checkins, others] = await Promise.all([
         p.attendanceProposal.count({
           where: { employee_id: { in: ids }, type: { in: TEAM_REQUEST_TYPES }, status: 'PENDING' },
         }),
         p.attendanceCheckinProof.count({
           where: { employee_id: { in: ids }, review_status: 'PENDING' },
         }),
+        // Leave, late, early, work from home and field work. A leave of several days is one request.
+        p.attendanceProposal.findMany({
+          where: {
+            employee_id: { in: ids },
+            type: { notIn: TEAM_REQUEST_TYPES },
+            status: 'PENDING',
+          },
+          select: { id: true, type: true, employee_id: true, created_at: true },
+        }),
       ]);
-      return res.status(200).json({ requests, checkins, total: requests + checkins });
+      const proposals = new Set(
+        others.map((x) =>
+          x.type === 'LEAVE' ? `${x.employee_id}:${x.created_at.getTime()}` : `id:${x.id}`,
+        ),
+      ).size;
+      return res.status(200).json({ requests, checkins, total: requests + checkins, proposals });
     } catch (error) {
       logger.error('Team request count error:', error);
       return res.status(500).json({ error: 'Failed to count team requests' });

@@ -943,7 +943,13 @@ export class PropertyService {
           where: {
             company_id: user.companyId,
             status: 'ACTIVE',
-            roles: { some: { role: { name: 'DIGITAL_MARKETING_EXECUTIVE' } } },
+            roles: {
+              some: {
+                role: {
+                  name: { in: [Roles.DIGITAL_MARKETING_HEAD, Roles.DIGITAL_MARKETING_EXECUTIVE] },
+                },
+              },
+            },
           },
           select: { id: true },
         });
@@ -1149,7 +1155,7 @@ export class PropertyService {
         where: {
           company_id: user.companyId,
           status: 'ACTIVE',
-          roles: { some: { role: { name: 'MD' } } },
+          roles: { some: { role: { name: Roles.MD } } },
         },
         select: { id: true },
       });
@@ -1236,7 +1242,7 @@ export class PropertyService {
         where: {
           company_id: user.companyId,
           status: 'ACTIVE',
-          roles: { some: { role: { name: 'MD' } } },
+          roles: { some: { role: { name: Roles.MD } } },
         },
         select: { id: true },
       });
@@ -1362,7 +1368,7 @@ export class PropertyService {
           where: {
             company_id: user.companyId,
             status: 'ACTIVE',
-            roles: { some: { role: { name: 'MD' } } },
+            roles: { some: { role: { name: Roles.MD } } },
           },
           select: { id: true },
         });

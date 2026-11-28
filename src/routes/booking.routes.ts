@@ -4,6 +4,7 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { requireAuthz } from '../middleware/authz';
 import { Permissions } from '../shared';
 import { BookingService } from '../services/booking.service';
+import { mdList } from '../services/mdGlance';
 import { prisma } from '../lib/prisma';
 
 const router = Router();
@@ -125,7 +126,9 @@ router.use(authenticateToken);
 
 router.get('/', requireAuthz(Permissions.BOOKINGS_READ as any), async (req: any, res, next) => {
   try {
-    const bookings = await BookingService.getBookings(req.user);
+    // ?md=<list>: only the bookings behind that number on the MD dashboard.
+    const only = req.query.md ? (await mdList(req.user, req.query)).ids : undefined;
+    const bookings = await BookingService.getBookings(req.user, only);
     res.json(bookings);
   } catch (error) {
     next(error);

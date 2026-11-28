@@ -1150,6 +1150,28 @@ router.get(
 
 // GET /api/v1/md/overview?period=today|week|month|all - the MD dashboard in one
 // request (services/mdOverview.ts).
+// The MD's dashboard (four numbers with quick links), and the records behind any one of them.
+for (const [path, name] of [
+  ['/glance', 'mdGlance'],
+  ['/list', 'mdList'],
+] as const) {
+  router.get(
+    path,
+    authenticateToken,
+    requireRole([Roles.MD, Roles.ADMIN]),
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const service = await import('../services/mdGlance');
+        return res.status(200).json(await service[name](req.user!, req.query));
+      } catch (error: any) {
+        if (error?.status) return res.status(error.status).json({ error: error.message });
+        logger.error('MD dashboard error:', error);
+        return res.status(500).json({ error: 'Failed to load the dashboard' });
+      }
+    },
+  );
+}
+
 router.get(
   '/overview',
   authenticateToken,

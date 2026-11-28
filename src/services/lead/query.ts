@@ -44,6 +44,8 @@ export interface LeadListFilters {
   created_by_id?: number;
   /** Only leads the user owns (assigned to or created by). */
   my_leads?: boolean;
+  /** Only these leads (an MD dashboard list). */
+  ids?: number[];
   /** Only leads nobody owns yet. */
   unassigned?: boolean;
   /** Only leads created at or after this instant. */
@@ -76,6 +78,7 @@ async function buildFilteredLeadWhere(user: TokenPayload, filters: LeadListFilte
     // Current owner of the lead is the employee currently assigned to it
     extra.push({ assigned_to_id: user.employeeId });
   }
+  if (filters.ids) extra.push({ id: { in: filters.ids } });
   if (filters.unassigned) extra.push({ assigned_to_id: null, cp_owner_id: null });
   if (filters.created_from) extra.push({ created_at: { gte: filters.created_from } });
   if (filters.created_to) extra.push({ created_at: { lt: filters.created_to } });

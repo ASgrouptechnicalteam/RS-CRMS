@@ -47,6 +47,8 @@ import {
 } from '../services/lead/telecallerReport';
 import { getISTComponents } from '../utils/time';
 
+import { mdList } from '../services/mdGlance';
+
 const router = Router();
 
 // Helper to catch and route AppErrors to HTTP responses
@@ -307,12 +309,10 @@ router.get(
       const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
       const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
-      const { leads, total } = await LeadService.getLeads(
-        req.user!,
-        limit,
-        offset,
-        parseLeadFilters(req),
-      );
+      const filters = parseLeadFilters(req);
+      // ?md=<list>: only the leads behind that number on the MD dashboard.
+      if (req.query.md) filters.ids = (await mdList(req.user!, req.query)).ids;
+      const { leads, total } = await LeadService.getLeads(req.user!, limit, offset, filters);
       return res.status(200).json({ leads, total, pagination: { limit, offset, total } });
     } catch (error: any) {
       return handleServiceError(error, res);

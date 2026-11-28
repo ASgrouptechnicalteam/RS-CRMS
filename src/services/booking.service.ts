@@ -8,6 +8,7 @@ import { TokenPayload } from '../utils/jwt';
 import { AppError } from './lead/errors';
 import { BookingPolicy } from '../policies/booking.policy';
 import { Roles } from '../shared';
+import { getAccessibleCompanyIds } from '../authz/dataScope';
 import { randomBytes } from 'crypto';
 import { WorkflowEngine } from '../workflows/workflowEngine';
 import { WorkflowDomain } from '../workflows/types';
@@ -176,9 +177,12 @@ function assertBookingMoney(agreed: unknown, taken: unknown) {
 
 export class BookingService {
   /** List bookings scoped to the user's company. */
-  static async getBookings(user: TokenPayload) {
+  static async getBookings(user: TokenPayload, only?: number[]) {
     const bookings = await prisma.booking.findMany({
-      where: { company_id: user.companyId, ...pmScope.booking(user) },
+      // `only`: exactly the records of an MD dashboard list (it covers the MD's companies).
+      where: only
+        ? { id: { in: only }, company_id: { in: await getAccessibleCompanyIds(user) } }
+        : { company_id: user.companyId, ...pmScope.booking(user) },
       orderBy: { id: 'desc' },
       include: BOOKING_DISPLAY_INCLUDE,
       // Newest 1,000: the list had no limit and grows forever.

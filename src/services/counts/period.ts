@@ -96,6 +96,17 @@ export function periodContaining(type: PeriodType, at: Date = new Date()): Perio
   }
 }
 
+/** Any run of whole IST days, both ends included (dates picked on a screen). */
+export function daysPeriod(from: string, to: string): Period {
+  return {
+    type: 'DAY',
+    start: istMidnight(from),
+    end: istMidnight(addDays(to, 1)),
+    startDate: from,
+    label: from === to ? nice(from) : `${nice(from)} to ${nice(to)}`,
+  };
+}
+
 /** The period of this type that contains the IST date `date` (any day inside it). */
 export const periodOf = (type: PeriodType, date: string) =>
   periodContaining(type, new Date(istMidnight(date).getTime() + 3600 * 1000));

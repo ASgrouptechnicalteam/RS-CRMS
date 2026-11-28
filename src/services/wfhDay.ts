@@ -1,6 +1,6 @@
 /**
  * A work-from-home day (owner, 2026-11-28).
- * - A request sent on the day itself marks the check-in at the time it was sent, once it is approved.
+ * - A request sent on the day itself marks the check-in at the time it was sent, once it is approved that day.
  * - Check-out shows from 5:30 PM; the button opens from 6:00 PM, after the daily report.
  */
 import { prisma } from '../lib/prisma';
@@ -21,7 +21,8 @@ const dayRange = (dateString: string) => {
 
 /**
  * Called when a work-from-home request is approved. Returns the check-in time it marked, or null when there was
- * nothing to mark: the request was for another day, they are already checked in, or it is their day off.
+ * nothing to mark: the request was for another day, it was approved after that day (nobody could check out of it),
+ * they are already checked in, or it is their day off.
  */
 export async function markCheckInFromRequest(proposal: {
   employee_id: number;
@@ -30,6 +31,7 @@ export async function markCheckInFromRequest(proposal: {
 }): Promise<Date | null> {
   const day = getISTComponents(proposal.target_date).dateString;
   if (getISTComponents(proposal.created_at).dateString !== day) return null;
+  if (getISTComponents(new Date()).dateString !== day) return null;
 
   const employee = await p.employee.findUnique({ where: { id: proposal.employee_id } });
   if (!employee || employee.status !== 'ACTIVE') return null;
@@ -100,7 +102,7 @@ export async function checkOutState(employee: {
           select: { id: true },
         })
       : null,
-    getLogoutBlockers(employee),
+    getLogoutBlockers(employee, 'check out'),
   ]);
   const timeOk = timeString >= CHECK_OUT_OPEN_FROM || !!early;
   const reportNeeded = employee.report_required && !report;

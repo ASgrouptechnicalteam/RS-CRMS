@@ -77,7 +77,7 @@ const TASKS = item(D, 'common.tasks', 'Finish the tasks due today.', '/tasks', '
 const PLAN = item(
   B,
   'common.plan',
-  "Save tomorrow's plan. Logout and QR check-out are blocked until it is saved.",
+  "Save tomorrow's plan. Logout and check-out are blocked until it is saved.",
   '/my-day',
   'PLAN_WRITTEN',
   'ATTENDANCE',
@@ -85,7 +85,7 @@ const PLAN = item(
 const REPORT = item(
   B,
   'common.report',
-  'Send your end-of-day report. QR check-out needs it.',
+  'Send your end-of-day report. Check-out needs it.',
   '/my-day#report',
   'REPORT_SENT',
   'REPORT',
@@ -93,7 +93,7 @@ const REPORT = item(
 const CHECK_OUT = item(
   B,
   'common.check_out',
-  'Scan the QR to check out, after 18:00. Leaving earlier needs an approved early-checkout request.',
+  'Check out after 18:00: scan the office QR, or on a work-from-home day press Check out below your report on My Day. Leaving earlier needs an approved early-checkout request.',
   '/my-attendance',
   'CHECKED_OUT',
   'ATTENDANCE',
@@ -107,7 +107,7 @@ const WORK_LOG = item(
 const END = [PLAN, REPORT, CHECK_OUT];
 
 const NOTE_COMMON =
-  'Check-out is by QR scan only. If you stay signed in past midnight, the system checks you out at 23:58 and you lose a performance point.';
+  'Check out by QR scan at the office, or with the Check out button on a work-from-home day. If you are not checked out by midnight, the system checks you out at 23:58 and you lose a performance point.';
 const NOTE_REPORT =
   'The report is checked against the CRM record. If a target is set for your role and you are below it, give the reason (at least 15 characters).';
 

@@ -864,7 +864,7 @@ router.post(
 
       notifyEmployee(proposal.employee_id, {
         title: 'Proposal Approved',
-        message: `Your ${proposalLabel(proposal.type)} request for ${new Date(proposal.target_date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}${leaveDays > 1 ? ` (${leaveDays} days)` : ''} has been approved.${checkedInAt ? ` Your check-in is marked at ${checkedInAt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' })}. Check out from My Attendance after 6 PM.` : ''}`,
+        message: `Your ${proposalLabel(proposal.type)} request for ${new Date(proposal.target_date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}${leaveDays > 1 ? ` (${leaveDays} days)` : ''} has been approved.${checkedInAt ? ` Your check-in is marked at ${checkedInAt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' })}. After 6 PM, send your report on My Day and press Check out below it.` : ''}`,
         type: 'SYSTEM',
         link: '/requests',
       });

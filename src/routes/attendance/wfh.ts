@@ -287,7 +287,7 @@ router.post(
       for (const e of employees) {
         notifyEmployee(e.id, {
           title: 'Work from home',
-          message: `You can work from home ${start_date === end_date ? `on ${start_date}` : `from ${start_date} to ${end_date}`}. Check in and out from My Attendance.`,
+          message: `You can work from home ${start_date === end_date ? `on ${start_date}` : `from ${start_date} to ${end_date}`}. Check in on My Attendance. To check out, send your report on My Day and press Check out below it.`,
           type: 'SYSTEM',
           link: '/my-attendance',
         });
@@ -451,7 +451,7 @@ router.post(
           });
       }
 
-      const blockers = await getLogoutBlockers(employee);
+      const blockers = await getLogoutBlockers(employee, 'check out');
       if (blockers.blocked) return res.status(400).json({ error: blockers.message });
 
       const minutes = Math.max(0, Math.round((now.getTime() - log.check_in_at.getTime()) / 60000));

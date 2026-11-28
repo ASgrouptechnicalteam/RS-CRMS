@@ -289,7 +289,11 @@ export async function callCounts(employeeId: number) {
  * follow attendance, on a day they haven't checked in, or after an approved
  * emergency request.
  */
-export async function getLogoutBlockers(employee: { id: number; attendance_required: boolean }) {
+export async function getLogoutBlockers(
+  employee: { id: number; attendance_required: boolean },
+  /** What to do afterwards: scan at the office, or press the button (app check-in). */
+  then: 'scan again' | 'check out' = 'scan again',
+) {
   const none = {
     blocked: false,
     calls_left: 0,
@@ -329,9 +333,9 @@ export async function getLogoutBlockers(employee: { id: number; attendance_requi
   const planMissing = !plan;
   const message =
     callsLeft > 0
-      ? `Finish your ${callsLeft} assigned call${callsLeft === 1 ? '' : 's'} first: log a call on each in the CRM app, then scan again.`
+      ? `Finish your ${callsLeft} assigned call${callsLeft === 1 ? '' : 's'} first: log a call on each in the CRM app, then ${then}.`
       : planMissing
-        ? "Save tomorrow's plan first (CRM app → My Day), then scan again."
+        ? `Save tomorrow's plan first (CRM app → My Day), then ${then}.`
         : null;
   return {
     blocked: callsLeft > 0 || planMissing,

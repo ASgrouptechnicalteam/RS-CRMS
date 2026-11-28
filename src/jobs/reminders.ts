@@ -79,12 +79,17 @@ async function logsToday(d: Day, ids?: number[]) {
       check_in_at: { gte: d.start, lt: d.end },
       ...(ids ? { employee_id: { in: ids } } : {}),
     },
-    select: { employee_id: true, check_out_at: true },
+    select: { employee_id: true, check_out_at: true, source: true },
   });
-  const by = new Map<number, { open: boolean }>();
+  /** home: the open check-in is a work-from-home one, so they check out with a button. */
+  const by = new Map<number, { open: boolean; home: boolean }>();
   for (const r of rows) {
     const prev = by.get(r.employee_id);
-    by.set(r.employee_id, { open: (prev?.open ?? false) || r.check_out_at === null });
+    const open = r.check_out_at === null;
+    by.set(r.employee_id, {
+      open: (prev?.open ?? false) || open,
+      home: (prev?.home ?? false) || (open && r.source === 'REMOTE'),
+    });
   }
   return by;
 }
@@ -134,7 +139,7 @@ export async function remindCheckIn(d: Day) {
   );
 }
 
-// ---- 2. End-of-day report not sent (needed for the QR checkout) ----
+// ---- 2. End-of-day report not sent (needed for check-out) ----
 export async function remindDailyReport(d: Day) {
   const logs = await logsToday(d);
   const staff = await p.employee.findMany({
@@ -158,7 +163,9 @@ export async function remindDailyReport(d: Day) {
       .map((s) => ({
         id: s.id,
         title: 'Send your end-of-day report',
-        message: 'Checkout by QR needs today’s report. It takes a minute: open My Day.',
+        message: logs.get(s.id)?.home
+          ? 'Check-out needs today’s report. Open My Day, send it, then press Check out below it.'
+          : 'Checkout by QR needs today’s report. It takes a minute: open My Day.',
         link: '/my-day',
       })),
   );
@@ -182,13 +189,18 @@ export async function remindCheckOut(d: Day) {
     d,
     staff.map((s) => {
       const needsReport = s.report_required && !sent.has(s.id);
+      const home = !!logs.get(s.id)?.home;
       return {
         id: s.id,
         title: 'You are still checked in',
-        message: needsReport
-          ? 'Send your end-of-day report, then scan the QR to check out before you leave.'
-          : 'Scan the QR to check out before you leave.',
-        link: needsReport ? '/my-day' : '/my-attendance',
+        message: home
+          ? needsReport
+            ? 'Send your end-of-day report on My Day, then press Check out below it.'
+            : 'Open My Day and press Check out.'
+          : needsReport
+            ? 'Send your end-of-day report, then scan the QR to check out before you leave.'
+            : 'Scan the QR to check out before you leave.',
+        link: home || needsReport ? '/my-day' : '/my-attendance',
       };
     }),
   );
